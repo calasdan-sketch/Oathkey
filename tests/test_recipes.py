@@ -21,7 +21,7 @@ def good_recipe(**over):
 class TestRecipes(unittest.TestCase):
     def test_builtin_recipes_load(self):
         catalog = recipes_mod.load_recipes(BUILTIN)
-        self.assertEqual(set(catalog), {"github", "stripe", "resend"})
+        self.assertEqual(set(catalog), {"github", "stripe", "resend", "openrouter"})
         for r in catalog.values():
             self.assertTrue(r["steps"])
             self.assertIn(r["validate"]["auth"]["type"],
