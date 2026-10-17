@@ -1,0 +1,25 @@
+{
+  "display": "AssemblyAI",
+  "docs": "https://assemblyai.com/docs/faq/how-to-get-your-api-key",
+  "env_var": "ASSEMBLYAI_API_KEY",
+  "key_url": "https://www.assemblyai.com/dashboard/home",
+  "scopes": [],
+  "service": "assemblyai",
+  "steps": [
+    "Log in to the AssemblyAI dashboard",
+    "In the sidebar go to Workspace → Manage → API Keys",
+    "Click 'Create New API Key', give it a descriptive name and click 'Create'",
+    "Copy the key"
+  ],
+  "validate": {
+    "auth": {
+      "header": "Authorization",
+      "type": "header"
+    },
+    "expect": [
+      200
+    ],
+    "method": "GET",
+    "url": "https://api.assemblyai.com/v2/transcript"
+  }
+}

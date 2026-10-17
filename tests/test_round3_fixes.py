@@ -271,8 +271,8 @@ class TestInstallLayout(unittest.TestCase):
         # the old top-level recipes/ dir made setuptools' flat-layout
         # discovery refuse to build ("Multiple top-level packages")
         self.assertFalse(os.path.isdir(os.path.join(REPO, "recipes")))
-        self.assertEqual(set(recipes_mod.load_recipes(recipes_mod.RECIPES_DIR)),
-                         {"github", "stripe", "resend", "openrouter"})
+        self.assertLessEqual({"github", "stripe", "resend", "openrouter"},
+                             set(recipes_mod.load_recipes(recipes_mod.RECIPES_DIR)))
 
     def test_wheel_contains_package_data_and_console_script(self):
         out_dir = _isolation.mktemp()

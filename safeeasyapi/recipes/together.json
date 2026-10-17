@@ -1,0 +1,23 @@
+{
+  "display": "Together AI",
+  "docs": "https://docs.together.ai/docs/quickstart",
+  "env_var": "TOGETHER_API_KEY",
+  "key_url": "https://api.together.ai/settings/projects/~current/api-keys",
+  "scopes": [],
+  "service": "together",
+  "steps": [
+    "Sign in to Together AI; this is your project's API keys page",
+    "Click the button to create a new key and name it",
+    "Copy the key — it is shown exactly once"
+  ],
+  "validate": {
+    "auth": {
+      "type": "bearer"
+    },
+    "expect": [
+      200
+    ],
+    "method": "GET",
+    "url": "https://api.together.ai/v1/models"
+  }
+}

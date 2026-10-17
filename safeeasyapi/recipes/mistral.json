@@ -1,0 +1,24 @@
+{
+  "display": "Mistral AI",
+  "docs": "https://docs.mistral.ai/getting-started/quickstarts/studio/activate-and-generate-api-key",
+  "env_var": "MISTRAL_API_KEY",
+  "key_url": "https://console.mistral.ai/api-keys",
+  "scopes": [],
+  "service": "mistral",
+  "steps": [
+    "Sign in to Mistral Studio (console.mistral.ai)",
+    "Open 'API Keys' in the left sidebar and click 'Create new key'",
+    "Name it, set an expiration date and choose the connector access scope",
+    "Click 'Create new key' and copy the key — it is shown exactly once"
+  ],
+  "validate": {
+    "auth": {
+      "type": "bearer"
+    },
+    "expect": [
+      200
+    ],
+    "method": "GET",
+    "url": "https://api.mistral.ai/v1/models"
+  }
+}

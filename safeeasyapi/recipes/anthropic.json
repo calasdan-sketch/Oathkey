@@ -1,0 +1,31 @@
+{
+  "display": "Anthropic (Claude API)",
+  "docs": "https://platform.claude.com/docs/en/get-api-key",
+  "env_var": "ANTHROPIC_API_KEY",
+  "key_url": "https://platform.claude.com/settings/keys",
+  "scopes": [],
+  "service": "anthropic",
+  "steps": [
+    "Sign in to the Claude Console (platform.claude.com)",
+    "Click 'Create key'",
+    "Name the key, choose an expiration and set 'Linked account' to yourself",
+    "Copy the key (starts with 'sk-ant-') — it is shown exactly once"
+  ],
+  "validate": {
+    "auth": {
+      "header": "x-api-key",
+      "type": "header"
+    },
+    "expect": [
+      200
+    ],
+    "headers": {
+      "anthropic-version": "2023-06-01"
+    },
+    "method": "GET",
+    "trusted_hosts": [
+      "api.anthropic.com"
+    ],
+    "url": "https://api.anthropic.com/v1/models"
+  }
+}

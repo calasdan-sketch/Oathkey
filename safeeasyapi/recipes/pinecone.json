@@ -1,0 +1,27 @@
+{
+  "display": "Pinecone",
+  "docs": "https://docs.pinecone.io/reference/api/authentication",
+  "env_var": "PINECONE_API_KEY",
+  "key_url": "https://app.pinecone.io/organizations/-/projects/-/keys",
+  "scopes": [],
+  "service": "pinecone",
+  "steps": [
+    "Sign in to the Pinecone console and pick your project",
+    "Open 'API keys' and click 'Create API key'",
+    "Name it and copy the key — it is shown exactly once"
+  ],
+  "validate": {
+    "auth": {
+      "header": "Api-Key",
+      "type": "header"
+    },
+    "expect": [
+      200
+    ],
+    "headers": {
+      "X-Pinecone-Api-Version": "2026-07"
+    },
+    "method": "GET",
+    "url": "https://api.pinecone.io/indexes"
+  }
+}

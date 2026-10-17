@@ -6,7 +6,7 @@ goes. Recipes are plain JSON — community-contributable, diffable.
 
 Schema:
 {
-  "service": "github",            # slug, required
+  "service": "github",            # slug [a-z0-9_-], required
   "display": "GitHub",           # human name, required
   "key_url": "https://...",      # where to mint the key, required
   "env_var": "GITHUB_TOKEN",     # where the key lands in .env, required
@@ -16,11 +16,15 @@ Schema:
   "validate": {                  # proof the key works, required
     "method": "GET",
     "url": "https://api.github.com/user",
-    "auth": {"type": "bearer"} | {"type": "header", "header": "X-Key"} |
-            {"type": "basic"},
-    "expect": [200]
-  }
-}
+    "auth": {"type": "bearer", "scheme": "Bearer"}   # scheme optional:
+          | {"type": "header", "header": "X-Key"}    #   "Token", "Bot"
+          | {"type": "basic", "username": "api"},    # username optional
+    "expect": [200],
+    "reject": [401, 403],        # optional: statuses meaning "bad key"
+    "headers": {"X-Version": "2024-01-01"},   # optional static headers
+    "trusted_hosts": ["api.vendor.net"]       # optional, BUILT-IN recipes
+  }                              #   only: validation hosts of the same
+}                                #   vendor under another domain
 """
 
 from __future__ import annotations
@@ -52,6 +56,11 @@ AUTH_TYPES = ("bearer", "header", "basic")
 # enforced here at recipe load time — before anything is written.
 ENV_VAR_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
+# The service slug becomes the recipe FILE NAME (<slug>.json) and a CLI
+# argument. Lowercase letters, digits, '-' and '_' only, 1-64 chars: a slug
+# like "../../evil" could otherwise write outside the recipes directory.
+SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+
 
 class RecipeError(ValueError):
     pass
@@ -61,6 +70,11 @@ def validate_recipe(data: dict) -> dict:
     for field in REQUIRED:
         if field not in data or data[field] in (None, "", []):
             raise RecipeError(f"recipe missing required field: {field}")
+    slug = data["service"]
+    if not isinstance(slug, str) or not SLUG_RE.match(slug):
+        raise RecipeError(
+            f"recipe field 'service' must be a slug of lowercase letters, "
+            f"digits, '-' or '_' (1-64 chars), got {slug!r}")
     env_var = data["env_var"]
     if not isinstance(env_var, str) or not ENV_VAR_RE.match(env_var):
         raise RecipeError(
@@ -80,6 +94,25 @@ def validate_recipe(data: dict) -> dict:
         raise RecipeError("auth.type 'header' needs auth.header name")
     if not isinstance(v["expect"], list) or not v["expect"]:
         raise RecipeError("validate.expect must be a non-empty status list")
+    for field in ("expect", "reject"):
+        codes = v.get(field, [])
+        if codes is not None and not (isinstance(codes, list) and all(
+                isinstance(c, int) and 100 <= c <= 599 for c in codes)):
+            raise RecipeError(f"validate.{field} must be a list of HTTP statuses")
+    headers = v.get("headers")
+    if headers is not None and not (isinstance(headers, dict) and all(
+            isinstance(k, str) and isinstance(val, str)
+            for k, val in headers.items())):
+        raise RecipeError("validate.headers must be a {name: value} object")
+    for field in ("scheme", "username"):
+        if field in auth and (not isinstance(auth[field], str)
+                              or not auth[field].strip()
+                              or any(ch in auth[field] for ch in " \r\n:")):
+            raise RecipeError(f"auth.{field} must be a single token")
+    hosts = v.get("trusted_hosts")
+    if hosts is not None and not (isinstance(hosts, list) and all(
+            isinstance(h, str) and h for h in hosts)):
+        raise RecipeError("validate.trusted_hosts must be a list of hostnames")
     # A pasted key must never travel in cleartext: the mint page and the
     # validation endpoint must both be HTTPS.
     for label, url in (("key_url", data["key_url"]),
@@ -91,7 +124,8 @@ def validate_recipe(data: dict) -> dict:
     return data
 
 
-def _load_dir(directory: str, recipes: dict[str, dict]) -> None:
+def _load_dir(directory: str, recipes: dict[str, dict],
+              builtin: bool = False) -> None:
     import sys
     if not os.path.isdir(directory):
         return
@@ -107,7 +141,15 @@ def _load_dir(directory: str, recipes: dict[str, dict]) -> None:
                 AttributeError, TypeError) as e:
             sys.stderr.write(f"[safeeasyapi] skipping bad recipe {fname}: {e}\n")
             continue
+        # Only recipes shipped INSIDE the package may vouch for a
+        # validation host under another domain (trusted_hosts): they were
+        # reviewed with the code. A user-dir recipe never gets that.
+        data["_builtin"] = builtin
         recipes[data["service"]] = data
+
+
+def _is_builtin_dir(directory: str) -> bool:
+    return os.path.realpath(directory) == os.path.realpath(RECIPES_DIR)
 
 
 def load_recipes(directory: str | None = None) -> dict[str, dict]:
@@ -120,9 +162,9 @@ def load_recipes(directory: str | None = None) -> dict[str, dict]:
     built-in one with the same slug."""
     recipes: dict[str, dict] = {}
     if directory is not None:
-        _load_dir(directory, recipes)
+        _load_dir(directory, recipes, builtin=_is_builtin_dir(directory))
         return recipes
-    _load_dir(RECIPES_DIR, recipes)
+    _load_dir(RECIPES_DIR, recipes, builtin=True)
     _load_dir(user_recipes_dir(), recipes)
     return recipes
 
@@ -131,6 +173,7 @@ def save_recipe(data: dict, directory: str | None = None) -> str:
     """Write a recipe as <slug>.json. Default destination is the user
     recipes dir, never the installed package."""
     validate_recipe(data)
+    data = {k: v for k, v in data.items() if not k.startswith("_")}
     directory = directory or user_recipes_dir()
     os.makedirs(directory, exist_ok=True)
     path = os.path.join(directory, f"{data['service']}.json")

@@ -1,0 +1,24 @@
+{
+  "display": "Hugging Face",
+  "docs": "https://huggingface.co/docs/hub/security-tokens",
+  "env_var": "HF_TOKEN",
+  "key_url": "https://huggingface.co/settings/tokens",
+  "scopes": [],
+  "service": "huggingface",
+  "steps": [
+    "Sign in; this is Settings → Access Tokens",
+    "Click 'Create new token'",
+    "Pick a type: 'Read' is enough for downloading models, 'Fine-grained' lets you scope it",
+    "Name it, click 'Create token' and copy it (starts with 'hf_') — it is shown exactly once"
+  ],
+  "validate": {
+    "auth": {
+      "type": "bearer"
+    },
+    "expect": [
+      200
+    ],
+    "method": "GET",
+    "url": "https://huggingface.co/api/whoami-v2"
+  }
+}

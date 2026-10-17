@@ -1,0 +1,24 @@
+{
+  "display": "Cohere",
+  "docs": "https://docs.cohere.com/v2/reference/list-models",
+  "env_var": "COHERE_API_KEY",
+  "key_url": "https://dashboard.cohere.com/api-keys",
+  "scopes": [],
+  "service": "cohere",
+  "steps": [
+    "Sign in to the Cohere dashboard",
+    "Click '+ New Trial key' (free, rate-limited) or '+ New Production key'",
+    "Name the key and click 'Generate key'",
+    "Copy the key — it is shown exactly once"
+  ],
+  "validate": {
+    "auth": {
+      "type": "bearer"
+    },
+    "expect": [
+      200
+    ],
+    "method": "GET",
+    "url": "https://api.cohere.com/v2/models"
+  }
+}

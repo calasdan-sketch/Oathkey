@@ -1,0 +1,25 @@
+{
+  "display": "Supabase (Management API access token)",
+  "docs": "https://supabase.com/docs/guides/platform/personal-access-tokens",
+  "env_var": "SUPABASE_ACCESS_TOKEN",
+  "key_url": "https://supabase.com/dashboard/account/tokens",
+  "scopes": [],
+  "service": "supabase",
+  "steps": [
+    "Sign in to the Supabase dashboard; this is Account → Access Tokens",
+    "Click 'Generate new token'",
+    "Name it and choose a scope/permissions instead of leaving full access",
+    "Click 'Generate token' and copy it (starts with 'sbp_') — it is shown exactly once",
+    "This is a personal token for the Management API (projects, settings) — not a project's anon/service_role key"
+  ],
+  "validate": {
+    "auth": {
+      "type": "bearer"
+    },
+    "expect": [
+      200
+    ],
+    "method": "GET",
+    "url": "https://api.supabase.com/v1/projects"
+  }
+}

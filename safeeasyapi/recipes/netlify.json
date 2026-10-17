@@ -1,0 +1,24 @@
+{
+  "display": "Netlify",
+  "docs": "https://docs.netlify.com/api-and-cli-guides/api-guides/get-started-with-api/",
+  "env_var": "NETLIFY_AUTH_TOKEN",
+  "key_url": "https://app.netlify.com/user/applications#personal-access-tokens",
+  "scopes": [],
+  "service": "netlify",
+  "steps": [
+    "Sign in to Netlify; this is User settings → Applications → Personal access tokens",
+    "Click 'New access token'",
+    "Enter a descriptive name and choose an expiration",
+    "Click 'Generate token', copy it and click 'Done' — it is shown exactly once"
+  ],
+  "validate": {
+    "auth": {
+      "type": "bearer"
+    },
+    "expect": [
+      200
+    ],
+    "method": "GET",
+    "url": "https://api.netlify.com/api/v1/user"
+  }
+}

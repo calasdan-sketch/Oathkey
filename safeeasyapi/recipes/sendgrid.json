@@ -1,0 +1,24 @@
+{
+  "display": "SendGrid",
+  "docs": "https://www.twilio.com/docs/sendgrid/ui/account-and-settings/api-keys",
+  "env_var": "SENDGRID_API_KEY",
+  "key_url": "https://app.sendgrid.com/settings/api_keys",
+  "scopes": [],
+  "service": "sendgrid",
+  "steps": [
+    "Sign in to SendGrid; this is Settings → API Keys",
+    "Click 'Create API Key'",
+    "Enter a name and choose the permission level ('Restricted Access' with 'Mail Send' is enough for sending)",
+    "Click 'Create & View' and copy the key (starts with 'SG.') — it is shown exactly once"
+  ],
+  "validate": {
+    "auth": {
+      "type": "bearer"
+    },
+    "expect": [
+      200
+    ],
+    "method": "GET",
+    "url": "https://api.sendgrid.com/v3/scopes"
+  }
+}

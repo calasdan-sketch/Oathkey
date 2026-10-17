@@ -1,1 +1,27 @@
-{"display":"GitHub","docs":"https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens","env_var":"GITHUB_TOKEN","key_url":"https://github.com/settings/tokens","scopes":["repo"],"service":"github","steps":["Click 'Generate new token' → 'Generate new token (classic)'","Give it a note like 'my-project' and pick an expiry","Select the 'repo' scope (add more only if you know you need them)","Click 'Generate token' at the bottom","Copy the token now — it is shown exactly once"],"validate":{"auth":{"type":"bearer"},"expect":[200],"method":"GET","url":"https://api.github.com/user"}}
+{
+  "display": "GitHub",
+  "docs": "https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens",
+  "env_var": "GITHUB_TOKEN",
+  "key_url": "https://github.com/settings/tokens",
+  "scopes": [
+    "repo"
+  ],
+  "service": "github",
+  "steps": [
+    "Click 'Generate new token' → 'Generate new token (classic)'",
+    "Give it a note like 'my-project' and pick an expiry",
+    "Select the 'repo' scope (add more only if you know you need them)",
+    "Click 'Generate token' at the bottom",
+    "Copy the token now — it is shown exactly once"
+  ],
+  "validate": {
+    "auth": {
+      "type": "bearer"
+    },
+    "expect": [
+      200
+    ],
+    "method": "GET",
+    "url": "https://api.github.com/user"
+  }
+}

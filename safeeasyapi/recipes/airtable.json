@@ -1,0 +1,24 @@
+{
+  "display": "Airtable",
+  "docs": "https://airtable.com/developers/web/guides/personal-access-tokens",
+  "env_var": "AIRTABLE_API_KEY",
+  "key_url": "https://airtable.com/create/tokens",
+  "scopes": [],
+  "service": "airtable",
+  "steps": [
+    "Sign in to Airtable; this is the Builder hub → Personal access tokens",
+    "Click 'Create new token'",
+    "Name it, add scopes (e.g. data.records:read, data.records:write) and choose the bases it may access",
+    "Click 'Create token' and copy it (starts with 'pat') — it is shown exactly once"
+  ],
+  "validate": {
+    "auth": {
+      "type": "bearer"
+    },
+    "expect": [
+      200
+    ],
+    "method": "GET",
+    "url": "https://api.airtable.com/v0/meta/whoami"
+  }
+}

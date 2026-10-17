@@ -1,0 +1,29 @@
+{
+  "display": "Cloudflare",
+  "docs": "https://developers.cloudflare.com/fundamentals/api/get-started/create-token/",
+  "env_var": "CLOUDFLARE_API_TOKEN",
+  "key_url": "https://dash.cloudflare.com/profile/api-tokens",
+  "scopes": [],
+  "service": "cloudflare",
+  "steps": [
+    "Sign in to the Cloudflare dashboard; this is My Profile → API Tokens",
+    "Click 'Create Token' and pick a template (e.g. 'Edit zone DNS') or 'Create Custom Token'",
+    "Set the permissions and the zone/account resources, then 'Continue to summary' → 'Create Token'",
+    "Copy the token — it is shown exactly once"
+  ],
+  "validate": {
+    "auth": {
+      "type": "bearer"
+    },
+    "expect": [
+      200
+    ],
+    "method": "GET",
+    "reject": [
+      400,
+      401,
+      403
+    ],
+    "url": "https://api.cloudflare.com/client/v4/user/tokens/verify"
+  }
+}

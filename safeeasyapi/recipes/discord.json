@@ -1,0 +1,25 @@
+{
+  "display": "Discord (bot token)",
+  "docs": "https://docs.discord.com/developers/reference",
+  "env_var": "DISCORD_BOT_TOKEN",
+  "key_url": "https://discord.com/developers/applications",
+  "scopes": [],
+  "service": "discord",
+  "steps": [
+    "Sign in to the Developer Portal and open your application (or click 'New Application')",
+    "Open the 'Bot' page in the app's settings",
+    "Under 'Token' click 'Reset Token' and confirm",
+    "Copy the token — it is shown exactly once"
+  ],
+  "validate": {
+    "auth": {
+      "scheme": "Bot",
+      "type": "bearer"
+    },
+    "expect": [
+      200
+    ],
+    "method": "GET",
+    "url": "https://discord.com/api/v10/users/@me"
+  }
+}

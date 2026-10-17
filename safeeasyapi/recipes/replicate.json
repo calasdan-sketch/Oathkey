@@ -1,0 +1,23 @@
+{
+  "display": "Replicate",
+  "docs": "https://replicate.com/docs/reference/http",
+  "env_var": "REPLICATE_API_TOKEN",
+  "key_url": "https://replicate.com/account/api-tokens",
+  "scopes": [],
+  "service": "replicate",
+  "steps": [
+    "Sign in to Replicate",
+    "Enter a token name and click 'Create token'",
+    "Copy the token (starts with 'r8_')"
+  ],
+  "validate": {
+    "auth": {
+      "type": "bearer"
+    },
+    "expect": [
+      200
+    ],
+    "method": "GET",
+    "url": "https://api.replicate.com/v1/account"
+  }
+}

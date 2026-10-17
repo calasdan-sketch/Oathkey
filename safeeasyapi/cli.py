@@ -12,6 +12,7 @@ from . import keychain as keychain_mod
 from . import mcp as mcp_mod
 from . import publicapis as pa_mod
 from . import recipes as recipes_mod
+from . import store as store_mod
 
 
 def _harden_streams() -> None:
@@ -55,6 +56,12 @@ def _build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("list", help="List services with saved recipes.")
 
+    fg = sub.add_parser("forget", help="Remove a stored key: from the OS "
+                                       "keychain and from the .env file.")
+    fg.add_argument("service", help="Service slug.")
+    fg.add_argument("--env-file", default=".env",
+                    help="The .env file to remove the entry from (default: .env).")
+
     a = sub.add_parser("add", help="Capture a new service recipe interactively.")
     a.add_argument("--recipes-dir", default=None,
                    help="Write the recipe here instead of "
@@ -86,7 +93,7 @@ def _cmd_list(catalog: dict) -> int:
     print("\n  services with saved key recipes:\n")
     for slug in sorted(catalog):
         r = catalog[slug]
-        print(f"    {slug:12} {r['display']:20} -> {r['env_var']}")
+        print(f"    {slug:14} {r['display']:38} -> {r['env_var']}")
     print("\n  `safeeasyapi connect <service>` to set one up.\n")
     return 0
 
@@ -100,11 +107,32 @@ def _prompt(text: str, default: str = "") -> str:
     return val.strip() or default
 
 
+def _parse_expect(text: str) -> list[int]:
+    """'200, 201' -> [200, 201]; anything that is not a 3-digit status is a
+    ValueError with a message meant for a human, not a traceback."""
+    codes = []
+    for part in text.split(","):
+        part = part.strip()
+        if not part.isdigit() or not 100 <= int(part) <= 599:
+            raise ValueError(
+                f"expected HTTP status codes like 200 or 200,201 - got {part!r}")
+        codes.append(int(part))
+    if not codes:
+        raise ValueError("at least one expected status code is required")
+    return codes
+
+
 def _cmd_add(recipes_dir: str | None) -> int:
     print("\n  Capture a new service recipe - teach it once, use it forever.\n")
     service = _prompt("slug (lowercase, no spaces)", "").lower().replace(" ", "-")
     if not service:
         print("  slug is required.")
+        return 1
+    if not recipes_mod.SLUG_RE.match(service):
+        # the slug becomes the file name <slug>.json: "../../evil" or
+        # "my service!" must never reach the filesystem
+        print(f"  '{service}' is not a valid slug: use lowercase letters, "
+              "digits, '-' or '_' (1-64 chars), e.g. 'my-api'.")
         return 1
     recipe = {
         "service": service,
@@ -129,9 +157,13 @@ def _cmd_add(recipes_dir: str | None) -> int:
         "method": _prompt("HTTP method", "GET").upper(),
         "url": _prompt("validation URL"),
         "auth": {"type": _prompt("auth type (bearer/header/basic)", "bearer").lower()},
-        "expect": [int(x) for x in
-                   _prompt("expected status codes (comma-separated)", "200").split(",")],
     }
+    try:
+        recipe["validate"]["expect"] = _parse_expect(
+            _prompt("expected status codes (comma-separated)", "200"))
+    except ValueError as e:
+        print(f"  {e}")
+        return 1
     if recipe["validate"]["auth"]["type"] == "header":
         recipe["validate"]["auth"]["header"] = _prompt("header name")
     try:
@@ -197,6 +229,31 @@ def keychain_store(recipe: dict, env_file: str, out=None,
     return _store
 
 
+def _cmd_forget(recipe: dict, env_file: str, out=None,
+                keychain=keychain_mod, remove_env=store_mod.remove_key) -> int:
+    """Remove the service's key everywhere it may have been stored: the OS
+    keychain entry (when this platform has one) and the ENV_VAR= line in
+    the .env file. Says what was removed; never shows the key."""
+    out = out or sys.stdout
+    service, env_var = recipe["service"], recipe["env_var"]
+    removed = []
+    backend = keychain.detect_backend()
+    if backend is not None and keychain.delete(service, env_var, backend):
+        removed.append(f"the {keychain.label(backend)} entry")
+    try:
+        if remove_env(env_var, env_file):
+            removed.append(f"{env_var} from {env_file}")
+    except OSError as e:
+        out.write(f"  could not rewrite {env_file}: {e.strerror or e}\n")
+        return 1
+    if not removed:
+        out.write(f"  nothing stored for '{service}' (checked "
+                  f"{keychain.label(backend)} and {env_file}).\n")
+        return 0
+    out.write(f"  \u2713 forgot {service}: removed {' and '.join(removed)}.\n")
+    return 0
+
+
 def _cmd_run(recipe: dict, command: list[str]) -> int:
     cmd = list(command)
     if cmd and cmd[0] == "--":
@@ -234,7 +291,7 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_add(args.recipes_dir)
     if args.cmd == "mcp":
         return mcp_mod.serve(catalog)
-    if args.cmd in ("connect", "rotate", "run"):
+    if args.cmd in ("connect", "rotate", "run", "forget"):
         recipe = catalog.get(args.service)
         if not recipe:
             print(f"unknown service '{args.service}'.")
@@ -242,6 +299,8 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         if args.cmd == "run":
             return _cmd_run(recipe, args.command)
+        if args.cmd == "forget":
+            return _cmd_forget(recipe, args.env_file)
         import webbrowser
         opener = (lambda url: None) if args.no_browser else webbrowser.open
         store_fn = None

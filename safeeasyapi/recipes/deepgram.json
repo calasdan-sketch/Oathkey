@@ -1,0 +1,25 @@
+{
+  "display": "Deepgram",
+  "docs": "https://developers.deepgram.com/docs/create-additional-api-keys",
+  "env_var": "DEEPGRAM_API_KEY",
+  "key_url": "https://console.deepgram.com/",
+  "scopes": [],
+  "service": "deepgram",
+  "steps": [
+    "Log in to the Deepgram Console and pick your project (Projects dropdown, top-left)",
+    "Open 'Settings' → 'API Keys' and click 'Create a New API Key'",
+    "Enter a name, a role ('Member' is enough for transcription) and an expiration",
+    "Click 'Create Key', copy the key secret and click 'Got it' — it cannot be shown again"
+  ],
+  "validate": {
+    "auth": {
+      "scheme": "Token",
+      "type": "bearer"
+    },
+    "expect": [
+      200
+    ],
+    "method": "GET",
+    "url": "https://api.deepgram.com/v1/projects"
+  }
+}

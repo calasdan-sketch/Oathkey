@@ -1,0 +1,23 @@
+{
+  "display": "Vercel",
+  "docs": "https://vercel.com/docs/rest-api/user/get-the-user",
+  "env_var": "VERCEL_TOKEN",
+  "key_url": "https://vercel.com/account/settings/tokens",
+  "scopes": [],
+  "service": "vercel",
+  "steps": [
+    "Sign in to Vercel; this is Account Settings → Tokens",
+    "Under 'Create Token' enter a name, choose the scope (your account or a team) and an expiration",
+    "Click 'Create' and copy the token — it is shown exactly once"
+  ],
+  "validate": {
+    "auth": {
+      "type": "bearer"
+    },
+    "expect": [
+      200
+    ],
+    "method": "GET",
+    "url": "https://api.vercel.com/v2/user"
+  }
+}

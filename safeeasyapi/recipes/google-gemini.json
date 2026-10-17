@@ -1,0 +1,32 @@
+{
+  "display": "Google AI Studio (Gemini API)",
+  "docs": "https://ai.google.dev/gemini-api/docs/api-key",
+  "env_var": "GEMINI_API_KEY",
+  "key_url": "https://aistudio.google.com/apikey",
+  "scopes": [],
+  "service": "google-gemini",
+  "steps": [
+    "Sign in with your Google account",
+    "Click 'Create API key' (pick or create a Google Cloud project when asked)",
+    "Copy the key (starts with 'AIza')"
+  ],
+  "validate": {
+    "auth": {
+      "header": "x-goog-api-key",
+      "type": "header"
+    },
+    "expect": [
+      200
+    ],
+    "method": "GET",
+    "reject": [
+      400,
+      401,
+      403
+    ],
+    "trusted_hosts": [
+      "generativelanguage.googleapis.com"
+    ],
+    "url": "https://generativelanguage.googleapis.com/v1beta/models"
+  }
+}

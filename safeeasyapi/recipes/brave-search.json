@@ -1,0 +1,33 @@
+{
+  "display": "Brave Search API",
+  "docs": "https://api-dashboard.search.brave.com/documentation/guides/authentication",
+  "env_var": "BRAVE_API_KEY",
+  "key_url": "https://api-dashboard.search.brave.com/app/keys",
+  "scopes": [],
+  "service": "brave-search",
+  "steps": [
+    "Sign in to the Brave Search API dashboard (a free plan exists; it needs a card on file)",
+    "Open 'API Keys' and click 'Add API key'",
+    "Pick the subscription it belongs to, name it and copy the key",
+    "Note: validation runs one tiny search (q=ping), which counts as 1 request on your plan"
+  ],
+  "validate": {
+    "auth": {
+      "header": "X-Subscription-Token",
+      "type": "header"
+    },
+    "expect": [
+      200
+    ],
+    "headers": {
+      "Accept": "application/json"
+    },
+    "method": "GET",
+    "reject": [
+      401,
+      403,
+      422
+    ],
+    "url": "https://api.search.brave.com/res/v1/web/search?q=ping"
+  }
+}

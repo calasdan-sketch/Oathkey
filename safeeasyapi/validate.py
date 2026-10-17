@@ -14,12 +14,14 @@ proves nothing about the key.
 from __future__ import annotations
 
 import base64
+import http.client
 import urllib.error
 import urllib.parse
 import urllib.request
 
-USER_AGENT = "safeeasyapi/0.2.0"
+USER_AGENT = "safeeasyapi/0.3.0"
 DEFAULT_PORTS = {"http": 80, "https": 443}
+REJECT_DEFAULT = (401, 403)
 
 
 class ValidationError(Exception):
@@ -37,17 +39,34 @@ def _credential_header(spec: dict) -> str:
 
 
 def _build_request(spec: dict, key: str) -> urllib.request.Request:
+    """The one request that proves the key. Auth shapes:
+
+    - bearer: ``Authorization: <scheme> <key>`` — scheme defaults to
+      ``Bearer``; Deepgram uses ``Token``, Discord bots use ``Bot``.
+    - header: the raw key in the named header (``x-api-key``, ``xi-api-key``).
+    - basic:  HTTP Basic with the key as the password when ``username`` is
+      given (Mailgun: ``api:<key>``), else the key as the username.
+
+    ``spec["headers"]`` adds static headers some APIs insist on
+    (``anthropic-version``, ``Notion-Version``); the credential header
+    always wins over a same-named static one.
+    """
     method = spec.get("method", "GET").upper()
     url = spec["url"]
     auth = spec.get("auth", {})
     atype = auth.get("type", "bearer")
     headers: dict[str, str] = {"User-Agent": USER_AGENT}
+    for name, value in (spec.get("headers") or {}).items():
+        headers[str(name)] = str(value)
     if atype == "bearer":
-        headers["Authorization"] = f"Bearer {key}"
+        scheme = auth.get("scheme") or "Bearer"
+        headers["Authorization"] = f"{scheme} {key}"
     elif atype == "header":
         headers[auth["header"]] = key
     elif atype == "basic":
-        creds = base64.b64encode(f"{key}:".encode()).decode()
+        username = auth.get("username")
+        pair = f"{username}:{key}" if username else f"{key}:"
+        creds = base64.b64encode(pair.encode()).decode()
         headers["Authorization"] = f"Basic {creds}"
     else:
         raise ValidationError(f"unknown auth type: {atype}")
@@ -105,6 +124,9 @@ def validate_key(spec: dict, key: str, timeout: float = 10.0) -> bool:
     """
     req = _build_request(spec, key)
     expect = set(spec.get("expect", [200]))
+    # statuses that mean "the API looked at the key and said no" (Google
+    # answers 400 to a bad key, Brave 422) — a verdict, not a crash
+    reject = set(spec.get("reject") or REJECT_DEFAULT)
     scrubber = _CredentialScrubbingRedirectHandler(_credential_header(spec))
     opener = urllib.request.build_opener(scrubber)
     try:
@@ -115,6 +137,13 @@ def validate_key(spec: dict, key: str, timeout: float = 10.0) -> bool:
             status = e.code
     except urllib.error.URLError as e:
         raise ValidationError(f"network error during validation: {e.reason}")
+    except http.client.HTTPException as e:
+        # BadStatusLine / RemoteDisconnected / IncompleteRead: something
+        # answered, but not with HTTP (a proxy page, a TLS mismatch, a
+        # non-HTTP service on the port). Not a crash, not a verdict.
+        raise ValidationError(
+            f"validation endpoint did not speak HTTP ({type(e).__name__}: "
+            f"{str(e)[:80]!r}); check the recipe's validate.url")
     except OSError as e:
         raise ValidationError(f"network error during validation: {e}")
     if scrubber.stripped_to is not None:
@@ -124,6 +153,6 @@ def validate_key(spec: dict, key: str, timeout: float = 10.0) -> bool:
             "Fix the recipe's validate.url to point at the final endpoint.")
     if status in expect:
         return True
-    if status in (401, 403):
+    if status in reject:
         return False  # key rejected (validation failed, not a crash)
     raise ValidationError(f"validation endpoint error: HTTP {status}")

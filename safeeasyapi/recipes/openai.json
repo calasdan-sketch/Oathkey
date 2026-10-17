@@ -1,0 +1,24 @@
+{
+  "display": "OpenAI",
+  "docs": "https://developers.openai.com/api/reference/resources/models/methods/list",
+  "env_var": "OPENAI_API_KEY",
+  "key_url": "https://platform.openai.com/api-keys",
+  "scopes": [],
+  "service": "openai",
+  "steps": [
+    "Sign in to the OpenAI platform (platform.openai.com)",
+    "Click '+ Create new secret key'",
+    "Name it after your project; keep the default permissions or restrict them",
+    "Click 'Create secret key' and copy the key (starts with 'sk-') — it is shown exactly once"
+  ],
+  "validate": {
+    "auth": {
+      "type": "bearer"
+    },
+    "expect": [
+      200
+    ],
+    "method": "GET",
+    "url": "https://api.openai.com/v1/models"
+  }
+}

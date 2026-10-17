@@ -1,0 +1,30 @@
+{
+  "display": "Notion",
+  "docs": "https://developers.notion.com/guides/get-started/personal-access-tokens",
+  "env_var": "NOTION_TOKEN",
+  "key_url": "https://www.notion.so/developers/tokens",
+  "scopes": [],
+  "service": "notion",
+  "steps": [
+    "Sign in to Notion; this is the Developer portal's 'Personal access tokens' page",
+    "Click 'New token'",
+    "Name it, choose its capabilities (Notion API) and an expiration; pick the workspace if asked",
+    "Click 'Create token' and copy it — it is shown exactly once"
+  ],
+  "validate": {
+    "auth": {
+      "type": "bearer"
+    },
+    "expect": [
+      200
+    ],
+    "headers": {
+      "Notion-Version": "2026-03-11"
+    },
+    "method": "GET",
+    "trusted_hosts": [
+      "api.notion.com"
+    ],
+    "url": "https://api.notion.com/v1/users/me"
+  }
+}

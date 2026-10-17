@@ -22,7 +22,13 @@ import sys
 from . import publicapis as pa_mod
 from . import recipes as recipes_mod
 
-SERVER_INFO = {"name": "safeeasyapi", "version": "0.2.0"}
+SERVER_INFO = {"name": "safeeasyapi", "version": "0.3.0"}
+
+INVALID_REQUEST = -32600
+METHOD_NOT_FOUND = -32601
+INVALID_PARAMS = -32602
+INTERNAL_ERROR = -32603
+PARSE_ERROR = -32700
 
 
 def _tool_defs() -> list[dict]:
@@ -168,26 +174,40 @@ def _served_brief(e: dict) -> dict:
     return brief
 
 
-def handle(request: dict, catalog: dict[str, dict],
+def _error(req_id, code: int, message: str) -> dict:
+    return {"jsonrpc": "2.0", "id": req_id,
+            "error": {"code": code, "message": message}}
+
+
+def handle(request, catalog: dict[str, dict],
            pa_loader=None) -> dict | None:
-    """Handle one JSON-RPC request. Returns the response dict, or None for
-    notifications."""
-    req_id = request.get("id")
+    """Handle one JSON-RPC message. Returns the response dict, or None when
+    nothing must be sent: a notification (no `id`, or any `notifications/*`
+    method — initialized, cancelled, roots/list_changed ...) never gets a
+    reply, not even an error. A non-object message is an Invalid Request
+    (-32600), never a Python AttributeError text."""
+    if not isinstance(request, dict):
+        return _error(None, INVALID_REQUEST, "Invalid Request")
     method = request.get("method")
+    if "id" not in request or (isinstance(method, str)
+                               and method.startswith("notifications/")):
+        return None
+    req_id = request.get("id")
+    if not isinstance(method, str):
+        return _error(req_id, INVALID_REQUEST, "Invalid Request")
 
     def ok(result):
         return {"jsonrpc": "2.0", "id": req_id, "result": result}
 
     def err(code, message):
-        return {"jsonrpc": "2.0", "id": req_id,
-                "error": {"code": code, "message": message}}
+        return _error(req_id, code, message)
 
     if method == "initialize":
         return ok({"protocolVersion": "2024-11-05",
                    "capabilities": {"tools": {}},
                    "serverInfo": SERVER_INFO})
-    if method == "notifications/initialized":
-        return None
+    if method == "ping":
+        return ok({})
     if method == "tools/list":
         return ok({"tools": _tool_defs()})
     if method == "tools/call":
@@ -266,8 +286,8 @@ def handle(request: dict, catalog: dict[str, dict],
                     f"Docs: {detail['url']}")
             return ok({"content": [{"type": "text",
                                     "text": json.dumps(detail)}]})
-        return err(-32602, f"unknown tool: {name}")
-    return err(-32601, f"unknown method: {method}")
+        return err(INVALID_PARAMS, f"unknown tool: {name}")
+    return err(METHOD_NOT_FOUND, f"unknown method: {method}")
 
 
 def serve(catalog: dict[str, dict] | None = None,
@@ -291,13 +311,13 @@ def serve(catalog: dict[str, dict] | None = None,
         try:
             request = json.loads(line)
         except ValueError:
-            continue
-        try:
-            response = handle(request, catalog, pa_loader)
-        except Exception as e:  # never let one bad request kill the server
-            rid = request.get("id") if isinstance(request, dict) else None
-            response = {"jsonrpc": "2.0", "id": rid,
-                        "error": {"code": -32603, "message": str(e)}}
+            response = _error(None, PARSE_ERROR, "Parse error")
+        else:
+            try:
+                response = handle(request, catalog, pa_loader)
+            except Exception as e:  # never let one bad request kill the server
+                rid = request.get("id") if isinstance(request, dict) else None
+                response = _error(rid, INTERNAL_ERROR, str(e))
         if response is not None:
             data = (json.dumps(response) + "\n").encode("utf-8")
             if isinstance(writer, io.TextIOBase):

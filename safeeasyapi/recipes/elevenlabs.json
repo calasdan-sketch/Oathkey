@@ -1,0 +1,25 @@
+{
+  "display": "ElevenLabs",
+  "docs": "https://elevenlabs.io/docs/api-reference/authentication",
+  "env_var": "ELEVENLABS_API_KEY",
+  "key_url": "https://elevenlabs.io/app/developers/api-keys",
+  "scopes": [],
+  "service": "elevenlabs",
+  "steps": [
+    "Sign in to ElevenLabs",
+    "Click 'Create API key'",
+    "Name it; optionally restrict its permissions and set 'Expire After'",
+    "Click 'Create' and copy the key — it is shown exactly once"
+  ],
+  "validate": {
+    "auth": {
+      "header": "xi-api-key",
+      "type": "header"
+    },
+    "expect": [
+      200
+    ],
+    "method": "GET",
+    "url": "https://api.elevenlabs.io/v1/user"
+  }
+}

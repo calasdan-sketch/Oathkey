@@ -1,0 +1,27 @@
+{
+  "display": "Postmark (server API token)",
+  "docs": "https://postmarkapp.com/developer/api/server-api",
+  "env_var": "POSTMARK_SERVER_TOKEN",
+  "key_url": "https://account.postmarkapp.com/servers",
+  "scopes": [],
+  "service": "postmark",
+  "steps": [
+    "Sign in to Postmark and open the server your app sends from",
+    "Open the server's 'API Tokens' tab",
+    "Copy the Server API token (or create a new one there)"
+  ],
+  "validate": {
+    "auth": {
+      "header": "X-Postmark-Server-Token",
+      "type": "header"
+    },
+    "expect": [
+      200
+    ],
+    "headers": {
+      "Accept": "application/json"
+    },
+    "method": "GET",
+    "url": "https://api.postmarkapp.com/server"
+  }
+}

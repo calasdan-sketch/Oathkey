@@ -1,0 +1,23 @@
+{
+  "display": "Tavily",
+  "docs": "https://docs.tavily.com/documentation/api-reference/endpoint/usage",
+  "env_var": "TAVILY_API_KEY",
+  "key_url": "https://app.tavily.com/home",
+  "scopes": [],
+  "service": "tavily",
+  "steps": [
+    "Sign in to Tavily (app.tavily.com)",
+    "Under 'API Keys' generate a new key and name it",
+    "Copy the key (starts with 'tvly-')"
+  ],
+  "validate": {
+    "auth": {
+      "type": "bearer"
+    },
+    "expect": [
+      200
+    ],
+    "method": "GET",
+    "url": "https://api.tavily.com/usage"
+  }
+}
