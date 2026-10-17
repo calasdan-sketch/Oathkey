@@ -10,7 +10,8 @@ safeeasyapi connect github
 
 It opens the exact key page, walks the precise saved steps, takes the key
 with hidden input, **validates it with a test API call**, and writes it
-straight to `.env` with `0600` permissions. The key is never displayed,
+straight to `.env` with owner-only permissions — or, with
+`--store keychain`, into your OS keychain. The key is never displayed,
 never logged, never in shell history.
 
 ## Install
@@ -30,6 +31,8 @@ alias seapi="python3 -m safeeasyapi"  # or just use the `safeeasyapi` binary
 safeeasyapi list                        # services with saved recipes
 safeeasyapi connect <service>           # guided key setup -> .env
 safeeasyapi connect <service> --env-file /path/to/.env
+safeeasyapi connect <service> --store keychain   # OS keychain instead of .env
+safeeasyapi run <service> -- <command>  # run with a keychain-stored key in its env
 safeeasyapi rotate <service>            # replace a stored key
 safeeasyapi add                         # capture a new service recipe interactively
 safeeasyapi find <query>                # find free public APIs for a task
@@ -55,8 +58,11 @@ $ safeeasyapi connect stripe
 
   Paste your API key (hidden):                         # 3. hidden paste —
   validating…                                          #    key never displayed
-  ✓ added STRIPE_SECRET_KEY in .env (mode 0600 — never displayed, never logged)
+  ✓ added STRIPE_SECRET_KEY in .env (mode 0600 - never displayed, never logged)
 ```
+
+(On Windows the line says `owner-only ACL` instead of `mode 0600` — see
+*Where the key goes*.)
 
 The validation preview is the security hinge: you see exactly where the
 key will be sent, and the recipe must use `https://` for both the key page
@@ -74,6 +80,45 @@ asked for or sent:
 
 In the transcript above the key is shown as `sk-…` — in reality it is
 never printed at all, not even redacted.
+
+If the validation endpoint **redirects** somewhere else — another host,
+another port, or from `https://` down to `http://` — the credential
+header is stripped before the redirect is followed (what browsers and
+`requests` do) and the connect stops with *validation endpoint redirected
+to a different origin* instead of guessing from a response that proves
+nothing about the key. A redirect within the same origin (`/me` →
+`/me/`) is followed normally.
+
+## Where the key goes
+
+**`.env` file (default).** `ENV_VAR=<key>` is written to `.env` (or
+`--env-file`), private from the first byte: the content goes into a
+randomly named temp file created with `O_CREAT|O_EXCL` and mode `0600`
+in the same directory, is fsync'd, and is then atomically renamed over
+the target. No reader ever sees a half-written or world-readable key, a
+crash leaves the old file untouched, and a file somebody pre-planted at
+a guessable name is never written through.
+
+- Linux / macOS: the file is `chmod 0600` (owner read/write only).
+- Windows: POSIX mode bits don't exist, so the file's ACL is reduced to
+  the current user (`icacls <file> /inheritance:r /grant:r <user>:(F)`,
+  best effort) and the success line says `owner-only ACL`.
+
+**OS keychain (`--store keychain`).** No `keyring` package; each OS
+uses what it ships with, and the key never goes through `argv`:
+
+| OS      | backend                                                            | how |
+|---------|--------------------------------------------------------------------|-----|
+| macOS   | login Keychain, via the `security` command                         | commands fed over stdin (`security -i`), generic password `safeeasyapi:<service>` / account `<ENV_VAR>` |
+| Windows | Credential Manager (Windows Vault), via `ctypes` → `advapi32` `CredWriteW`/`CredReadW`/`CredDeleteW` | generic credential `safeeasyapi:<service>`, persisted for the local machine, UTF-16-LE blob like `cmdkey` |
+| Linux   | Secret Service (GNOME Keyring / KWallet) via `secret-tool`, when installed | key on stdin; attributes `service=safeeasyapi account=<ENV_VAR> slug=<service>` |
+| anything else, or the tool is missing | — | falls back to the `.env` file and says so |
+
+A keychain-stored key is consumed with `safeeasyapi run <service> --
+<command>`: the key is read back and placed in that one child process's
+environment, never printed. (Your app does not need to change — it
+still reads `$STRIPE_SECRET_KEY`.) Without a keychain backend `run`
+exits 1 and tells you the key lives in `.env`.
 
 ## Find public APIs
 
@@ -114,8 +159,12 @@ exact click path, scopes, and a validation endpoint. Teach it once with
 `safeeasyapi add`, use it forever — and Claude Code can pull the exact recipe via
 `safeeasyapi mcp` instead of guessing.
 
-Ships with verified recipes for **GitHub**, **Stripe**, and **Resend**.
-`safeeasyapi add` walks you through capturing your own (Headroom, RPX, Ponytail…).
+Ships with verified recipes for **GitHub**, **Stripe**, **Resend** and
+**OpenRouter**, inside the package (so `pip install .` carries them).
+`safeeasyapi add` walks you through capturing your own (Headroom, RPX,
+Ponytail…); those are saved to `~/.safeeasyapi/recipes/`
+(`%USERPROFILE%\.safeeasyapi\recipes\` on Windows) and override a
+built-in recipe with the same slug. `--recipes-dir` writes elsewhere.
 
 ## The MCP server
 
@@ -134,9 +183,12 @@ the user to paste the key into chat.
 ## Security model
 
 - Key input via `getpass` (no echo); never printed, never logged.
-- `.env` written atomically (temp file + rename) with mode `0600`.
+- `.env` written atomically through a random, exclusive, `0600` temp
+  file + rename (owner-only ACL on Windows); keychain storage never
+  passes the key on a command line.
 - Validation is a single minimal HTTPS call; only the status is read,
-  response bodies are discarded.
+  response bodies are discarded. The credential never follows a
+  redirect to another origin or to plain `http://`.
 - Rejected keys are scrubbed immediately; 3 failed attempts aborts.
 - The exact validation URL and HTTP method are printed BEFORE the key is
   asked for; a different-domain validation URL needs a typed `yes`.
@@ -148,21 +200,33 @@ the user to paste the key into chat.
 
 ```bash
 python3 -m unittest discover -s tests -v
+python3 -m pytest -q                    # same suite
 ```
 
-83 tests: recipe schema and HTTPS-URL rejection, `.env`
-create/update/permissions, full connect flow against a local fake HTTP
-service (bearer/header/basic auth, 401 rejection, network failure),
-validation-URL preview ordering, typed-`yes` on domain mismatch
-(accepts `yes`, aborts on anything else, never prompts for the key first),
-MCP provenance labels and quarantine of poisoned directory entries, MCP
-protocol round-trip over real stdio, and never-log assertions on every
-output path.
+112 tests, stdlib only, no network beyond 127.0.0.1: recipe schema and
+HTTPS-URL rejection, `.env` create/update/permissions (random exclusive
+temp file, crash safety, never world-readable), redirect credential
+stripping against a local redirecting server pair, full connect flow
+against a local fake HTTP service (bearer/header/basic auth, 401
+rejection, network failure), validation-URL preview ordering,
+typed-`yes` on domain mismatch, keychain dispatch for every OS with the
+real keychain faked (the Windows path through a fake `advapi32`), the
+`.env` fallback, MCP provenance labels and quarantine of poisoned
+directory entries, MCP protocol round-trip over real stdio, a wheel
+build that must contain the recipes, and never-log assertions on every
+output path. Tests point `HOME`/`USERPROFILE`/`APPDATA` at a throwaway
+directory, so they never read your real `~/.safeeasyapi` or `.env`.
 
-## Scope / limits (v0.1.0)
+Windows 11 is a first-class target: the wire format of the MCP server
+is UTF-8 bytes regardless of console code page, console output is
+reconfigured to replace unencodable characters instead of crashing, and
+every text file is opened as UTF-8.
 
-- `.env` file storage only for now; OS keychain / Doppler / Vault backends
-  are the natural next step.
+## Scope / limits (v0.2.0)
+
+- Keychain storage is best effort and opt-in (`--store keychain`); the
+  `.env` file is the default and the fallback. No Doppler / Vault
+  backends.
 - Recipe catalog is curated manually — verify a new service's key URL and
   validation endpoint before trusting it.
 - `safeeasyapi mcp` returns recipes; the interactive key paste stays in the

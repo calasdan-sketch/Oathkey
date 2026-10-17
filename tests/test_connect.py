@@ -1,8 +1,8 @@
 import io
 import os
-import tempfile
 import unittest
 
+import _isolation  # noqa: F401  (fake HOME/USERPROFILE for the whole run)
 from safeeasyapi import connect as connect_mod
 from safeeasyapi import store as store_mod
 from safeeasyapi import validate as validate_mod
@@ -22,29 +22,35 @@ def recipe(**over):
 
 class TestStore(unittest.TestCase):
     def test_create_new_env(self):
-        tmp = tempfile.mkdtemp()
+        tmp = _isolation.mktemp()
         env = os.path.join(tmp, ".env")
         path, updated = store_mod.store_key("ACME_API_KEY", SECRET, env)
         self.assertEqual(path, env)
         self.assertFalse(updated)
-        with open(env) as f:
+        with open(env, encoding="utf-8") as f:
             self.assertIn(f"ACME_API_KEY={SECRET}", f.read())
-        self.assertEqual(store_mod.file_mode(env), 0o600)
+        self.assert_owner_only(env)
+
+    def assert_owner_only(self, path):
+        # POSIX mode bits mean nothing on Windows (chmod only toggles the
+        # read-only flag there); the ACL is handled separately.
+        if os.name != "nt":
+            self.assertEqual(store_mod.file_mode(path), 0o600)
 
     def test_update_in_place_preserves_rest(self):
-        tmp = tempfile.mkdtemp()
+        tmp = _isolation.mktemp()
         env = os.path.join(tmp, ".env")
-        with open(env, "w") as f:
+        with open(env, "w", encoding="utf-8") as f:
             f.write("OTHER=1\nACME_API_KEY=old\nTAIL=x\n")
         path, updated = store_mod.store_key("ACME_API_KEY", SECRET, env)
         self.assertTrue(updated)
-        with open(env) as f:
+        with open(env, encoding="utf-8") as f:
             content = f.read()
         self.assertIn(f"ACME_API_KEY={SECRET}", content)
         self.assertIn("OTHER=1", content)
         self.assertIn("TAIL=x", content)
         self.assertNotIn("ACME_API_KEY=old", content)
-        self.assertEqual(store_mod.file_mode(env), 0o600)
+        self.assert_owner_only(env)
 
 
 class TestConnect(unittest.TestCase):
@@ -71,29 +77,29 @@ class TestConnect(unittest.TestCase):
         return code, out.getvalue(), opened
 
     def test_happy_path(self):
-        tmp = tempfile.mkdtemp()
+        tmp = _isolation.mktemp()
         env = os.path.join(tmp, ".env")
         code, output, opened = self._run([SECRET], [True], env)
         self.assertEqual(code, 0)
         self.assertEqual(opened, ["https://acme.test/keys"])
-        with open(env) as f:
+        with open(env, encoding="utf-8") as f:
             self.assertIn(f"ACME_API_KEY={SECRET}", f.read())
         # THE key must never appear in output.
         self.assertNotIn(SECRET, output)
         self.assertIn("never displayed, never logged", output)
 
     def test_rejected_then_accepted(self):
-        tmp = tempfile.mkdtemp()
+        tmp = _isolation.mktemp()
         env = os.path.join(tmp, ".env")
         code, output, _ = self._run(["bad-key", SECRET], [False, True], env)
         self.assertEqual(code, 0)
         self.assertIn("key rejected", output)
-        with open(env) as f:
+        with open(env, encoding="utf-8") as f:
             self.assertIn(SECRET, f.read())
         self.assertNotIn("bad-key", output)
 
     def test_three_strikes_gives_up(self):
-        tmp = tempfile.mkdtemp()
+        tmp = _isolation.mktemp()
         env = os.path.join(tmp, ".env")
         code, output, _ = self._run(["k1", "k2", "k3"],
                                     [False, False, False], env)
@@ -106,7 +112,7 @@ class TestConnect(unittest.TestCase):
             raise validate_mod.ValidationError("dns down")
         out = io.StringIO()
         code = connect_mod.connect(
-            recipe(), env_file=os.path.join(tempfile.mkdtemp(), ".env"),
+            recipe(), env_file=os.path.join(_isolation.mktemp(), ".env"),
             browser_open=lambda u: None, prompt=lambda _: SECRET,
             out=out, validate_fn=boom)
         self.assertEqual(code, 1)

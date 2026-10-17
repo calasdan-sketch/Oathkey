@@ -14,6 +14,7 @@ through here — recipes contain only public how-to.
 
 from __future__ import annotations
 
+import io
 import json
 import re
 import sys
@@ -270,11 +271,21 @@ def handle(request: dict, catalog: dict[str, dict],
 
 
 def serve(catalog: dict[str, dict] | None = None,
-          pa_loader=None) -> int:
+          pa_loader=None, stdin=None, stdout=None) -> int:
+    """Newline-delimited JSON-RPC over stdio. The wire is UTF-8 bytes
+    whatever the console code page (Windows cp1252 included)."""
     catalog = catalog if catalog is not None else recipes_mod.load_recipes()
-    stdin = sys.stdin
-    for line in stdin:
-        line = line.strip()
+    stdin = stdin if stdin is not None else sys.stdin
+    stdout = stdout if stdout is not None else sys.stdout
+    reader = getattr(stdin, "buffer", stdin)
+    writer = getattr(stdout, "buffer", stdout)
+    while True:
+        raw = reader.readline()
+        if not raw:
+            break
+        if isinstance(raw, str):
+            raw = raw.encode("utf-8")
+        line = raw.decode("utf-8", "replace").strip()
         if not line:
             continue
         try:
@@ -288,6 +299,10 @@ def serve(catalog: dict[str, dict] | None = None,
             response = {"jsonrpc": "2.0", "id": rid,
                         "error": {"code": -32603, "message": str(e)}}
         if response is not None:
-            sys.stdout.write(json.dumps(response) + "\n")
-            sys.stdout.flush()
+            data = (json.dumps(response) + "\n").encode("utf-8")
+            if isinstance(writer, io.TextIOBase):
+                writer.write(data.decode("utf-8"))
+            else:
+                writer.write(data)
+            writer.flush()
     return 0

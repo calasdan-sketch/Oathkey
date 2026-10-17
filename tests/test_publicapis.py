@@ -7,7 +7,10 @@ handler gets entries injected via pa_loader.
 import io
 import json
 import unittest
+
 from contextlib import redirect_stdout
+
+import _isolation  # noqa: F401  (fake HOME/USERPROFILE for the whole run)
 
 from safeeasyapi import cli as cli_mod
 from safeeasyapi import mcp as mcp_mod

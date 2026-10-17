@@ -68,7 +68,7 @@ def fetch(refresh: bool = False) -> str:
             with open(path, encoding="utf-8") as f:
                 return f.read()
     req = urllib.request.Request(SOURCE_URL,
-                                 headers={"User-Agent": "safeeasyapi/0.1.0"})
+                                 headers={"User-Agent": "safeeasyapi/0.2.0"})
     with urllib.request.urlopen(req, timeout=30) as resp:
         text = resp.read().decode("utf-8", errors="replace")
     with open(path, "w", encoding="utf-8") as f:

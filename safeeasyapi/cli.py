@@ -1,4 +1,6 @@
-"""SafeEasyAPI CLI: `safeeasyapi` — the safe tunnel for API keys."""
+"""SafeEasyAPI CLI: `safeeasyapi` - the safe tunnel for API keys."""
+
+from __future__ import annotations
 
 import argparse
 import json
@@ -6,9 +8,24 @@ import sys
 
 from . import __version__
 from . import connect as connect_mod
+from . import keychain as keychain_mod
 from . import mcp as mcp_mod
 from . import publicapis as pa_mod
 from . import recipes as recipes_mod
+
+
+def _harden_streams() -> None:
+    """Never crash on a console that cannot encode the check mark, the
+    warning sign or a non-ASCII API name (cp1252 on Windows): replace
+    instead of raising UnicodeEncodeError half-way through a connect."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None or getattr(stream, "errors", None) != "strict":
+            continue
+        try:
+            reconfigure(errors="replace")
+        except (OSError, ValueError):
+            pass
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -20,23 +37,34 @@ def _build_parser() -> argparse.ArgumentParser:
                    version=f"%(prog)s {__version__}")
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    c = sub.add_parser("connect", help="Connect a service (guided key setup).")
-    c.add_argument("service", help="Service slug (see `safeeasyapi list`).")
-    c.add_argument("--env-file", default=".env",
-                   help="Where to store the key (default: .env).")
-    c.add_argument("--no-browser", action="store_true",
-                   help="Don't auto-open the key page.")
-
-    r = sub.add_parser("rotate", help="Replace the stored key for a service.")
-    r.add_argument("service", help="Service slug.")
-    r.add_argument("--env-file", default=".env")
-    r.add_argument("--no-browser", action="store_true")
+    for name, help_text in (("connect", "Connect a service (guided key setup)."),
+                            ("rotate", "Replace the stored key for a service.")):
+        c = sub.add_parser(name, help=help_text)
+        c.add_argument("service", help="Service slug (see `safeeasyapi list`).")
+        c.add_argument("--env-file", default=".env",
+                       help="Where to store the key with --store env "
+                            "(default: .env).")
+        c.add_argument("--store", choices=["env", "keychain"], default="env",
+                       help="env: owner-only .env file (default). keychain: "
+                            "the OS keychain (macOS Keychain, Windows "
+                            "Credential Manager, secret-tool on Linux), "
+                            "falling back to the .env file when none is "
+                            "available; use `safeeasyapi run` to consume it.")
+        c.add_argument("--no-browser", action="store_true",
+                       help="Don't auto-open the key page.")
 
     sub.add_parser("list", help="List services with saved recipes.")
 
     a = sub.add_parser("add", help="Capture a new service recipe interactively.")
     a.add_argument("--recipes-dir", default=None,
-                   help="Write the recipe here instead of the built-in dir.")
+                   help="Write the recipe here instead of "
+                        f"{recipes_mod.user_recipes_dir()}.")
+
+    r = sub.add_parser("run", help="Run a command with a keychain-stored key "
+                                   "in its environment (never printed).")
+    r.add_argument("service", help="Service slug.")
+    r.add_argument("command", nargs=argparse.REMAINDER,
+                   help="command after -- : safeeasyapi run stripe -- python app.py")
 
     sub.add_parser("mcp", help="Run the MCP server on stdio (for Claude Code).")
 
@@ -53,7 +81,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def _cmd_list(catalog: dict) -> int:
     if not catalog:
-        print("no recipes yet — add one with `safeeasyapi add`.")
+        print("no recipes yet - add one with `safeeasyapi add`.")
         return 0
     print("\n  services with saved key recipes:\n")
     for slug in sorted(catalog):
@@ -73,10 +101,11 @@ def _prompt(text: str, default: str = "") -> str:
 
 
 def _cmd_add(recipes_dir: str | None) -> int:
-    print("\n  Capture a new service recipe — teach it once, use it forever.\n")
+    print("\n  Capture a new service recipe - teach it once, use it forever.\n")
     service = _prompt("slug (lowercase, no spaces)", "").lower().replace(" ", "-")
     if not service:
-        print("  slug is required."); return 1
+        print("  slug is required.")
+        return 1
     recipe = {
         "service": service,
         "display": _prompt("display name"),
@@ -95,7 +124,7 @@ def _cmd_add(recipes_dir: str | None) -> int:
         if not s:
             break
         recipe["steps"].append(s)
-    print("  validation — one API call that proves the key works:")
+    print("  validation - one API call that proves the key works:")
     recipe["validate"] = {
         "method": _prompt("HTTP method", "GET").upper(),
         "url": _prompt("validation URL"),
@@ -140,12 +169,59 @@ def _cmd_find(args) -> int:
         print(f"      {desc}")
         print(f"      {url}  ({category})")
         if e["auth"] == "apiKey":
-            print(f"      needs a key — save its recipe with `safeeasyapi add`.")
+            print("      needs a key - save its recipe with `safeeasyapi add`.")
     print()
     return 0
 
 
+def keychain_store(recipe: dict, env_file: str, out=None,
+                   backend: str | None = None, keychain=keychain_mod):
+    """store_fn for `--store keychain`: the OS keychain when the platform
+    has one, otherwise the owner-only .env file - and say which."""
+    out = out or sys.stdout
+    backend = backend or keychain.detect_backend()
+
+    def _store(env_var: str, key: str) -> str:
+        if backend is None:
+            out.write("  (no OS keychain available on this system - "
+                      "storing in the .env file instead)\n")
+            return connect_mod.store_in_env_file(env_file)(env_var, key)
+        try:
+            used = keychain.store(recipe["service"], env_var, key, backend)
+        except keychain.KeychainError as e:
+            out.write(f"  ({e} - storing in the .env file instead)\n")
+            return connect_mod.store_in_env_file(env_file)(env_var, key)
+        return (f"stored {env_var} in the {keychain.label(used)} "
+                f"(never displayed, never logged); use it with "
+                f"`safeeasyapi run {recipe['service']} -- <command>`")
+    return _store
+
+
+def _cmd_run(recipe: dict, command: list[str]) -> int:
+    cmd = list(command)
+    if cmd and cmd[0] == "--":
+        cmd = cmd[1:]
+    if not cmd:
+        print("error: no command: safeeasyapi run <service> -- <command>",
+              file=sys.stderr)
+        return 2
+    backend = keychain_mod.detect_backend()
+    if backend is None:
+        print("error: no OS keychain on this system - the key is in your "
+              ".env file; load that instead.", file=sys.stderr)
+        return 1
+    try:
+        return keychain_mod.run_with_key(recipe, cmd, backend)
+    except keychain_mod.KeychainError:
+        print(f"error: no key for '{recipe['service']}' in the "
+              f"{keychain_mod.label(backend)} - run "
+              f"`safeeasyapi connect {recipe['service']} --store keychain`.",
+              file=sys.stderr)
+        return 1
+
+
 def main(argv: list[str] | None = None) -> int:
+    _harden_streams()
     parser = _build_parser()
     args = parser.parse_args(argv)
     catalog = recipes_mod.load_recipes()
@@ -158,18 +234,23 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_add(args.recipes_dir)
     if args.cmd == "mcp":
         return mcp_mod.serve(catalog)
-    if args.cmd in ("connect", "rotate"):
+    if args.cmd in ("connect", "rotate", "run"):
         recipe = catalog.get(args.service)
         if not recipe:
             print(f"unknown service '{args.service}'.")
             _cmd_list(catalog)
             return 1
+        if args.cmd == "run":
+            return _cmd_run(recipe, args.command)
         import webbrowser
-        opener = (lambda url: None) if getattr(args, "no_browser", False) else webbrowser.open
-        env_file = getattr(args, "env_file", ".env")
+        opener = (lambda url: None) if args.no_browser else webbrowser.open
+        store_fn = None
+        if args.store == "keychain":
+            store_fn = keychain_store(recipe, args.env_file)
         if args.cmd == "rotate":
-            print(f"\n  rotating {recipe['display']} — the stored key will be replaced.\n")
-        return connect_mod.connect(recipe, env_file=env_file, browser_open=opener)
+            print(f"\n  rotating {recipe['display']} - the stored key will be replaced.\n")
+        return connect_mod.connect(recipe, env_file=args.env_file,
+                                   browser_open=opener, store_fn=store_fn)
     return 0
 
 

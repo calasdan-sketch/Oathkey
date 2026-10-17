@@ -11,10 +11,10 @@ import contextlib
 import io
 import json
 import os
-import tempfile
 import unittest
 from unittest import mock
 
+import _isolation  # noqa: F401  (fake HOME/USERPROFILE for the whole run)
 from safeeasyapi import cli as cli_mod
 from safeeasyapi import mcp as mcp_mod
 from safeeasyapi import publicapis as pa_mod
@@ -202,15 +202,15 @@ class TestEnvVarValidation(unittest.TestCase):
             self.assertEqual(r["env_var"], good)
 
     def test_store_key_refuses_bad_var(self):
-        tmp = os.path.join(tempfile.mkdtemp(), ".env")
+        tmp = os.path.join(_isolation.mktemp(), ".env")
         with self.assertRaises(ValueError):
             store_mod.store_key("GOOD=1\nEVIL=pwned", "k", tmp)
         self.assertFalse(os.path.exists(tmp))
 
     def test_store_key_accepts_good_var(self):
-        tmp = os.path.join(tempfile.mkdtemp(), ".env")
+        tmp = os.path.join(_isolation.mktemp(), ".env")
         store_mod.store_key("ACME_API_KEY", "k", tmp)
-        with open(tmp) as f:
+        with open(tmp, encoding="utf-8") as f:
             self.assertIn("ACME_API_KEY=k", f.read())
 
 

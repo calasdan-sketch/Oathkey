@@ -1,10 +1,13 @@
 import json
+import os
+import queue
 import subprocess
 import sys
 import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
+import _isolation  # noqa: F401  (fake HOME/USERPROFILE for the whole run)
 from safeeasyapi import mcp as mcp_mod
 from safeeasyapi import validate as validate_mod
 
@@ -148,18 +151,27 @@ class TestMCP(unittest.TestCase):
             {"jsonrpc": "2.0", "method": "notifications/initialized"}, CATALOG))
 
     def test_stdio_smoke(self):
-        """Full stdio round-trip through a real subprocess."""
+        """Full stdio round-trip through a real subprocess: the repo root
+        as cwd (wherever it is checked out), bytes on the wire, and a
+        reader thread with a timeout instead of a blocking readline."""
         proc = subprocess.Popen(
             [sys.executable, "-m", "safeeasyapi", "mcp"],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-            text=True, bufsize=1,
-            cwd="/home/hatch/workspace/safeeasyapi")
+            cwd=_isolation.REPO, env=dict(os.environ))
+        lines: "queue.Queue[bytes]" = queue.Queue()
+
+        def pump():
+            for ln in iter(proc.stdout.readline, b""):
+                lines.put(ln)
+
+        threading.Thread(target=pump, daemon=True).start()
+
         def rpc(method, params=None, rid=1):
-            proc.stdin.write(json.dumps(
+            proc.stdin.write((json.dumps(
                 {"jsonrpc": "2.0", "id": rid, "method": method,
-                 "params": params or {}}) + "\n")
+                 "params": params or {}}) + "\n").encode("utf-8"))
             proc.stdin.flush()
-            return json.loads(proc.stdout.readline())
+            return json.loads(lines.get(timeout=20).decode("utf-8"))
         try:
             init = rpc("initialize")
             self.assertEqual(init["result"]["serverInfo"]["name"],
@@ -174,6 +186,7 @@ class TestMCP(unittest.TestCase):
             proc.stdin.close()
             proc.terminate()
             proc.wait(timeout=5)
+            proc.stdout.close()
 
 
 if __name__ == "__main__":

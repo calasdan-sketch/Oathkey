@@ -71,6 +71,18 @@ def _require_cross_domain_confirmation(recipe: dict, out,
     return True
 
 
+def store_in_env_file(env_file: str):
+    """Default store: ENV_VAR=<key> in `env_file`, owner-only. Returns a
+    callable (env_var, key) -> description for the success line."""
+    def _store(env_var: str, key: str) -> str:
+        path, updated = store_mod.store_key(env_var, key, env_file)
+        verb = "updated" if updated else "added"
+        return (f"{verb} {env_var} in {path} "
+                f"({store_mod.describe_protection()} - never displayed, "
+                f"never logged)")
+    return _store
+
+
 def connect(
     recipe: dict,
     env_file: str = ".env",
@@ -79,10 +91,13 @@ def connect(
     out=None,
     validate_fn=validate_mod.validate_key,
     confirm_in=input,
+    store_fn=None,
 ) -> int:
     """Run the guided flow. Returns 0 on success, 1 on failure.
 
-    Injectable browser_open/prompt/validate_fn/confirm_in exist for tests.
+    `store_fn(env_var, key) -> description` decides where the validated
+    key goes (default: the .env file). Injectable browser_open / prompt /
+    validate_fn / confirm_in / store_fn exist for tests and the CLI.
     """
     out = out or sys.stdout
     _print_steps(recipe, out)
@@ -124,13 +139,12 @@ def connect(
         out.write("  giving up — double-check the key and run me again.\n")
         return 1
 
+    store_fn = store_fn or store_in_env_file(env_file)
     try:
-        path, updated = store_mod.store_key(recipe["env_var"], key, env_file)
+        description = store_fn(recipe["env_var"], key)
     finally:
         # Scrub the key from this frame whatever happens.
         key = None
         del key
-    verb = "updated" if updated else "added"
-    out.write(f"\n  ✓ {verb} {recipe['env_var']} in {path} "
-              f"(mode 0600 — never displayed, never logged)\n")
+    out.write(f"\n  \u2713 {description}\n")
     return 0

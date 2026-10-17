@@ -30,8 +30,17 @@ import os
 import re
 import urllib.parse
 
-RECIPES_DIR = os.path.join(os.path.dirname(os.path.dirname(
-    os.path.abspath(__file__))), "recipes")
+# Built-in recipes ship inside the package (so `pip install .` carries
+# them); recipes you capture with `safeeasyapi add` go to the user dir,
+# which also wins when both define the same service slug.
+RECIPES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                           "recipes")
+
+
+def user_recipes_dir() -> str:
+    """~/.safeeasyapi/recipes, resolved at call time (honours HOME /
+    USERPROFILE overrides)."""
+    return os.path.join(os.path.expanduser("~"), ".safeeasyapi", "recipes")
 
 REQUIRED = ("service", "display", "key_url", "env_var", "steps", "validate")
 VALIDATE_REQUIRED = ("method", "url", "auth", "expect")
@@ -82,35 +91,50 @@ def validate_recipe(data: dict) -> dict:
     return data
 
 
-def load_recipes(directory: str | None = None) -> dict[str, dict]:
-    """Load all valid recipes. Invalid files are skipped with a warning on
-    stderr — one bad recipe must never break the whole catalog."""
+def _load_dir(directory: str, recipes: dict[str, dict]) -> None:
     import sys
-    directory = directory or RECIPES_DIR
-    recipes: dict[str, dict] = {}
     if not os.path.isdir(directory):
-        return recipes
+        return
     for fname in sorted(os.listdir(directory)):
         if not fname.endswith(".json"):
             continue
         path = os.path.join(directory, fname)
         try:
-            with open(path) as f:
+            with open(path, encoding="utf-8") as f:
                 data = json.load(f)
             validate_recipe(data)
-        except (json.JSONDecodeError, RecipeError, OSError) as e:
+        except (json.JSONDecodeError, RecipeError, OSError, UnicodeDecodeError,
+                AttributeError, TypeError) as e:
             sys.stderr.write(f"[safeeasyapi] skipping bad recipe {fname}: {e}\n")
             continue
         recipes[data["service"]] = data
+
+
+def load_recipes(directory: str | None = None) -> dict[str, dict]:
+    """Load all valid recipes. Invalid files are skipped with a warning on
+    stderr - one bad recipe must never break the whole catalog.
+
+    With `directory`, only that directory is read. Without it, the
+    built-in recipes are loaded first and the user directory
+    (~/.safeeasyapi/recipes) on top, so a user recipe overrides a
+    built-in one with the same slug."""
+    recipes: dict[str, dict] = {}
+    if directory is not None:
+        _load_dir(directory, recipes)
+        return recipes
+    _load_dir(RECIPES_DIR, recipes)
+    _load_dir(user_recipes_dir(), recipes)
     return recipes
 
 
 def save_recipe(data: dict, directory: str | None = None) -> str:
+    """Write a recipe as <slug>.json. Default destination is the user
+    recipes dir, never the installed package."""
     validate_recipe(data)
-    directory = directory or RECIPES_DIR
+    directory = directory or user_recipes_dir()
     os.makedirs(directory, exist_ok=True)
     path = os.path.join(directory, f"{data['service']}.json")
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
         f.write("\n")
     return path

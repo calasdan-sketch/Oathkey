@@ -12,9 +12,9 @@ import io
 import json
 import os
 import shutil
-import tempfile
 import unittest
 
+import _isolation  # noqa: F401  (fake HOME/USERPROFILE for the whole run)
 from safeeasyapi import connect as connect_mod
 from safeeasyapi import mcp as mcp_mod
 from safeeasyapi import recipes as recipes_mod
@@ -48,7 +48,7 @@ def _connect(recipe_dict, confirm_answer=_UNSET, prompts=None,
     prompt_calls = []
     confirm_calls = []
 
-    env_file = env_file or os.path.join(tempfile.mkdtemp(), ".env")
+    env_file = env_file or os.path.join(_isolation.mktemp(), ".env")
     out = io.StringIO()
 
     def fake_prompt(_):
@@ -142,7 +142,7 @@ class TestValidationPreview(unittest.TestCase):
         def eof_confirm(_):
             raise EOFError
         code = connect_mod.connect(
-            r, env_file=os.path.join(tempfile.mkdtemp(), ".env"),
+            r, env_file=os.path.join(_isolation.mktemp(), ".env"),
             browser_open=lambda u: None, prompt=lambda _: FAKE_KEY,
             out=out, validate_fn=lambda s, k: True, confirm_in=eof_confirm)
         self.assertEqual(code, 1)
@@ -172,10 +172,10 @@ class TestHttpsEnforcement(unittest.TestCase):
                          "acme")
 
     def test_load_recipes_skips_http_recipe(self):
-        tmp = tempfile.mkdtemp()
+        tmp = _isolation.mktemp()
         try:
             path = os.path.join(tmp, "plain.json")
-            with open(path, "w") as f:
+            with open(path, "w", encoding="utf-8") as f:
                 json.dump(recipe(service="plain",
                                  key_url="http://acme.test/keys"), f)
             catalog = recipes_mod.load_recipes(tmp)
