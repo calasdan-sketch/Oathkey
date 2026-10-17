@@ -41,11 +41,18 @@ safeeasyapi connect <service> --env-file /path/to/.env
 safeeasyapi connect <service> --store keychain   # OS keychain instead of .env
 safeeasyapi run <service> -- <command>  # run with a keychain-stored key in its env
 safeeasyapi rotate <service>            # replace a stored key
-safeeasyapi forget <service>            # remove the key: OS keychain entry + .env line
+safeeasyapi forget <service>            # remove the key: OS keychain entry + .env line(s)
 safeeasyapi add                         # capture a new service recipe interactively
 safeeasyapi find <query>                # find free public APIs for a task
 safeeasyapi mcp                         # stdio MCP server (for Claude Code)
 ```
+
+Output can be piped (`safeeasyapi list | head -1`): when the reader
+stops early the command ends quietly with exit status 1 — no traceback,
+no "Exception ignored" noise at exit. On Windows Python reports that
+closed pipe as a plain `OSError` 22 instead of `BrokenPipeError` (a
+short output only fails when it is flushed); that is recognised too, for
+every command and for the MCP server.
 
 ## A connect, annotated
 
@@ -91,7 +98,13 @@ different hostname: `dashboard.stripe.com` and `api.stripe.com` are both
 `stripe.com`, so Stripe, GitHub (`github.com` / `api.github.com`) and
 Resend connect without a prompt — the transcript above is the whole
 flow. Multi-part public suffixes are understood (`a.co.uk` and `b.co.uk`
-are two owners; so are `a.github.io` and `b.github.io`). A few vendors
+are two owners; so are `a.github.io` and `b.github.io`). Case, a trailing
+dot, a port and `user@` in front of the host never change the answer, and
+names with non-English letters are compared in their `xn--` (punycode)
+form, so `bücher.example` and `xn--bcher-kva.example` are one owner. When
+the domains differ and either one is such a name, the warning shows both
+spellings (`аpple.com [xn--pple-43d.com] vs apple.com`, where the first
+`а` is Cyrillic) so a look-alike letter cannot hide. A few vendors
 genuinely keep their API on a second domain (Anthropic's console is
 `platform.claude.com`, its API `api.anthropic.com`; Mailgun `.com` /
 `.net`; Google AI Studio / `googleapis.com`; Notion `.so` / `.com`):
@@ -112,6 +125,13 @@ to a different origin* instead of guessing from a response that proves
 nothing about the key. A redirect within the same origin (`/me` →
 `/me/`) is followed normally.
 
+**Run it on your own computer.** The check only means something when it
+is sent straight from your machine. Cloud coding agents, sandboxes and
+some company proxies add their own credentials to outgoing requests, so
+the API can answer "valid" for any key, even a made-up one. If a key you
+know is wrong gets accepted, that is the likely reason: run
+`safeeasyapi connect` in a terminal on your own computer instead.
+
 ## Where the key goes
 
 **`.env` file (default).** `ENV_VAR=<key>` is written to `.env` (or
@@ -131,6 +151,30 @@ a folder that is a file, or unwritable), the connect ends with
 `✗ the key was validated but could NOT be saved` and exit 1 — the key is
 never printed, and nothing is written.
 
+If the same variable is set more than once in the file, the **last**
+line is the one that is updated: python-dotenv, Node dotenv, docker
+compose and a shell `source` all let the last assignment win, so
+changing the first would save a key that never takes effect. Earlier
+lines are left exactly as they were, and the success line says so
+(`ACME_API_KEY appears twice in .env; I updated the one that takes
+effect`).
+
+Only your key's line changes; every other byte of an existing file is
+kept exactly as it was. A file saved in a Windows code page (cp1252: an
+accented comment from Notepad) is not valid UTF-8, and a key is still
+saved into it without complaint. A CRLF file stays CRLF and an LF file
+stays LF: the line that is added or changed uses the file's own style, a
+missing final newline is added in that style, and a brand-new file uses
+LF. The byte-order mark that PowerShell and some Windows editors put at
+the start of a UTF-8 file is kept, and does not hide a key on the first
+line. Two things are refused with one plain sentence and exit 1,
+**before** the browser opens or any key is asked for: a `.env` that is a
+**link** to another file (a key is never written through a link, and a
+link is never silently replaced — name the real file with `--env-file`
+if you mean it), and a file that is not plain text, such as the UTF-16
+that Windows PowerShell's `>` creates (appending UTF-8 to it would wreck
+it — re-save it as UTF-8).
+
 - Linux / macOS: the file is `chmod 0600` (owner read/write only).
 - Windows: POSIX mode bits don't exist, so the file's ACL is reduced to
   the current user (`icacls <file> /inheritance:r /grant:r <user>:(F)`,
@@ -140,7 +184,9 @@ never printed, and nothing is written.
 
 `safeeasyapi forget <service>` undoes a connect: it deletes the keychain
 entry (when this OS has a keychain) and removes the `ENV_VAR=` line from
-`.env` (`--env-file` to point elsewhere), and says what it removed.
+`.env` (`--env-file` to point elsewhere), and says what it removed. If
+the variable is set more than once, every one of those lines goes —
+otherwise an older one would take over again — and it says how many.
 
 **OS keychain (`--store keychain`).** No `keyring` package; each OS
 uses what it ships with, and the key never goes through `argv`:
@@ -250,7 +296,12 @@ terminal — never ask the user to paste the key into chat. The server
 speaks JSON-RPC 2.0 properly: notifications (`notifications/cancelled`,
 `notifications/initialized`, anything without an `id`) are never
 answered, a non-object message gets `-32600 Invalid Request`, bad JSON
-`-32700 Parse error`.
+`-32700 Parse error`, and `params` that is not an object (`null`, a list,
+a string…), `arguments` that is not an object, or a missing or wrongly
+typed required argument gets `-32602 Invalid params` — never a crash or
+`-32603` — after which the server simply carries on. (A tool-level miss,
+such as a service that has no recipe, is an ordinary result with
+`isError`.)
 
 ## Security model
 
@@ -258,6 +309,9 @@ answered, a non-object message gets `-32600 Invalid Request`, bad JSON
 - `.env` written atomically through a random, exclusive, `0600` temp
   file + rename (owner-only ACL on Windows); keychain storage never
   passes the key on a command line.
+- A `.env` that is a link is refused, never written through or replaced,
+  and the permission step (chmod / icacls) never follows a link to change
+  something else.
 - Validation is a single minimal HTTPS call; only the status is read,
   response bodies are discarded. The credential never follows a
   redirect to another origin or to plain `http://`.
@@ -270,7 +324,8 @@ answered, a non-object message gets `-32600 Invalid Request`, bad JSON
   non-HTTP service on the port) is reported as a validation error, not a
   traceback.
 - Recipes must use `https://` for the key page and the validation URL —
-  plain-`http://` recipes are rejected at load time.
+  plain-`http://` recipes (and ones whose URL is malformed) are rejected
+  at load time.
 - Recipes contain no secrets — only public how-to.
 
 ## Testing
@@ -280,31 +335,39 @@ python -m unittest discover -s tests -v
 python -m pytest -q                    # same suite
 ```
 
-148 tests, stdlib only, no network beyond 127.0.0.1: recipe schema and
-HTTPS-URL rejection, slug validation, every shipped recipe (parses, https,
-file name = slug, credential header built), `.env` create/update/
-permissions (random exclusive temp file, crash safety, never
-world-readable, value quoting round-trip, `export` lines, an unwritable
-path), redirect credential stripping against a local redirecting server
-pair, full connect flow against a local fake HTTP service (bearer/header/
-basic auth, custom schemes and static headers, 401 rejection, custom
-reject statuses, network failure, a non-HTTP reply), validation-URL
-preview ordering, registrable-domain matching and typed-`yes` on a real
-mismatch, keychain dispatch for every OS with the real keychain faked
-(the Windows path through a fake `advapi32`), the `.env` fallback,
-`forget`, the honest Windows ACL line, MCP provenance labels and
-quarantine of poisoned directory entries, JSON-RPC notification/invalid-
-request handling, MCP protocol round-trip over real stdio, a wheel build
-that must contain the recipes, and never-log assertions on every output
-path. Tests point `HOME`/`USERPROFILE`/`APPDATA` at a throwaway
-directory, so they never read your real `~/.safeeasyapi` or `.env`.
+249 tests, stdlib only, no network beyond 127.0.0.1: recipe schema,
+HTTPS-URL rejection and malformed URLs, slug validation, every shipped
+recipe (parses, https, file name = slug, credential header built),
+`.env` create/update/permissions (random exclusive temp file, crash
+safety, never world-readable, value quoting round-trip, `export` lines,
+an unwritable path, a cp1252 file, a byte-order mark, CRLF/LF/mixed
+endings and a variable set twice (the last line wins) kept
+byte-for-byte, a UTF-16 file and a symbolic link refused, permissions
+that never follow a link), redirect credential stripping against a local
+redirecting server pair, full connect flow against a local fake HTTP
+service (bearer/header/basic auth, custom schemes and static headers,
+401 rejection, custom reject statuses, network failure, a non-HTTP
+reply), validation-URL preview ordering, registrable-domain matching
+(punycode names, trailing dots, ports, `user@`, a look-alike letter
+shown in the warning) and typed-`yes` on a real mismatch, keychain
+dispatch for every OS with the real keychain faked (the Windows path
+through a fake `advapi32`), the `.env` fallback, `forget`, the honest
+Windows ACL line, MCP provenance labels and quarantine of poisoned
+directory entries, JSON-RPC notification, invalid-request and
+invalid-params handling, MCP protocol round-trip over real stdio, a
+wheel build that must contain the recipes, the package metadata and one
+version number everywhere, output into a pipe that closes early (the
+real thing, and the different error Windows gives, simulated), and
+never-log assertions on every output path. Tests point
+`HOME`/`USERPROFILE`/`APPDATA` at a throwaway directory, so they never
+read your real `~/.safeeasyapi` or `.env`.
 
 Windows 11 is a first-class target: the wire format of the MCP server
 is UTF-8 bytes regardless of console code page, console output is
 reconfigured to replace unencodable characters instead of crashing, and
 every text file is opened as UTF-8.
 
-## Scope / limits (v0.3.0)
+## Scope / limits (v0.3.1)
 
 - Keychain storage is best effort and opt-in (`--store keychain`); the
   `.env` file is the default and the fallback. No Doppler / Vault

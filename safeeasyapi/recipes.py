@@ -117,7 +117,15 @@ def validate_recipe(data: dict) -> dict:
     # validation endpoint must both be HTTPS.
     for label, url in (("key_url", data["key_url"]),
                        ("validate.url", v["url"])):
-        if urllib.parse.urlsplit(url).scheme.lower() != "https":
+        try:
+            scheme = urllib.parse.urlsplit(url).scheme.lower()
+        except ValueError:
+            # urlsplit refuses some malformed addresses ("https://[bad/").
+            # Say so as a recipe problem, not as a traceback out of
+            # `safeeasyapi add` or a whole broken catalog.
+            raise RecipeError(
+                f"{label} is not a valid URL: {url}") from None
+        if scheme != "https":
             raise RecipeError(
                 f"{label} must use https:// — a key sent there would travel "
                 f"in cleartext. Offending URL: {url}")

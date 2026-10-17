@@ -19,7 +19,9 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-USER_AGENT = "safeeasyapi/0.3.0"
+from . import __version__
+
+USER_AGENT = f"safeeasyapi/{__version__}"
 DEFAULT_PORTS = {"http": 80, "https": 443}
 REJECT_DEFAULT = (401, 403)
 

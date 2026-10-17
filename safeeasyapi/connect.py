@@ -92,8 +92,47 @@ def render_validation_preview(recipe: dict, out=None) -> None:
     out.flush()
 
 
+def _normalize_host(host: str) -> str:
+    """A hostname in the one spelling used to compare hosts: lower case, no
+    trailing dot, and - for an internationalised name - its ASCII (IDNA /
+    punycode, ``xn--``) form, so ``bücher.example`` and
+    ``xn--bcher-kva.example`` are the same host. That is also the name
+    Python's own HTTP stack resolves and puts in the Host header
+    (``str.encode("idna")``), so the comparison sees the host the key will
+    really go to. A name the codec rejects (an empty or over-long label, a
+    forbidden character) stays as lower-case text: it then equals only
+    itself, the safe direction for an "is this the same owner?" test."""
+    host = (host or "").lower().rstrip(".")
+    if host.isascii():
+        return host
+    try:
+        return host.encode("idna").decode("ascii").lower().rstrip(".")
+    except UnicodeError:
+        return host
+
+
+def _to_unicode(host: str) -> str:
+    """The display spelling of a normalized host: ``xn--`` labels decoded.
+    A name that is not valid punycode (or never was ASCII) is returned as is."""
+    try:
+        return host.lower().encode("ascii").decode("idna")
+    except UnicodeError:
+        return host
+
+
+def describe_domain(domain: str) -> str:
+    """How a domain is named in a warning: itself, or - when it is an
+    internationalised one - the Unicode spelling with its ``xn--`` form in
+    brackets beside it, so a look-alike letter (a Cyrillic "a" in
+    "apple.com") cannot hide behind a name that looks identical."""
+    shown = _to_unicode(domain)
+    return domain if shown == domain else f"{shown} [{domain}]"
+
+
 def _host(url: str) -> str:
-    return (urllib.parse.urlsplit(url).hostname or "").lower()
+    """The URL's host in comparison form (see _normalize_host). urlsplit has
+    already dropped user:password@ and the :port, and lower-cased the name."""
+    return _normalize_host(urllib.parse.urlsplit(url).hostname or "")
 
 
 def registrable_domain(host: str) -> str:
@@ -104,10 +143,11 @@ def registrable_domain(host: str) -> str:
         dashboard.stripe.com  -> stripe.com
         api.example.co.uk     -> example.co.uk
         evil.github.io        -> evil.github.io   (platform: per-customer)
+        www.bücher.example    -> xn--bcher-kva.example   (punycode form)
 
     IP addresses, localhost and single labels are returned unchanged.
     """
-    host = (host or "").lower().rstrip(".")
+    host = _normalize_host(host)
     labels = host.split(".")
     if len(labels) < 3 or all(part.isdigit() for part in labels):
         return host
@@ -134,16 +174,22 @@ def _require_cross_domain_confirmation(recipe: dict, out,
         return True
     host = _host(v["url"])
     if recipe.get("_builtin") and host in {
-            h.lower() for h in v.get("trusted_hosts") or []}:
+            _normalize_host(h) for h in v.get("trusted_hosts") or []}:
         # A built-in (reviewed, shipped-with-the-code) recipe may vouch for
         # its vendor's second domain: api.anthropic.com for a key page on
         # claude.com. A recipe from ~/.safeeasyapi never gets this shortcut.
-        out.write(f"  (validation host {host} is this vendor's API domain — "
-                  f"built-in recipe)\n")
+        out.write(f"  (validation host {describe_domain(host)} is this "
+                  f"vendor's API domain — built-in recipe)\n")
         return True
+    domains = [registrable_domain(host),
+               registrable_domain(_host(recipe["key_url"]))]
+    shown = [describe_domain(d) for d in domains]
     out.write(f"  ⚠ The validation URL is on a DIFFERENT domain than the key "
-              f"page above ({registrable_domain(_host(v['url']))} vs "
-              f"{registrable_domain(_host(recipe['key_url']))}).\n")
+              f"page above ({shown[0]} vs {shown[1]}).\n")
+    if shown != domains:
+        out.write("    Names with letters from other alphabets can look "
+                  "exactly like another site's; the xn-- spelling in "
+                  "brackets is the real one.\n")
     out.write("    Your key will be sent to both domains. Make sure you "
               "trust both.\n")
     try:
@@ -163,8 +209,16 @@ def store_in_env_file(env_file: str):
     def _store(env_var: str, key: str) -> str:
         stored = store_mod.store_key_result(env_var, key, env_file)
         verb = "updated" if stored.updated else "added"
-        return (f"{verb} {env_var} in {stored.path} "
+        text = (f"{verb} {env_var} in {stored.path} "
                 f"({stored.protection} - never displayed, never logged)")
+        if stored.duplicates:
+            # Said plainly, because the person may not know: of several
+            # lines for one variable the last one is the one that counts.
+            text += (f"\n    note: {env_var} appears "
+                     f"{store_mod.times(stored.duplicates + 1)} in "
+                     f"{stored.path}; I updated the one that takes effect "
+                     f"(the last one).")
+        return text
     return _store
 
 
@@ -185,6 +239,17 @@ def connect(
     validate_fn / confirm_in / store_fn exist for tests and the CLI.
     """
     out = out or sys.stdout
+    if store_fn is None:
+        # The key is headed for the .env file. If that file is one we will
+        # not edit (a link, a UTF-16 file) say so NOW - before the browser
+        # opens and before a key is pasted and sent to the API - instead of
+        # after the person has done all of it.
+        try:
+            store_mod.check_env_file(env_file)
+        except OSError as e:
+            out.write(f"\n  ✗ {env_file}: {e.strerror or e}.\n"
+                      f"    Nothing was asked for and nothing was sent.\n")
+            return 1
     _print_steps(recipe, out)
     try:
         browser_open(recipe["key_url"])

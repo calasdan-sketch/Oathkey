@@ -15,6 +15,8 @@ import re
 import time
 import urllib.request
 
+from . import __version__
+
 SOURCE_URL = ("https://raw.githubusercontent.com/public-apis/"
               "public-apis/master/README.md")
 CACHE_TTL = 7 * 24 * 3600
@@ -68,7 +70,7 @@ def fetch(refresh: bool = False) -> str:
             with open(path, encoding="utf-8") as f:
                 return f.read()
     req = urllib.request.Request(SOURCE_URL,
-                                 headers={"User-Agent": "safeeasyapi/0.2.0"})
+                                 headers={"User-Agent": f"safeeasyapi/{__version__}"})
     with urllib.request.urlopen(req, timeout=30) as resp:
         text = resp.read().decode("utf-8", errors="replace")
     with open(path, "w", encoding="utf-8") as f:

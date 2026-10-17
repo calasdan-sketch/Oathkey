@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import argparse
+import errno
 import json
+import os
 import sys
 
 from . import __version__
@@ -21,7 +23,11 @@ def _harden_streams() -> None:
     instead of raising UnicodeEncodeError half-way through a connect."""
     for stream in (sys.stdout, sys.stderr):
         reconfigure = getattr(stream, "reconfigure", None)
-        if reconfigure is None or getattr(stream, "errors", None) != "strict":
+        # Both handlers raise UnicodeEncodeError on a character the code
+        # page lacks: "strict" (the default) and "surrogateescape" (what a
+        # piped stdout reports on Windows 11 / Python 3.11, with cp1252).
+        if reconfigure is None or getattr(stream, "errors", None) not in (
+                "strict", "surrogateescape"):
             continue
         try:
             reconfigure(errors="replace")
@@ -232,7 +238,7 @@ def keychain_store(recipe: dict, env_file: str, out=None,
 def _cmd_forget(recipe: dict, env_file: str, out=None,
                 keychain=keychain_mod, remove_env=store_mod.remove_key) -> int:
     """Remove the service's key everywhere it may have been stored: the OS
-    keychain entry (when this platform has one) and the ENV_VAR= line in
+    keychain entry (when this platform has one) and every ENV_VAR= line in
     the .env file. Says what was removed; never shows the key."""
     out = out or sys.stdout
     service, env_var = recipe["service"], recipe["env_var"]
@@ -241,16 +247,22 @@ def _cmd_forget(recipe: dict, env_file: str, out=None,
     if backend is not None and keychain.delete(service, env_var, backend):
         removed.append(f"the {keychain.label(backend)} entry")
     try:
-        if remove_env(env_var, env_file):
-            removed.append(f"{env_var} from {env_file}")
+        lines = remove_env(env_var, env_file)
     except OSError as e:
         out.write(f"  could not rewrite {env_file}: {e.strerror or e}\n")
         return 1
+    if lines:
+        removed.append(f"{env_var} from {env_file}")
     if not removed:
         out.write(f"  nothing stored for '{service}' (checked "
                   f"{keychain.label(backend)} and {env_file}).\n")
         return 0
     out.write(f"  \u2713 forgot {service}: removed {' and '.join(removed)}.\n")
+    if isinstance(lines, int) and lines > 1:
+        # every one of them, or an older line would take over again
+        both = "both" if lines == 2 else f"all {lines}"
+        out.write(f"    note: {env_var} appeared {store_mod.times(lines)} in "
+                  f"{env_file}; I removed {both}.\n")
     return 0
 
 
@@ -277,7 +289,81 @@ def _cmd_run(recipe: dict, command: list[str]) -> int:
         return 1
 
 
+# True on Windows. A module-level flag (not os.name read on the spot) so a
+# test can switch it and check both platforms' behaviour from either one.
+_ON_WINDOWS = os.name == "nt"
+
+
+def is_closed_pipe(exc: BaseException) -> bool:
+    """Is `exc` what writing to a pipe nobody reads any more looks like?
+
+    On POSIX that is BrokenPipeError (errno EPIPE). On Windows it is NOT:
+    print() of small output works because it is only buffered, and the
+    flush - or, under ``python -u``, the print() itself - raises a plain
+    OSError with errno 22 (EINVAL) and no winerror (measured on Windows 11
+    with Python 3.11). EINVAL is only taken for a closed pipe there: on any
+    other system it is a real error and must not be swallowed. And only the
+    plain kind: it must carry no file name (EnvFileRefused is an OSError
+    with errno EINVAL too, as can be any failed file operation on a path)
+    and no winerror (a failed Win32 call such as starting a program), while
+    an error from writing to a pipe has neither."""
+    if not isinstance(exc, OSError):
+        return False
+    if isinstance(exc, BrokenPipeError) or exc.errno == errno.EPIPE:
+        return True
+    return (_ON_WINDOWS and exc.errno == errno.EINVAL
+            and exc.filename is None
+            and getattr(exc, "winerror", None) is None)
+
+
+def _after_broken_pipe() -> int:
+    """The reader of our output went away (``safeeasyapi list | head -1``).
+    That is not worth a traceback: stop quietly. Python flushes stdout again
+    when it exits and would fail a second time ("Exception ignored in ...",
+    exit status 120), so fd 1 is pointed at the null device first - the
+    recipe from the Python documentation; measured on Windows 11, it makes
+    that last flush succeed there too. The status is 1, as Python itself
+    uses for EPIPE."""
+    try:
+        devnull = os.open(os.devnull, os.O_WRONLY)
+        try:
+            os.dup2(devnull, sys.stdout.fileno())
+        finally:
+            os.close(devnull)
+    except (OSError, ValueError, AttributeError):
+        pass    # stdout has no real descriptor (a test's StringIO) or is gone
+    return 1
+
+
+def _flush_stdout() -> None:
+    flush = getattr(sys.stdout, "flush", None)
+    if flush is not None:
+        flush()
+
+
 def main(argv: list[str] | None = None) -> int:
+    try:
+        try:
+            code = _main(argv)
+        except SystemExit:
+            # argparse prints --version / --help and exits by exception; what
+            # it printed is still in the buffer
+            _flush_stdout()
+            raise
+        # A pipe that was closed on us shows up when the buffer is flushed -
+        # here, where it can be handled, not in the interpreter's own exit.
+        _flush_stdout()
+        return code
+    except OSError as e:
+        # Any command, and the MCP loop, end up here: BrokenPipeError on
+        # POSIX, a plain OSError(EINVAL) on Windows. Anything else is a real
+        # error and goes on its way.
+        if is_closed_pipe(e):
+            return _after_broken_pipe()
+        raise
+
+
+def _main(argv: list[str] | None = None) -> int:
     _harden_streams()
     parser = _build_parser()
     args = parser.parse_args(argv)

@@ -19,16 +19,19 @@ import json
 import re
 import sys
 
+from . import __version__
 from . import publicapis as pa_mod
 from . import recipes as recipes_mod
 
-SERVER_INFO = {"name": "safeeasyapi", "version": "0.3.0"}
+SERVER_INFO = {"name": "safeeasyapi", "version": __version__}
 
 INVALID_REQUEST = -32600
 METHOD_NOT_FOUND = -32601
 INVALID_PARAMS = -32602
 INTERNAL_ERROR = -32603
 PARSE_ERROR = -32700
+
+_METHODS = ("initialize", "ping", "tools/list", "tools/call")
 
 
 def _tool_defs() -> list[dict]:
@@ -67,6 +70,38 @@ def _tool_defs() -> list[dict]:
                          "properties": {"name": {"type": "string"}},
                          "required": ["name"]}},
     ]
+
+
+_TYPE_WORDS = {"string": "a string", "integer": "an integer"}
+
+
+def _has_type(value, json_type: str) -> bool:
+    """Is `value` of the JSON-schema type? Only the two scalar types our
+    own schemas use are enforced (a bool is not an integer in JSON)."""
+    if json_type == "string":
+        return isinstance(value, str)
+    if json_type == "integer":
+        return isinstance(value, int) and not isinstance(value, bool)
+    return True
+
+
+def _argument_problem(schema: dict, args: dict) -> str | None:
+    """Why `args` do not fit the tool's inputSchema, in one short line - or
+    None when they do. Checks the required members and the declared types.
+    A null for an OPTIONAL argument counts as not given (models send it);
+    unknown extra members are ignored, as JSON Schema does by default."""
+    for name in schema.get("required", ()):
+        if args.get(name) is None:
+            return f"missing required argument '{name}'"
+    properties = schema.get("properties", {})
+    for name, value in args.items():
+        json_type = properties.get(name, {}).get("type")
+        if value is None or json_type is None:
+            continue
+        if not _has_type(value, json_type):
+            return (f"argument '{name}' must be "
+                    f"{_TYPE_WORDS.get(json_type, json_type)}")
+    return None
 
 
 def _public_recipe(recipe: dict) -> dict:
@@ -202,6 +237,16 @@ def handle(request, catalog: dict[str, dict],
     def err(code, message):
         return _error(req_id, code, message)
 
+    if method not in _METHODS:
+        return err(METHOD_NOT_FOUND, f"unknown method: {method}")
+    # MCP passes its parameters by name, so `params` is an object or absent.
+    # null, a list, a string or a number is Invalid params - never a crash
+    # on `.get`, never -32603.
+    params = request.get("params", {})
+    if not isinstance(params, dict):
+        return err(INVALID_PARAMS,
+                   "Invalid params: 'params' must be an object")
+
     if method == "initialize":
         return ok({"protocolVersion": "2024-11-05",
                    "capabilities": {"tools": {}},
@@ -211,9 +256,21 @@ def handle(request, catalog: dict[str, dict],
     if method == "tools/list":
         return ok({"tools": _tool_defs()})
     if method == "tools/call":
-        params = request.get("params", {})
         name = params.get("name")
+        if not isinstance(name, str):
+            return err(INVALID_PARAMS,
+                       "Invalid params: 'name' (the tool to call) must be "
+                       "a string")
         args = params.get("arguments", {})
+        if not isinstance(args, dict):
+            return err(INVALID_PARAMS,
+                       "Invalid params: 'arguments' must be an object")
+        tool = next((t for t in _tool_defs() if t["name"] == name), None)
+        if tool is None:
+            return err(INVALID_PARAMS, f"unknown tool: {name}")
+        problem = _argument_problem(tool["inputSchema"], args)
+        if problem:
+            return err(INVALID_PARAMS, f"Invalid params: {problem}")
         if name == "list_services":
             services = [{"service": r["service"], "display": r["display"],
                          "env_var": r["env_var"]}
@@ -286,8 +343,8 @@ def handle(request, catalog: dict[str, dict],
                     f"Docs: {detail['url']}")
             return ok({"content": [{"type": "text",
                                     "text": json.dumps(detail)}]})
-        return err(INVALID_PARAMS, f"unknown tool: {name}")
-    return err(METHOD_NOT_FOUND, f"unknown method: {method}")
+        return err(INTERNAL_ERROR, f"tool not implemented: {name}")
+    return err(INTERNAL_ERROR, f"method not implemented: {method}")
 
 
 def serve(catalog: dict[str, dict] | None = None,
