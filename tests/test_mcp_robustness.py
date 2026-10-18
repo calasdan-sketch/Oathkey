@@ -4,8 +4,15 @@ Panel finding (SEA-3): `python -c "print('['*100000)" | safeeasyapi mcp`
 ended in a traceback and exit status 1. json.loads raises RecursionError, not
 ValueError, for text nested that deep, and serve() only expected ValueError.
 The server must answer "Parse error" and carry on, like any other bad line.
+
+Round-2 panel (SEA-2): `echo '{...initialize...}' | safeeasyapi mcp >&-` ended
+in an AttributeError traceback. With standard output closed Python has no
+sys.stdout (it is None), and the first reply was written to it; with standard
+input closed the first request was read from it. Now the server says so in
+one line, before it reads anything, and exits with status 2.
 """
 
+import contextlib
 import io
 import json
 import os
@@ -15,6 +22,7 @@ import unittest
 from unittest import mock
 
 import _isolation  # noqa: F401  (fake HOME/USERPROFILE for the whole run)
+from safeeasyapi import cli as cli_mod
 from safeeasyapi import mcp as mcp_mod
 
 PING = json.dumps({"jsonrpc": "2.0", "id": 7, "method": "ping"})
@@ -112,6 +120,90 @@ class TestTheRealCommand(unittest.TestCase):
         rows = [json.loads(r) for r in proc.stdout.splitlines()]
         self.assertEqual([r.get("id") for r in rows], [None, 7])
         self.assertEqual(rows[0]["error"]["code"], mcp_mod.PARSE_ERROR)
+
+
+INITIALIZE = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                         "params": {}}).encode() + b"\n"
+
+
+class TestAClosedStandardStream(unittest.TestCase):
+    def assertSaidSoOnce(self, code, err, which):
+        self.assertEqual(code, 2, err)
+        lines = err.strip().splitlines()
+        self.assertEqual(len(lines), 1, err)
+        self.assertTrue(lines[0].startswith("error: "), err)
+        self.assertIn(f"standard {which} is closed", lines[0])
+        self.assertNotIn("Traceback", err)
+        self.assertNotIn("AttributeError", err)
+
+    def main_with(self, *, stdin, stdout):
+        """The command line's `mcp` with these as sys.stdin / sys.stdout (None
+        is what Python has when the process was started with them closed)."""
+        err = io.StringIO()
+        with mock.patch.object(sys, "stdin", stdin), \
+                mock.patch.object(sys, "stdout", stdout), \
+                contextlib.redirect_stderr(err):
+            code = cli_mod.main(["mcp"])
+        return code, err.getvalue()
+
+    def test_a_closed_standard_output_is_one_line_and_status_2(self):
+        stdin = io.BytesIO(INITIALIZE)
+        code, err = self.main_with(stdin=stdin, stdout=None)
+        self.assertSaidSoOnce(code, err, "output")
+        self.assertEqual(stdin.tell(), 0, "a request was read before the "
+                                          "server knew it could answer")
+
+    def test_a_closed_standard_input_is_one_line_and_status_2(self):
+        stdout = io.BytesIO()
+        code, err = self.main_with(stdin=None, stdout=stdout)
+        self.assertSaidSoOnce(code, err, "input")
+        self.assertEqual(stdout.getvalue(), b"")
+
+    def test_both_closed_is_still_one_line(self):
+        code, err = self.main_with(stdin=None, stdout=None)
+        self.assertSaidSoOnce(code, err, "input")
+
+    def test_the_library_call_says_the_same(self):
+        err = io.StringIO()
+        with mock.patch.object(sys, "stdout", None), \
+                contextlib.redirect_stderr(err):
+            code = mcp_mod.serve({}, stdin=io.BytesIO(INITIALIZE))
+        self.assertSaidSoOnce(code, err.getvalue(), "output")
+
+    def test_streams_that_are_given_are_used_even_when_the_real_ones_are_gone(self):
+        # a caller that passes its own streams does not need sys.stdin/stdout
+        stdin, stdout = io.BytesIO(INITIALIZE), io.BytesIO()
+        with mock.patch.object(sys, "stdin", None), \
+                mock.patch.object(sys, "stdout", None):
+            self.assertEqual(mcp_mod.serve({}, stdin=stdin, stdout=stdout), 0)
+        self.assertEqual(json.loads(stdout.getvalue())["id"], 1)
+
+    @unittest.skipIf(os.name == "nt", "there is no >&- or <&- on Windows; the "
+                                      "tests above stand in for it")
+    def test_in_a_real_process(self):
+        env = {k: v for k, v in os.environ.items() if k != "PYTHONUNBUFFERED"}
+        env["PYTHONPATH"] = _isolation.REPO + os.pathsep + env.get("PYTHONPATH", "")
+        for redirect, which in ((">&-", "output"), ("<&-", "input"),
+                                ("<&- >&-", "input")):
+            with self.subTest(redirect):
+                proc = subprocess.run(
+                    ["sh", "-c", f'exec "$@" {redirect}', "sh", sys.executable,
+                     "-m", "safeeasyapi", "mcp"],
+                    input=None if "<" in redirect else INITIALIZE,
+                    capture_output=True, env=env, cwd=_isolation.mktemp(),
+                    timeout=60)
+                self.assertEqual(proc.stdout, b"")
+                self.assertSaidSoOnce(proc.returncode,
+                                      proc.stderr.decode("utf-8", "replace"),
+                                      which)
+
+    def test_the_readme_says_so(self):
+        with open(os.path.join(_isolation.REPO, "README.md"),
+                  encoding="utf-8") as f:
+            flat = " ".join(f.read().split())
+        for phrase in ("standard input or standard output is closed",
+                       "one `error:` line", "exit status 2"):
+            self.assertTrue(phrase in flat, f"the README does not say: {phrase!r}")
 
 
 if __name__ == "__main__":

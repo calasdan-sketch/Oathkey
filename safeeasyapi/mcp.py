@@ -350,10 +350,23 @@ def handle(request, catalog: dict[str, dict],
 def serve(catalog: dict[str, dict] | None = None,
           pa_loader=None, stdin=None, stdout=None) -> int:
     """Newline-delimited JSON-RPC over stdio. The wire is UTF-8 bytes
-    whatever the console code page (Windows cp1252 included)."""
-    catalog = catalog if catalog is not None else recipes_mod.load_recipes()
+    whatever the console code page (Windows cp1252 included).
+
+    Returns 2, with one line on stderr and before a request is read, when
+    standard input or output is closed."""
     stdin = stdin if stdin is not None else sys.stdin
     stdout = stdout if stdout is not None else sys.stdout
+    # A process started with a stream shut (`safeeasyapi mcp >&-`; pythonw on
+    # Windows) has None for sys.stdin / sys.stdout: the first read or write
+    # would end in an AttributeError traceback. There is no client to talk to.
+    for stream, which, so in (
+            (stdin, "input", "there are no requests to read"),
+            (stdout, "output", "there is nowhere to write the replies")):
+        if stream is None:
+            print(f"error: standard {which} is closed, so {so}",
+                  file=sys.stderr)
+            return 2
+    catalog = catalog if catalog is not None else recipes_mod.load_recipes()
     reader = getattr(stdin, "buffer", stdin)
     writer = getattr(stdout, "buffer", stdout)
     while True:

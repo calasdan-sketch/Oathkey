@@ -123,14 +123,15 @@ PER_HOST_DOMAINS = frozenset({
 def _print_steps(recipe: dict, out=None) -> None:
     """The recipe's own words. Every one goes through printable(): a recipe
     is somebody else's text and must not be able to drive the terminal (hide
-    the validation preview that follows, forge a line, retitle the window)."""
+    the validation preview that follows, forge a line, retitle the window).
+    Its name, steps and scopes are sentences (words=True); the URL is not."""
     out = out or sys.stdout
-    out.write(f"\n  Connect {printable(recipe['display'])}  "
+    out.write(f"\n  Connect {printable(recipe['display'], words=True)}  "
               f"(key opens in your browser)\n\n")
     for i, step in enumerate(recipe["steps"], 1):
-        out.write(f"    {i}. {printable(step)}\n")
+        out.write(f"    {i}. {printable(step, words=True)}\n")
     if recipe.get("scopes"):
-        scopes = ", ".join(printable(s) for s in recipe["scopes"])
+        scopes = ", ".join(printable(s, words=True) for s in recipe["scopes"])
         out.write(f"\n  Select these scopes: {scopes}\n")
     out.write(f"\n  Key page: {printable(recipe['key_url'])}\n\n")
     out.flush()

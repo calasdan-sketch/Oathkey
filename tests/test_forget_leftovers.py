@@ -12,12 +12,18 @@ success while
 Now `forget` removes the first kind (they are safeeasyapi's own) and names the
 second kind without deleting it (it is not safeeasyapi's), exiting 1 because
 the key is not gone.
+
+Round-2 panel (SEA-3): with a `.env` that is a symbolic link `forget` removed
+the keychain entry, then printed only "could not rewrite .env" and stopped -
+the report left out what it had already done. Now what was removed is said
+first, and what could not be done after it, whatever the trouble is.
 """
 
 import functools
 import io
 import os
 import random
+import stat
 import subprocess
 import sys
 import types
@@ -313,7 +319,215 @@ class TestAHardLinkKeepsTheOldFile(unittest.TestCase):
         self.assertIsNone(store_mod.other_links(link))
 
 
+OK, CROSS = "\u2713", "\u2717"
+
+
+class FakeKeychain:
+    """The parts of keychain.py that forget uses, with (or without) an entry."""
+    KeychainError = keychain_mod.KeychainError
+
+    def __init__(self, holds=True, error=None):
+        self.holds, self.error = holds, error
+
+    @staticmethod
+    def detect_backend():
+        return keychain_mod.LINUX
+
+    label = staticmethod(keychain_mod.label)
+
+    def delete(self, service, env_var, backend=None):
+        if self.error:
+            raise self.error
+        held, self.holds = self.holds, False
+        return held
+
+
+def forget_with(env, keychain, **kw):
+    out = io.StringIO()
+    code = cli_mod._cmd_forget(RECIPE, env, out=out, keychain=keychain, **kw)
+    return code, out.getvalue()
+
+
+def linked_env():
+    """(folder, .env, the file it is a symbolic link to)."""
+    folder = new_folder()
+    real = os.path.join(folder, "real.env")
+    write(real, f"OTHER=1\nACME_API_KEY={KEY}\n")
+    env = os.path.join(folder, ".env")
+    try:
+        os.symlink(real, env)
+    except (OSError, NotImplementedError, AttributeError):
+        raise unittest.SkipTest("no symbolic links here")
+    return folder, env, real
+
+
+class TestForgetSaysWhatItDidBeforeWhatItCouldNot(unittest.TestCase):
+    ENTRY = f"the {keychain_mod.label(keychain_mod.LINUX)} entry"
+
+    def test_a_linked_env_file_leaves_the_keychain_entry_removed_and_said(self):
+        folder, env, real = linked_env()
+        keychain = FakeKeychain(holds=True)
+        code, text = forget_with(env, keychain)
+        self.assertEqual(code, 1, text)
+        self.assertFalse(keychain.holds)                  # it did go ...
+        lines = text.splitlines()
+        self.assertTrue(lines[0].startswith(f"  {OK} removed {self.ENTRY}"), text)
+        self.assertIn("could not rewrite", text)          # ... and that is said first
+        self.assertLess(text.index("removed " + self.ENTRY),
+                        text.index("could not rewrite"))
+        self.assertIn("link", text)
+        self.assertIn("safeeasyapi forget acme", text)    # the way on
+        self.assertNotIn("forgot", text)                  # it is not done
+        self.assertNotIn(KEY, text)
+        # nothing else was touched: the link and the file it points to
+        self.assertTrue(os.path.islink(env))
+        self.assertEqual(read(real), f"OTHER=1\nACME_API_KEY={KEY}\n")
+
+    def test_with_nothing_removed_only_the_trouble_is_said(self):
+        folder, env, real = linked_env()
+        code, text = forget_with(env, FakeKeychain(holds=False))
+        self.assertEqual(code, 1, text)
+        self.assertIn("could not rewrite", text)
+        for claim in (OK, "forgot", "nothing stored", "removed"):
+            self.assertNotIn(claim, text)
+
+    def test_a_leftover_beside_a_linked_env_file_still_goes(self):
+        folder, env, real = linked_env()
+        orphan = os.path.join(folder, temp_name())
+        write(orphan, f"ACME_API_KEY={KEY}\n")
+        code, text = forget_with(env, FakeKeychain(holds=False))
+        self.assertEqual(code, 1, text)
+        self.assertFalse(os.path.exists(orphan))
+        self.assertLess(text.index(os.path.basename(orphan)),
+                        text.index("could not rewrite"))
+
+    def test_any_other_reason_the_env_file_cannot_be_rewritten_reads_the_same(self):
+        folder = new_folder()
+        env = os.path.join(folder, ".env")
+        write(env, f"ACME_API_KEY={KEY}\n")
+
+        def refuse(var, path):
+            raise PermissionError(13, "Permission denied", path)
+
+        keychain = FakeKeychain(holds=True)
+        code, text = forget_with(env, keychain, remove_env=refuse)
+        self.assertEqual(code, 1, text)
+        self.assertFalse(keychain.holds)
+        self.assertIn("Permission denied", text)
+        self.assertLess(text.index("removed " + self.ENTRY),
+                        text.index("could not rewrite"))
+
+    def test_what_the_system_says_is_shown_as_an_escape(self):
+        folder = new_folder()
+        env = os.path.join(folder, ".env")
+        write(env, f"ACME_API_KEY={KEY}\n")
+
+        def refuse(var, path):
+            raise OSError(13, "no" + chr(27) + "[2J", path)
+
+        code, text = forget_with(env, FakeKeychain(holds=True), remove_env=refuse)
+        self.assertEqual(code, 1, text)
+        self.assertNotIn(chr(27), text)
+        self.assertIn("\\x1b[2J", text)
+
+    def test_the_other_kinds_of_trouble_come_after_what_was_done_too(self):
+        # a leftover that cannot be removed
+        folder = new_folder()
+        env = os.path.join(folder, ".env")
+        write(env, f"OTHER=1\nACME_API_KEY={KEY}\n")
+        orphan = os.path.join(folder, temp_name())
+        write(orphan, f"ACME_API_KEY={KEY}\n")
+
+        def refuse(path):
+            raise PermissionError(13, "Permission denied", path)
+
+        real = store_mod.remove_leftovers
+        with mock.patch.object(store_mod, "remove_leftovers",
+                               functools.partial(real, unlink=refuse)):
+            code, text = forget_with(env, FakeKeychain(holds=True))
+        self.assertEqual(code, 1, text)
+        self.assertLess(text.index(OK), text.index(CROSS), text)
+        self.assertLess(text.index("removed " + self.ENTRY),
+                        text.index("could not remove"))
+        # a hard link that keeps the old file
+        folder = new_folder()
+        env = os.path.join(folder, ".env")
+        write(env, f"OTHER=1\nACME_API_KEY={KEY}\n")
+        hard_link(env, os.path.join(folder, ".env.bak"))
+        code, text = forget_with(env, FakeKeychain(holds=True))
+        self.assertEqual(code, 1, text)
+        self.assertLess(text.index(OK), text.index(CROSS), text)
+        # a keychain that does not answer
+        folder = new_folder()
+        env = os.path.join(folder, ".env")
+        write(env, f"OTHER=1\nACME_API_KEY={KEY}\n")
+        down = FakeKeychain(error=keychain_mod.KeychainUnavailable(
+            "the tool did not answer within 30 seconds"))
+        code, text = forget_with(env, down)
+        self.assertEqual(code, 1, text)
+        self.assertLess(text.index(OK), text.index(CROSS), text)
+        self.assertIn("removed ACME_API_KEY from", text)
+
+    def test_a_clean_forget_reads_as_it_did(self):
+        folder = new_folder()
+        env = os.path.join(folder, ".env")
+        write(env, f"OTHER=1\nACME_API_KEY={KEY}\n")
+        code, text = forget_with(env, FakeKeychain(holds=True))
+        self.assertEqual(code, 0, text)
+        self.assertEqual(text, f"  {OK} forgot acme: removed {self.ENTRY} and "
+                               f"ACME_API_KEY from {env}.\n")
+
+    FAKE_SECRET_TOOL = """#!/bin/sh
+# stands in for libsecret's secret-tool: one file per account in $FAKE_SECRETS
+cmd=$1; shift
+[ "$cmd" = store ] && shift 2           # --label LABEL
+account=$4                              # service S account A slug X
+case "$cmd" in
+  store)  cat > "${FAKE_SECRETS:?}/${account:?}" ;;
+  lookup) [ -s "${FAKE_SECRETS:?}/${account:?}" ] && cat "${FAKE_SECRETS:?}/${account:?}" || exit 1 ;;
+  clear)  [ -e "${FAKE_SECRETS:?}/${account:?}" ] && rm -f "${FAKE_SECRETS:?}/${account:?}" || exit 1 ;;
+  *)      exit 2 ;;
+esac
+"""
+
+    @unittest.skipUnless(sys.platform.startswith("linux") and os.name == "posix",
+                         "the secret-tool stand-in is for the Linux backend")
+    def test_the_reported_reproduction_with_a_real_command(self):
+        # the panel's repro: a secret-tool holding the key, `.env` a link
+        tools, secrets = new_folder(), new_folder()
+        tool = os.path.join(tools, "secret-tool")
+        with open(tool, "w", newline="\n") as f:
+            f.write(self.FAKE_SECRET_TOOL)
+        os.chmod(tool, os.stat(tool).st_mode | stat.S_IXUSR)
+        write(os.path.join(secrets, "GITHUB_TOKEN"), KEY)
+        folder, env, real = linked_env()
+        child_env = {k: v for k, v in os.environ.items() if k != "PYTHONUNBUFFERED"}
+        child_env.update(PATH=tools + os.pathsep + child_env.get("PATH", ""),
+                         FAKE_SECRETS=secrets,
+                         PYTHONPATH=_isolation.REPO)
+        proc = subprocess.run(
+            [sys.executable, "-m", "safeeasyapi", "forget", "github",
+             "--env-file", env], capture_output=True, env=child_env,
+            cwd=new_folder(), timeout=120)
+        text = proc.stdout.decode("utf-8", "replace")
+        self.assertEqual(proc.returncode, 1, text + proc.stderr.decode())
+        self.assertEqual(os.listdir(secrets), [])              # the entry went
+        self.assertIn("removed the", text)
+        self.assertIn("could not rewrite", text)
+        self.assertLess(text.index("removed the"), text.index("could not rewrite"))
+        self.assertTrue(os.path.islink(env))
+        self.assertNotIn(KEY, text)
+
+
 class TestReadmeSaysWhatForgetCanAndCannotDo(unittest.TestCase):
+    def test_it_says_what_it_did_before_what_it_could_not(self):
+        with open(os.path.join(_isolation.REPO, "README.md"),
+                  encoding="utf-8") as f:
+            flat = " ".join(f.read().split())
+        for phrase in ("says what it removed before it says what it could not "
+                       "do", "a `.env` that is a link"):
+            self.assertTrue(phrase in flat, f"the README does not say: {phrase!r}")
+
     def test_the_forget_paragraph(self):
         with open(os.path.join(_isolation.REPO, "README.md"),
                   encoding="utf-8") as f:

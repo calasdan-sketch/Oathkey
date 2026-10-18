@@ -101,7 +101,7 @@ def _cmd_list(catalog: dict) -> int:
         r = catalog[slug]
         # a recipe is somebody else's text: nothing in it may drive the terminal
         print(f"    {recipes_mod.printable(slug):14} "
-              f"{recipes_mod.printable(r['display']):38} -> "
+              f"{recipes_mod.printable(r['display'], words=True):38} -> "
               f"{recipes_mod.printable(r['env_var'])}")
     print("\n  `safeeasyapi connect <service>` to set one up.\n")
     return 0
@@ -273,11 +273,15 @@ def _cmd_forget(recipe: dict, env_file: str, out=None,
     # env_file is a new file with one name, and the old one lives on, key
     # and all, under the others.
     links = store_mod.other_links(env_file)
+    env_problem = None
     try:
         lines = remove_env(env_var, env_file)
     except OSError as e:
-        out.write(f"  could not rewrite {env_file}: {e.strerror or e}\n")
-        return 1
+        # A link, a file that is not plain text, no permission. What was
+        # removed above stays removed, and the leftover copies below are ours
+        # to remove whatever happens to .env: carry on, and say what could
+        # not be done only after saying what was.
+        lines, env_problem = 0, e.strerror or str(e)
     if lines:
         removed.append(f"{env_var} from {env_file}")
     # A write that was killed halfway leaves a whole copy of the file behind.
@@ -285,12 +289,19 @@ def _cmd_forget(recipe: dict, env_file: str, out=None,
     for path in gone:
         removed.append(f"a leftover copy in {recipes_mod.printable(path)} "
                        f"(from an interrupted write)")
+    problems = []           # what is not done yet, in the order it was found
     if keychain_problem:
-        out.write(f"  ✗ could not remove the {keychain.label(backend)} "
-                  f"entry: {keychain_problem}.\n"
-                  f"    The key may still be stored there — run "
-                  f"`safeeasyapi forget {service}` again when it answers.\n")
-    problems = []           # copies of the key that are still on disk
+        problems.append(
+            f"  \u2717 could not remove the {keychain.label(backend)} "
+            f"entry: {keychain_problem}.\n"
+            f"    The key may still be stored there \u2014 run "
+            f"`safeeasyapi forget {service}` again when it answers.\n")
+    if env_problem:
+        problems.append(
+            f"  \u2717 could not rewrite {recipes_mod.printable(env_file)}: "
+            f"{recipes_mod.printable(env_problem)}.\n"
+            f"    The key may still be stored there - fix that and run "
+            f"`safeeasyapi forget {service}` again.\n")
     for path, why in stuck:
         problems.append(
             f"  \u2717 could not remove {recipes_mod.printable(path)}: "
@@ -306,21 +317,26 @@ def _cmd_forget(recipe: dict, env_file: str, out=None,
             f"rewriting a file cannot change its other names.\n"
             f"    safeeasyapi does not delete files it did not make; delete "
             f"them yourself if they are stray backups.\n")
-    for text in problems:
-        out.write(text)
     if not removed:
-        if keychain_problem or problems:
+        for text in problems:
+            out.write(text)
+        if problems:
             return 1
         out.write(f"  nothing stored for '{service}' (checked "
                   f"{keychain.label(backend)} and {env_file}).\n")
         return 0
-    out.write(f"  \u2713 forgot {service}: removed {' and '.join(removed)}.\n")
+    # What was done comes first, then what was not: "forgot" only when that
+    # is all of it.
+    lead = "removed" if problems else f"forgot {service}: removed"
+    out.write(f"  \u2713 {lead} {' and '.join(removed)}.\n")
     if isinstance(lines, int) and lines > 1:
         # every one of them, or an older line would take over again
         both = "both" if lines == 2 else f"all {lines}"
         out.write(f"    note: {env_var} appeared {store_mod.times(lines)} in "
                   f"{env_file}; I removed {both}.\n")
-    return 1 if keychain_problem or problems else 0
+    for text in problems:
+        out.write(text)
+    return 1 if problems else 0
 
 
 def _cmd_run(recipe: dict, command: list[str]) -> int:
@@ -477,7 +493,8 @@ def _main(argv: list[str] | None = None) -> int:
         if args.store == "keychain":
             store_fn = keychain_store(recipe, args.env_file)
         if args.cmd == "rotate":
-            print(f"\n  rotating {recipes_mod.printable(recipe['display'])} - "
+            print(f"\n  rotating "
+                  f"{recipes_mod.printable(recipe['display'], words=True)} - "
                   f"the stored key will be replaced.\n")
         return connect_mod.connect(recipe, env_file=args.env_file,
                                    browser_open=opener, store_fn=store_fn)

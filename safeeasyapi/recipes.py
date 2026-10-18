@@ -32,6 +32,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import unicodedata
 import urllib.parse
 
 # Built-in recipes ship inside the package (so `pip install .` carries
@@ -71,7 +72,47 @@ class RecipeError(ValueError):
     pass
 
 
-def printable(text) -> str:
+# The recipe's own sentences: its name, its steps and its scopes. A person
+# reads them, and ordinary writing needs two things Python does not call
+# printable (see _word_character). Every other field - a URL, a host, a
+# header, a method - is a machine's text and gets no such leeway.
+WORD_FIELDS = ("display", "steps", "scopes")
+JOINERS = ("\u200c", "\u200d")        # zero-width non-joiner, joiner
+
+
+def _visible(ch: str) -> bool:
+    """One character that shows as a mark: printable and not a blank."""
+    return len(ch) == 1 and ch.isprintable() and not ch.isspace()
+
+
+def _word_character(text: str, i: int) -> bool:
+    """May text[i], which Python does not call printable, stand in a
+    recipe's own sentences? Two kinds may:
+
+    - a space of another width (category Zs: the no-break space of a French
+      "Cl\u00e9 API : copiez", the narrow no-break space, the ideographic
+      space). It cannot drive a terminal: it is a blank, as a space is.
+    - the zero-width joiner or non-joiner BETWEEN two visible characters:
+      it glues an emoji together (a woman and a laptop make a technologist)
+      and shapes Persian and Indic words. At the start or end of a text,
+      next to a blank or next to another joiner it only hides, so it is
+      refused there."""
+    ch = text[i]
+    if unicodedata.category(ch) == "Zs":
+        return True
+    if ch in JOINERS:
+        return _visible(text[i - 1:i]) and _visible(text[i + 1:i + 2])
+    return False
+
+
+def _plain(text: str, words: bool) -> bool:
+    """Is `text` free of anything that must not reach a terminal?"""
+    return text.isprintable() or (words and all(
+        ch.isprintable() or _word_character(text, i)
+        for i, ch in enumerate(text)))
+
+
+def printable(text, *, words: bool = False) -> str:
     """`text` as it is safe to put on a terminal. A recipe is somebody
     else's text, and connect prints a lot of it (the steps, the scopes, the
     URLs) right next to the lines that protect the person: the validation
@@ -80,14 +121,20 @@ def printable(text) -> str:
     or newline that forges a line, a bidirectional override, a zero-width
     or no-break space - is therefore shown as a visible escape (``\\x1b``,
     ``\\u202e``) instead of being sent. Everything printable, accented and
-    CJK letters and emoji included, comes back unchanged."""
+    CJK letters and emoji included, comes back unchanged.
+
+    With ``words=True`` - the recipe's own sentences: its name, steps and
+    scopes - a space of another width and a joiner between two visible
+    characters come back unchanged too (see _word_character). Everything
+    else that prints text of unknown shape (a file name, a path, a URL, an
+    error) leaves it off, so nothing there can hide."""
     if not isinstance(text, str):
         text = str(text)
     if text.isprintable():
         return text
     out = []
-    for ch in text:
-        if ch.isprintable():
+    for i, ch in enumerate(text):
+        if ch.isprintable() or (words and _word_character(text, i)):
             out.append(ch)
             continue
         code = ord(ch)
@@ -100,12 +147,15 @@ def printable(text) -> str:
     return "".join(out)
 
 
-def _first_invisible(value, where: str = "") -> tuple[str, str] | None:
+def _first_invisible(value, where: str = "", words: bool = False,
+                    top: bool = True) -> tuple[str, str] | None:
     """(where, how it looks) for the first string anywhere in `value` (a
     key, a value, inside lists and objects) that holds a control or
-    invisible character, or None. Both parts are safe to print."""
+    invisible character, or None. Both parts are safe to print. `words`
+    lets the recipe's own sentences (WORD_FIELDS, at the top of the recipe)
+    use a space of another width and a joiner between visible characters."""
     if isinstance(value, str):
-        if value.isprintable():
+        if _plain(value, words):
             return None
         shown = printable(value)
         if len(shown) > 60:
@@ -115,12 +165,14 @@ def _first_invisible(value, where: str = "") -> tuple[str, str] | None:
         for key, item in value.items():
             name = printable(key)
             found = (_first_invisible(key, f"name {name}")
-                     or _first_invisible(item, f"{where}.{name}" if where else name))
+                     or _first_invisible(
+                         item, f"{where}.{name}" if where else name,
+                         words or (top and key in WORD_FIELDS), top=False))
             if found:
                 return found
     elif isinstance(value, list):
         for i, item in enumerate(value):
-            found = _first_invisible(item, f"{where}[{i}]")
+            found = _first_invisible(item, f"{where}[{i}]", words, top=False)
             if found:
                 return found
     return None

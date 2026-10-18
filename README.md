@@ -138,7 +138,29 @@ recipes still load, and a one-line warning on stderr names the file and
 the field - and whatever of a recipe's words reaches the screen is
 printed so that such a character is shown as a visible escape
 (`\x1b[8m`) instead of being sent. Accented and CJK letters and emoji
-are ordinary text and pass untouched.
+are ordinary text and pass untouched. So does what writing needs in the
+recipe's own sentences (its name, its steps and its scopes): a space of
+another width - the no-break space of French typography (`Clé API :
+copiez`), the narrow no-break space, the ideographic space - and the
+zero-width joiner or non-joiner between two visible characters, which
+glue an emoji such as the woman technologist together and shape Persian
+and Indic words.
+
+What is refused, exactly: everything Python's `str.isprintable()` refuses,
+that is the control characters (ESC, NUL, tab, carriage return, newline
+and the C1 range), the line and paragraph separators (U+2028, U+2029),
+the invisible "format" characters (the bidirectional marks and overrides
+U+200E, U+200F, U+202A to U+202E, U+2066 to U+2069 and U+061C, the
+zero-width space, the word joiner, the byte order mark, the soft hyphen
+and tag characters), lone surrogates, private-use code points and code
+points that are unassigned - except the spaces and joiners above, and
+those only in a name, a step or a scope. In a URL, a host name, a header
+or any other field a space of another width or a joiner is refused too,
+and so is a joiner at the start or the end of a text, or next to a blank
+or another joiner. An emoji built with tag characters (the flag of
+England) is refused. What is unassigned is up to the Unicode tables of
+the Python that runs `safeeasyapi`: Python 3.10 knows Unicode 13, so an
+emoji from a later version passes on Python 3.13 and not on 3.10.
 
 In the transcript above the key is shown as `sk-…` — in reality it is
 never printed at all, not even redacted.
@@ -309,6 +331,12 @@ just validated is never lost; `forget` still removes the `.env` line(s),
 then says the keychain entry may still be there and exits 1 (run it again
 when the keychain answers); `run` exits 1 with a message.
 
+`forget` says what it removed before it says what it could not do. With
+a `.env` that is a link (never edited, see *Security model*) it still
+removes the keychain entry and any leftover copies of an interrupted
+write, then names the link and exits 1: the key may still be in the
+file the link points to.
+
 ## Find public APIs
 
 SafeEasyAPI is also a discovery front door. `safeeasyapi find` searches the public
@@ -408,7 +436,10 @@ a string…), `arguments` that is not an object, or a missing or wrongly
 typed required argument gets `-32602 Invalid params` — never a crash or
 `-32603` — after which the server simply carries on. (A tool-level miss,
 such as a service that has no recipe, is an ordinary result with
-`isError`.)
+`isError`.) If standard input or standard output is closed
+(`safeeasyapi mcp >&-`; `pythonw` on Windows) there is no client to talk
+to: one `error:` line on stderr and exit status 2, before any request is
+read, not a traceback.
 
 ## Security model
 
@@ -436,7 +467,10 @@ such as a service that has no recipe, is an ordinary result with
   traceback.
 - A recipe with a control or invisible character in it is refused at load
   time, and any recipe text that reaches the screen is shown as a visible
-  escape, so a recipe cannot hide or forge the validation preview.
+  escape, so a recipe cannot hide or forge the validation preview. (The
+  one leeway: a space of another width and a joiner between two visible
+  characters are text in a name, a step or a scope - the list of what is
+  refused is in *A connect, annotated*.)
 - Recipes must use `https://` for the key page and the validation URL —
   plain-`http://` recipes (and ones whose URL is malformed) are rejected
   at load time.
@@ -490,7 +524,7 @@ is UTF-8 bytes regardless of console code page, console output is
 reconfigured to replace unencodable characters instead of crashing, and
 every text file is opened as UTF-8.
 
-## Scope / limits (v0.3.2)
+## Scope / limits (v0.3.3)
 
 - Keychain storage is best effort and opt-in (`--store keychain`); the
   `.env` file is the default and the fallback. No Doppler / Vault
