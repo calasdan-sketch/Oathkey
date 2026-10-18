@@ -292,8 +292,10 @@ class TestValueQuoting(unittest.TestCase):
 
     def test_risky_values_are_quoted_and_round_trip(self):
         env = os.path.join(_isolation.mktemp(), ".env")
-        risky = ['ab#c d"e', "back\\slash", " leading space", "tab\tin", "semi;colon",
-                 "dollar$sign", "quote'single", "", "hash#only", "sp ace"]
+        # (a single quote, a backslash or a tab is refused instead - see
+        # test_env_quoting.py)
+        risky = ['ab#c d"e', " leading space", "semi;colon", "dollar$sign", "",
+                 "hash#only", "sp ace"]
         for i, value in enumerate(risky):
             store_mod.store_key(f"V{i}", value, env)
         loaded = store_mod.load_env(env)
@@ -301,8 +303,8 @@ class TestValueQuoting(unittest.TestCase):
             self.assertEqual(loaded[f"V{i}"], value, repr(value))
         with open(env, encoding="utf-8") as f:
             text = f.read()
-        self.assertIn('V0="ab#c d\\"e"', text)
-        self.assertIn('V1="back\\\\slash"', text)
+        self.assertIn("V0='ab#c d\"e'", text)
+        self.assertIn("V3='dollar$sign'", text)
         # what Node dotenv / python-dotenv do with an UNQUOTED `ab#c d"e`:
         # stop at the ' #' or the space. Quoted, nothing is lost.
         self.assertNotIn("\nV0=ab#c", text)
@@ -524,6 +526,7 @@ class TestValidationShapes(unittest.TestCase):
         _Echo.seen, _Echo.status = [], 200
         self.srv = HTTPServer(("127.0.0.1", 0), _Echo)
         threading.Thread(target=self.srv.serve_forever, daemon=True).start()
+        self.addCleanup(self.srv.server_close)      # runs after the shutdown
         self.addCleanup(self.srv.shutdown)
 
     def spec(self, **over):

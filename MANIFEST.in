@@ -1,0 +1,4 @@
+# The sdist carries the tests, their helper included: setuptools adds only
+# tests/test*.py by itself, and every test imports tests/_isolation.py.
+recursive-include tests *.py
+global-exclude __pycache__ *.py[cod]

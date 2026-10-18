@@ -49,24 +49,102 @@ def user_recipes_dir() -> str:
 REQUIRED = ("service", "display", "key_url", "env_var", "steps", "validate")
 VALIDATE_REQUIRED = ("method", "url", "auth", "expect")
 AUTH_TYPES = ("bearer", "header", "basic")
+# A validation call proves a key by READING something. A recipe from
+# somebody else must not be able to make `connect` send the real key with a
+# DELETE or a POST to an endpoint on the key's own domain, where the
+# cross-domain prompt never fires.
+ALLOWED_METHODS = ("GET", "HEAD")
 
 # An env_var ends up as a literal line "NAME=<key>" in the user's .env.
 # Anything but a plain shell identifier (e.g. "GOOD=1\nEVIL=pwned") would
 # inject attacker-controlled lines the runtime then loads, so the shape is
 # enforced here at recipe load time — before anything is written.
-ENV_VAR_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+ENV_VAR_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\Z")
 
 # The service slug becomes the recipe FILE NAME (<slug>.json) and a CLI
 # argument. Lowercase letters, digits, '-' and '_' only, 1-64 chars: a slug
 # like "../../evil" could otherwise write outside the recipes directory.
-SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}\Z")
 
 
 class RecipeError(ValueError):
     pass
 
 
+def printable(text) -> str:
+    """`text` as it is safe to put on a terminal. A recipe is somebody
+    else's text, and connect prints a lot of it (the steps, the scopes, the
+    URLs) right next to the lines that protect the person: the validation
+    preview and the cross-domain warning. A character that drives the
+    terminal - ESC (colours, "conceal", a window title), a carriage return
+    or newline that forges a line, a bidirectional override, a zero-width
+    or no-break space - is therefore shown as a visible escape (``\\x1b``,
+    ``\\u202e``) instead of being sent. Everything printable, accented and
+    CJK letters and emoji included, comes back unchanged."""
+    if not isinstance(text, str):
+        text = str(text)
+    if text.isprintable():
+        return text
+    out = []
+    for ch in text:
+        if ch.isprintable():
+            out.append(ch)
+            continue
+        code = ord(ch)
+        if code < 0x100:
+            out.append(f"\\x{code:02x}")
+        elif code < 0x10000:
+            out.append(f"\\u{code:04x}")
+        else:
+            out.append(f"\\U{code:08x}")
+    return "".join(out)
+
+
+def _first_invisible(value, where: str = "") -> tuple[str, str] | None:
+    """(where, how it looks) for the first string anywhere in `value` (a
+    key, a value, inside lists and objects) that holds a control or
+    invisible character, or None. Both parts are safe to print."""
+    if isinstance(value, str):
+        if value.isprintable():
+            return None
+        shown = printable(value)
+        if len(shown) > 60:
+            shown = shown[:57] + "..."
+        return where, shown
+    if isinstance(value, dict):
+        for key, item in value.items():
+            name = printable(key)
+            found = (_first_invisible(key, f"name {name}")
+                     or _first_invisible(item, f"{where}.{name}" if where else name))
+            if found:
+                return found
+    elif isinstance(value, list):
+        for i, item in enumerate(value):
+            found = _first_invisible(item, f"{where}[{i}]")
+            if found:
+                return found
+    return None
+
+
+def _invisible_problem(data) -> str | None:
+    """The sentence for a recipe that holds a control or invisible character
+    somewhere, or None. Safe to print."""
+    found = _first_invisible(data)
+    if found is None:
+        return None
+    where, shown = found
+    service = data.get("service") if isinstance(data, dict) else None
+    who = (f"recipe '{printable(service)}'"
+           if isinstance(service, str) and service else "recipe")
+    return (f"{who} field {where or '(the recipe itself)'} contains a control "
+            f"or invisible character ({shown}) - a recipe is plain text")
+
+
 def validate_recipe(data: dict) -> dict:
+    problem = _invisible_problem(data)
+    if problem:
+        # before anything else, so no later message can echo such a character
+        raise RecipeError(problem)
     for field in REQUIRED:
         if field not in data or data[field] in (None, "", []):
             raise RecipeError(f"recipe missing required field: {field}")
@@ -87,6 +165,11 @@ def validate_recipe(data: dict) -> dict:
     for field in VALIDATE_REQUIRED:
         if field not in v:
             raise RecipeError(f"validate missing required field: {field}")
+    method = v["method"]
+    if not isinstance(method, str) or method.upper() not in ALLOWED_METHODS:
+        raise RecipeError(
+            f"validate.method must be GET or HEAD - a validation call only "
+            f"reads - got {printable(method)!r}")
     auth = v["auth"]
     if auth.get("type") not in AUTH_TYPES:
         raise RecipeError(f"auth.type must be one of {AUTH_TYPES}")
@@ -147,7 +230,8 @@ def _load_dir(directory: str, recipes: dict[str, dict],
             validate_recipe(data)
         except (json.JSONDecodeError, RecipeError, OSError, UnicodeDecodeError,
                 AttributeError, TypeError) as e:
-            sys.stderr.write(f"[safeeasyapi] skipping bad recipe {fname}: {e}\n")
+            sys.stderr.write(f"[safeeasyapi] skipping bad recipe "
+                             f"{printable(fname)}: {printable(e)}\n")
             continue
         # Only recipes shipped INSIDE the package may vouch for a
         # validation host under another domain (trusted_hosts): they were

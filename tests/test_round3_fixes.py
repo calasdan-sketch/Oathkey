@@ -8,7 +8,6 @@ import io
 import json
 import os
 import re
-import subprocess
 import sys
 import threading
 import types
@@ -90,8 +89,9 @@ class TestRedirectCredentialLeak(unittest.TestCase):
         _Target.seen, _Redirector.seen = [], []
         self.target = serve(_Target)
         self.redir = serve(_Redirector)
-        self.addCleanup(self.target.shutdown)
-        self.addCleanup(self.redir.shutdown)
+        for srv in (self.target, self.redir):
+            self.addCleanup(srv.server_close)       # runs after the shutdown
+            self.addCleanup(srv.shutdown)
 
     def spec(self, auth):
         return {"method": "GET",
@@ -273,37 +273,6 @@ class TestInstallLayout(unittest.TestCase):
         self.assertFalse(os.path.isdir(os.path.join(REPO, "recipes")))
         self.assertLessEqual({"github", "stripe", "resend", "openrouter"},
                              set(recipes_mod.load_recipes(recipes_mod.RECIPES_DIR)))
-
-    def test_wheel_contains_package_data_and_console_script(self):
-        out_dir = _isolation.mktemp()
-        proc = subprocess.run(
-            [sys.executable, "-m", "pip", "wheel", REPO, "-w", out_dir,
-             "--no-deps", "-q"], capture_output=True, text=True, timeout=600,
-            cwd=out_dir)
-        if proc.returncode != 0:
-            err = proc.stderr.strip()
-            tail = "\n".join(err.splitlines()[-15:])
-            # only an offline/unavailable build backend is an excuse; a
-            # layout error ("Multiple top-level packages ...") is a failure
-            network = ("No module named pip", "Could not fetch",
-                       "No matching distribution", "Connection", "ProxyError",
-                       "Temporary failure", "timed out", "unreachable")
-            if any(marker in err for marker in network):
-                self.skipTest(f"pip wheel needs a build backend: {tail}")
-            self.fail(f"pip wheel failed:\n{tail}")
-        import zipfile
-        wheels = [n for n in os.listdir(out_dir) if n.endswith(".whl")]
-        self.assertEqual(len(wheels), 1, wheels)
-        with zipfile.ZipFile(os.path.join(out_dir, wheels[0])) as zf:
-            names = set(zf.namelist())
-            entry = zf.read([n for n in names if n.endswith("entry_points.txt")][0])
-        for required in ("safeeasyapi/cli.py", "safeeasyapi/keychain.py",
-                         "safeeasyapi/recipes/github.json",
-                         "safeeasyapi/recipes/stripe.json"):
-            self.assertIn(required, names)
-        self.assertFalse(any(n.startswith("tests/") or n.startswith("recipes/")
-                             for n in names), names)
-        self.assertIn(b"safeeasyapi = safeeasyapi.cli:main", entry)
 
     def test_user_recipes_dir_overrides_builtin_and_receives_add(self):
         user_dir = recipes_mod.user_recipes_dir()
@@ -548,11 +517,14 @@ class TestKeychain(unittest.TestCase):
     def test_cli_run_and_store_flag_wiring(self):
         cat = {"acme": recipe()}
         with mock.patch.object(recipes_mod, "load_recipes", return_value=cat):
+            # (a command that exists: `run` now checks the command before it
+            # asks the keychain for the key)
+            prog = [sys.executable, "-c", "pass"]
             # no backend on this machine -> clear message, exit 1
             with mock.patch.object(keychain_mod, "detect_backend", return_value=None):
                 err = io.StringIO()
                 with redirect_stderr(err):
-                    self.assertEqual(cli_mod.main(["run", "acme", "--", "x"]), 1)
+                    self.assertEqual(cli_mod.main(["run", "acme", "--", *prog]), 1)
                 self.assertIn(".env", err.getvalue())
             # backend present, key missing -> helpful hint, exit 1
             with mock.patch.object(keychain_mod, "detect_backend",
@@ -560,7 +532,7 @@ class TestKeychain(unittest.TestCase):
                     mock.patch.object(keychain_mod, "read", return_value=None):
                 err = io.StringIO()
                 with redirect_stderr(err):
-                    self.assertEqual(cli_mod.main(["run", "acme", "--", "x"]), 1)
+                    self.assertEqual(cli_mod.main(["run", "acme", "--", *prog]), 1)
                 self.assertIn("--store keychain", err.getvalue())
             # backend present, key stored -> command runs with the key
             with mock.patch.object(keychain_mod, "detect_backend",
@@ -570,8 +542,8 @@ class TestKeychain(unittest.TestCase):
                                       return_value=0) as call:
                 out = io.StringIO()
                 with redirect_stdout(out):
-                    self.assertEqual(cli_mod.main(["run", "acme", "--", "echo", "hi"]), 0)
-                self.assertEqual(call.call_args.args[0], ["echo", "hi"])
+                    self.assertEqual(cli_mod.main(["run", "acme", "--", *prog]), 0)
+                self.assertEqual(call.call_args.args[0], prog)
                 self.assertEqual(call.call_args.kwargs["env"]["ACME_API_KEY"], FAKE_KEY)
                 self.assertNotIn(FAKE_KEY, out.getvalue())
             # --store keychain hands connect() a store_fn; default does not

@@ -55,6 +55,7 @@ class TestValidateHTTP(unittest.TestCase):
             self.assertEqual(Handler.seen_auth, "Bearer k123")
         finally:
             srv.shutdown()
+            srv.server_close()
 
     def test_401_is_rejection_not_crash(self):
         srv = run_server()
@@ -63,6 +64,7 @@ class TestValidateHTTP(unittest.TestCase):
             self.assertFalse(validate_mod.validate_key(spec(srv), "bad"))
         finally:
             srv.shutdown()
+            srv.server_close()
 
     def test_header_auth(self):
         srv = run_server()
@@ -75,6 +77,7 @@ class TestValidateHTTP(unittest.TestCase):
             self.assertIsNone(Handler.seen_auth)
         finally:
             srv.shutdown()
+            srv.server_close()
 
     def test_basic_auth(self):
         srv = run_server()
@@ -85,6 +88,7 @@ class TestValidateHTTP(unittest.TestCase):
             self.assertTrue(Handler.seen_auth.startswith("Basic "))
         finally:
             srv.shutdown()
+            srv.server_close()
 
     def test_unreachable_raises(self):
         srv = run_server()

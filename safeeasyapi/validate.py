@@ -9,6 +9,13 @@ port, or from https to http, the credential is stripped before the
 redirect is followed (what browsers and `requests` do) and the result is
 reported as a validation error, because a response from somewhere else
 proves nothing about the key.
+
+A key an HTTP header cannot carry (a character outside Latin-1, a line
+break or any other character that cannot be seen) is refused BEFORE any
+request is built, with a sentence that never repeats the key
+(UnsendableKey). Whatever else the HTTP library refuses to put in a
+header is reported without its message, which can hold the whole header
+value - the key included.
 """
 
 from __future__ import annotations
@@ -20,6 +27,7 @@ import urllib.parse
 import urllib.request
 
 from . import __version__
+from .recipes import ALLOWED_METHODS, printable
 
 USER_AGENT = f"safeeasyapi/{__version__}"
 DEFAULT_PORTS = {"http": 80, "https": 443}
@@ -28,6 +36,41 @@ REJECT_DEFAULT = (401, 403)
 
 class ValidationError(Exception):
     pass
+
+
+NOT_PRINTABLE = ("a character that is not printable (a tab, a line break or "
+                 "another invisible character)")
+NOT_LATIN_1 = ("a character outside Latin-1 (a curly quote or an emoji, say), "
+               "which an HTTP header cannot carry")
+
+
+class UnsendableKey(ValidationError):
+    """The key cannot go into the request: it holds a character an HTTP
+    header cannot carry. Raised before anything is built or sent. `reason`
+    completes "the key contains ..." and never repeats the key."""
+
+    def __init__(self, reason: str):
+        super().__init__(f"the key contains {reason}")
+        self.reason = reason
+
+
+def _unsendable_reason(atype: str, key: str) -> str | None:
+    """Why `key` cannot be sent with this kind of auth, or None when it can.
+
+    http.client puts a header value on the wire as Latin-1 and refuses a
+    line break in it - and its error message holds the whole value. Basic
+    auth base64-encodes the key (as UTF-8), so any visible character does
+    for it. A character that cannot be seen is refused for every kind: in a
+    pasted key it is nearly always a copy accident, and the .env file
+    refuses it too."""
+    if not key.isprintable():
+        return NOT_PRINTABLE
+    if atype != "basic":
+        try:
+            key.encode("latin-1")
+        except UnicodeEncodeError:
+            return NOT_LATIN_1
+    return None
 
 
 def _credential_header(spec: dict) -> str:
@@ -53,10 +96,19 @@ def _build_request(spec: dict, key: str) -> urllib.request.Request:
     (``anthropic-version``, ``Notion-Version``); the credential header
     always wins over a same-named static one.
     """
-    method = spec.get("method", "GET").upper()
+    method = str(spec.get("method", "GET")).upper()
+    if method not in ALLOWED_METHODS:
+        # The loader refuses such a recipe; this is for one that never went
+        # through it. Nothing has been sent yet.
+        raise ValidationError(
+            f"validate.method must be GET or HEAD - a validation call only "
+            f"reads - got {printable(spec.get('method'))!r}")
     url = spec["url"]
     auth = spec.get("auth", {})
     atype = auth.get("type", "bearer")
+    reason = _unsendable_reason(atype, key)
+    if reason:
+        raise UnsendableKey(reason)
     headers: dict[str, str] = {"User-Agent": USER_AGENT}
     for name, value in (spec.get("headers") or {}).items():
         headers[str(name)] = str(value)
@@ -148,6 +200,18 @@ def validate_key(spec: dict, key: str, timeout: float = 10.0) -> bool:
             f"{str(e)[:80]!r}); check the recipe's validate.url")
     except OSError as e:
         raise ValidationError(f"network error during validation: {e}")
+    except ValueError:
+        # What http.client refuses to put in a header (and a few other
+        # things it cannot encode, such as a host name) comes as a
+        # ValueError whose text holds the whole header value - "Invalid
+        # header value b'Bearer <the key>'". _build_request already stops a
+        # key like that; this is for the rest (a header value in the recipe
+        # itself, say) and must not repeat the text. `from None`: the
+        # original is not chained either.
+        raise ValidationError(
+            "the HTTP library refused to send the request (its message is "
+            "left out - it can hold the key). Check the key you pasted and "
+            "the recipe's validate section") from None
     if scrubber.stripped_to is not None:
         raise ValidationError(
             "validation endpoint redirected to a different origin "

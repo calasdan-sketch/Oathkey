@@ -8,12 +8,14 @@ and the destination file.
 from __future__ import annotations
 
 import getpass
+import ipaddress
 import sys
 import urllib.parse
 import webbrowser
 
 from . import store as store_mod
 from . import validate as validate_mod
+from .recipes import printable
 
 MAX_ATTEMPTS = 3
 # Typed confirmation required when the validation URL is on a different
@@ -21,11 +23,22 @@ MAX_ATTEMPTS = 3
 # word — Enter alone or "y" aborts.
 CONFIRM_WORD = "yes"
 
-# Multi-label public suffixes (from the Public Suffix List) under which the
-# NEXT label is the registrant. "api.example.co.uk" and
-# "dashboard.example.co.uk" are the same owner; "a.co.uk" and "b.co.uk"
-# are not. Hosting platforms whose sub-domains belong to different
-# customers are listed too: evil.github.io is NOT trusted by good.github.io.
+# Whose host is it? The "registrable domain" is the name one party registers:
+# api.example.co.uk and dashboard.example.co.uk are both example.co.uk (one
+# owner); a.co.uk and b.co.uk are two, and so are a.github.io and b.github.io,
+# because a hosting platform hands a sub-domain to anyone - evil.github.io is
+# NOT trusted by good.github.io.
+#
+# The three tables below (PUBLIC_SUFFIXES, GENERIC_SECOND_LEVEL,
+# PER_HOST_DOMAINS) are a COMPACT SNAPSHOT, not the Public Suffix List
+# (publicsuffix.org: thousands of rules, changed every week). A registry or
+# platform they do not list is treated as an ordinary domain.
+
+# Multi-label public suffixes under which the NEXT label is the registrant.
+# Country registries that GENERIC_SECOND_LEVEL below also catches are listed
+# anyway; the platforms are the names under which anyone can open a
+# sub-domain. (wordpress.com, railway.app, glitch.me and surge.sh are not on
+# the Public Suffix List, but their sub-domains are customers' too.)
 PUBLIC_SUFFIXES = frozenset({
     # country second-level registries
     "co.uk", "org.uk", "me.uk", "ac.uk", "gov.uk", "net.uk", "ltd.uk", "plc.uk",
@@ -63,21 +76,63 @@ PUBLIC_SUFFIXES = frozenset({
     # hosting platforms: every sub-domain is a different customer
     "github.io", "gitlab.io", "herokuapp.com", "vercel.app", "netlify.app",
     "pages.dev", "workers.dev", "web.app", "firebaseapp.com", "appspot.com",
-    "azurewebsites.net", "cloudfront.net", "amazonaws.com", "onrender.com",
+    "azurewebsites.net", "cloudfront.net", "onrender.com",
     "fly.dev", "railway.app", "ngrok.io", "ngrok.app", "ngrok-free.app",
     "trycloudflare.com", "repl.co", "replit.app", "glitch.me", "surge.sh",
     "now.sh", "deno.dev", "supabase.co",
+    # more platforms: site builders, shops, blogs
+    "blogspot.com", "wordpress.com", "myshopify.com", "wixsite.com",
+    "webflow.io", "notion.site", "carrd.co", "bubbleapps.io", "framer.app",
+    "framer.website", "lovable.app", "lovableproject.com", "bolt.host",
+    # more platforms: functions, apps, containers, storage
+    "cloudfunctions.net", "azurestaticapps.net", "azureedge.net",
+    "cloudapp.net", "trafficmanager.net", "azure-api.net",
+    "blob.core.windows.net", "elasticbeanstalk.com", "ondigitalocean.app",
+    "githubusercontent.com", "r2.dev",
+    # more platforms: notebooks, tunnels, hosted demos and docs
+    "vercel.dev", "csb.app", "pythonanywhere.com", "ngrok.dev",
+    "ngrok-free.dev", "replit.dev", "hf.space", "streamlit.app",
+    "readthedocs.io", "repl.run", "duckdns.org", "ts.net", "bitbucket.io",
+    "gitbook.io", "codeberg.page", "streamlitapp.com",
+    # more platforms: app and backend builders, previews
+    "amplifyapp.com", "azurefd.net", "convex.app", "convex.cloud",
+    "convex.site", "expo.app", "flutterflow.app", "hasura.app", "val.run",
+    "vusercontent.net", "v0.build", "windsurf.app", "deno.net", "lovable.run",
+    "vercel.run", "zeabur.app", "leapcell.app",
+})
+
+# Country registries as a rule: <one of these>.<two-letter country code> is a
+# public suffix (co.uk, com.au, com.gr, gob.mx, ne.jp ...). Registries with
+# other structures (info.pl, ...) are not recognised; see PUBLIC_SUFFIXES.
+GENERIC_SECOND_LEVEL = frozenset({
+    "co", "com", "org", "net", "gov", "edu", "ac", "or", "ne", "go", "gob",
+    "nom", "mil", "sch", "ltd", "plc",
+})
+
+# Domains under which EVERY host is a different customer's, at any depth (the
+# customer's name sits in bucket.s3.<region>.amazonaws.com and in
+# svc-1.a.run.app alike): below one of these a host is its own owner.
+PER_HOST_DOMAINS = frozenset({
+    "amazonaws.com", "amazonaws.com.cn", "on.aws", "awsapprunner.com",
+    "run.app", "r.appspot.com", "gateway.dev", "hosted.app",
+    "azurecontainer.io", "oraclecloudapps.com", "northflank.app", "code.run",
+    "digitaloceanspaces.com", "linodeobjects.com", "vultrobjects.com",
 })
 
 
 def _print_steps(recipe: dict, out=None) -> None:
+    """The recipe's own words. Every one goes through printable(): a recipe
+    is somebody else's text and must not be able to drive the terminal (hide
+    the validation preview that follows, forge a line, retitle the window)."""
     out = out or sys.stdout
-    out.write(f"\n  Connect {recipe['display']}  (key opens in your browser)\n\n")
+    out.write(f"\n  Connect {printable(recipe['display'])}  "
+              f"(key opens in your browser)\n\n")
     for i, step in enumerate(recipe["steps"], 1):
-        out.write(f"    {i}. {step}\n")
+        out.write(f"    {i}. {printable(step)}\n")
     if recipe.get("scopes"):
-        out.write(f"\n  Select these scopes: {', '.join(recipe['scopes'])}\n")
-    out.write(f"\n  Key page: {recipe['key_url']}\n\n")
+        scopes = ", ".join(printable(s) for s in recipe["scopes"])
+        out.write(f"\n  Select these scopes: {scopes}\n")
+    out.write(f"\n  Key page: {printable(recipe['key_url'])}\n\n")
     out.flush()
 
 
@@ -87,8 +142,9 @@ def render_validation_preview(recipe: dict, out=None) -> None:
     poisoned recipe can't turn `safeeasyapi connect` into a key harvest."""
     out = out or sys.stdout
     v = recipe["validate"]
-    method = str(v.get("method", "GET")).upper()
-    out.write(f"\n  This key will be validated with: {method} {v['url']}\n")
+    method = printable(str(v.get("method", "GET")).upper())
+    out.write(f"\n  This key will be validated with: {method} "
+              f"{printable(v['url'])}\n")
     out.flush()
 
 
@@ -135,25 +191,59 @@ def _host(url: str) -> str:
     return _normalize_host(urllib.parse.urlsplit(url).hostname or "")
 
 
+def _is_ip(host: str) -> bool:
+    """An IP address, in any spelling ``ipaddress`` reads. (Cut at the dots,
+    ``::ffff:1.2.3.4`` and ``::ffff:5.6.3.4`` would both end in ``3.4``.)"""
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return True
+
+
+def _suffix_labels(labels: list[str]) -> int:
+    """How many trailing labels of a host are its public suffix: the longest
+    match in PUBLIC_SUFFIXES or the country-registry rule, else the last one
+    (the TLD)."""
+    for i in range(len(labels) - 1):            # longest candidate first
+        tail = labels[i:]
+        if ".".join(tail) in PUBLIC_SUFFIXES:
+            return len(tail)
+        if (len(tail) == 2 and tail[0] in GENERIC_SECOND_LEVEL
+                and len(tail[1]) == 2):
+            return 2
+    return 1
+
+
 def registrable_domain(host: str) -> str:
-    """The part of a hostname one party registers: the last two labels,
-    or three under a known multi-label public suffix (co.uk, github.io).
+    """The part of a hostname one party registers: the last two labels, or
+    one label more under a public suffix (co.uk, com.gr, github.io, ...; see
+    the tables above - a compact snapshot, not the full Public Suffix List).
+    Under PER_HOST_DOMAINS (amazonaws.com, run.app, ...) the host is its own
+    owner.
 
         api.github.com        -> github.com
         dashboard.stripe.com  -> stripe.com
         api.example.co.uk     -> example.co.uk
+        x.com.gr              -> x.com.gr         (country registry)
         evil.github.io        -> evil.github.io   (platform: per-customer)
+        a.run.app             -> a.run.app        (every host its own)
         www.bücher.example    -> xn--bcher-kva.example   (punycode form)
 
     IP addresses, localhost and single labels are returned unchanged.
     """
     host = _normalize_host(host)
     labels = host.split(".")
-    if len(labels) < 3 or all(part.isdigit() for part in labels):
+    if (len(labels) < 3 or all(part.isdigit() for part in labels)
+            or _is_ip(host)):
         return host
-    if ".".join(labels[-2:]) in PUBLIC_SUFFIXES:
-        return ".".join(labels[-3:])
-    return ".".join(labels[-2:])
+    if any(".".join(labels[i:]) in PER_HOST_DOMAINS
+           for i in range(1, len(labels))):
+        return host
+    size = _suffix_labels(labels)
+    # one label more than the suffix; a host that IS a suffix (co.uk,
+    # blob.core.windows.net) has no such label and stays whole
+    return ".".join(labels[-(size + 1):])
 
 
 def same_owner(url_a: str, url_b: str) -> bool:
@@ -178,15 +268,16 @@ def _require_cross_domain_confirmation(recipe: dict, out,
         # A built-in (reviewed, shipped-with-the-code) recipe may vouch for
         # its vendor's second domain: api.anthropic.com for a key page on
         # claude.com. A recipe from ~/.safeeasyapi never gets this shortcut.
-        out.write(f"  (validation host {describe_domain(host)} is this "
-                  f"vendor's API domain — built-in recipe)\n")
+        out.write(f"  (validation host {printable(describe_domain(host))} is "
+                  f"this vendor's API domain — built-in recipe)\n")
         return True
     domains = [registrable_domain(host),
                registrable_domain(_host(recipe["key_url"]))]
-    shown = [describe_domain(d) for d in domains]
+    spelled = [describe_domain(d) for d in domains]
+    shown = [printable(s) for s in spelled]
     out.write(f"  ⚠ The validation URL is on a DIFFERENT domain than the key "
               f"page above ({shown[0]} vs {shown[1]}).\n")
-    if shown != domains:
+    if spelled != domains:
         out.write("    Names with letters from other alphabets can look "
                   "exactly like another site's; the xn-- spelling in "
                   "brackets is the real one.\n")
@@ -271,12 +362,36 @@ def connect(
         if not key:
             out.write("  empty — try again.\n")
             continue
+        problem = None if store_fn is not None else store_mod.unsafe_reason(key)
+        if problem:
+            # Said right after the paste - before the key goes anywhere: the
+            # .env file cannot hold this key in a form every reader agrees
+            # on (see store.unsafe_reason), so asking the API about it would
+            # only waste the paste. A keychain store_fn has no such rule.
+            out.write(f"  ✗ that key contains {problem}, which .env readers "
+                      f"do not agree on -\n"
+                      f"    real API keys do not have one. Nothing was sent. "
+                      f"Check what you pasted\n"
+                      f"    (a copied quote mark or an invisible character?) "
+                      f"and try again.\n")
+            key = None
+            continue
         out.write("  validating…\n")
         out.flush()
         try:
             ok = validate_fn(recipe["validate"], key)
+        except validate_mod.UnsendableKey as e:
+            # The key cannot go into an HTTP header (see validate.py): said
+            # before anything was sent, without repeating the key, and the
+            # person can paste again - this is not "couldn't reach the API".
+            out.write(f"  \u2717 that key contains {printable(e.reason)}. "
+                      f"Nothing was sent. Check what you\n"
+                      f"    pasted (a copied quote mark or an invisible "
+                      f"character?) and try again.\n")
+            key = None
+            continue
         except validate_mod.ValidationError as e:
-            out.write(f"  couldn't reach the API: {e}\n")
+            out.write(f"  couldn't reach the API: {printable(e)}\n")
             return 1
         if ok:
             break
@@ -292,6 +407,14 @@ def connect(
     store_fn = store_fn or store_in_env_file(env_file)
     try:
         description = store_fn(recipe["env_var"], key)
+    except store_mod.UnsafeValue as e:
+        # Only reachable when the key was headed elsewhere first (the
+        # keychain falling back to the .env file): the paste loop stops an
+        # unstorable key before it is sent when the .env file is the target.
+        out.write(f"\n  ✗ the key was validated but could NOT be saved: "
+                  f"{e.strerror}\n"
+                  f"    Nothing was written.\n")
+        return 1
     except OSError as e:
         # e.g. --env-file in a folder that is a file, or not writable.
         # The error names the path, never the key. The key is NOT saved;

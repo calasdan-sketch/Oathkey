@@ -19,15 +19,25 @@ Rules:
   line ending - a CRLF file stays CRLF, an LF file stays LF. The line we
   add or change takes the file's own style, and a missing last newline
   is added in that style.
+- A quoted value that runs over several lines belongs to its variable, as
+  python-dotenv, Node dotenv and a shell read it: a line inside it that
+  looks like ``NAME=`` is never rewritten or removed, and a variable whose
+  own value runs over several lines is replaced or removed as a whole.
 - A ``.env`` that is a symbolic link is refused (``refuse_link``): never
   written through, never silently replaced. So is a file that is not plain
   text (UTF-16 from PowerShell's ``>``), because appending UTF-8 to it
   would wreck it. Both refusals change nothing and say why.
-- Values are written so that every dotenv reader (python-dotenv, Node
-  dotenv, docker compose, a shell `source`) gets the whole key back: a
-  value that is not plain ``[A-Za-z0-9_.+/=:-]`` is double-quoted with
-  ``"`` and ``\\`` escaped, because an unquoted ``#`` or space would
-  otherwise truncate it silently.
+- Values are written so that sourcing the file in a shell can never run
+  anything, and so that no reader loses part of the key: a value made only
+  of ``[A-Za-z0-9_.+/=:-]`` is written bare; anything else is wrapped in
+  single quotes, inside which a POSIX shell takes every character
+  literally (inside double quotes it would still run ``$(...)`` and
+  backticks). A value that readers do not agree on - one with a single
+  quote, a backslash, ``${`` or a character that cannot be seen - is
+  refused (``UnsafeValue``) instead of being written in a form some reader
+  would misread; real API keys have none of these. Files written by 0.3.1
+  and earlier used double quotes: they are still read, and a line is
+  rewritten in the new form the next time its key is saved.
 - On Windows, mode bits are meaningless; the file's ACL is reduced to
   the current user instead (best effort, via icacls) — and the success
   line says so honestly when that did not work.
@@ -57,8 +67,10 @@ OWNER_ONLY = 0o600
 _ENCODING = "utf-8"
 _UNDECODABLE = "surrogateescape"
 
-# Characters that are safe unquoted in every dotenv dialect we know of.
-_PLAIN_VALUE_RE = re.compile(r"^[A-Za-z0-9_.+/=:-]+$")
+# Characters that are safe unquoted in every dotenv dialect we know of (a
+# shell would expand a bare ~, so it is not among them). \Z, not $: "$" also
+# matches in front of a final newline.
+_PLAIN_VALUE_RE = re.compile(r"^[A-Za-z0-9_.+/=:-]+\Z")
 
 # `KEY=` or `export KEY=`; group 1 is everything before the name: an optional
 # byte-order mark (Windows editors and PowerShell's `Out-File -Encoding utf8`
@@ -94,6 +106,24 @@ class EnvFileRefused(OSError):
 
     def __init__(self, path: str, reason: str):
         super().__init__(errno.EINVAL, reason, path)
+
+
+class UnsafeValue(OSError):
+    """The key has a character that cannot be written to a .env file in a
+    form every reader agrees on (see ``unsafe_reason``), so nothing was
+    written. ``strerror`` is one plain sentence - it never contains the key -
+    and ``filename`` is the .env path when it is known. An OSError, like
+    EnvFileRefused, so every existing "could not save" handler already
+    copes."""
+
+    def __init__(self, reason: str, path: str | None = None):
+        message = (f"it contains {reason}, which .env readers do not agree "
+                   f"on - real API keys do not have one")
+        if path is None:
+            super().__init__(errno.EINVAL, message)
+        else:
+            super().__init__(errno.EINVAL, message, path)
+        self.reason = reason
 
 
 def refuse_link(path: str) -> None:
@@ -179,18 +209,58 @@ def describe_protection(protected: bool = True) -> str:
     return PROTECTION_POSIX
 
 
+UNPRINTABLE = ("a character that is not printable (a tab, a line break or "
+               "another invisible character)")
+
+
+def unsafe_reason(value: str) -> str | None:
+    """Why `value` cannot be written to a .env file, or None when it can.
+    The wording completes "it contains ...".
+
+    Why these, and nothing else (every other character is safe inside single
+    quotes; checked by hand with sh, bash, python-dotenv 1.2.3, Node dotenv
+    17.4.2 and docker compose 5.5.1 - see the README):
+    - a single quote: single quotes are what make a value safe to
+      ``source``, and there is no way to put one inside them that every
+      reader understands (the shell's ``'\\''`` is not dotenv syntax);
+    - a backslash: python-dotenv reads two in a row as one, and a final one
+      as an escaped closing quote, even inside single quotes; docker compose
+      refuses a final one;
+    - ``${``: python-dotenv expands ``${NAME}`` even inside single quotes;
+    - anything that cannot be seen (a tab, a line break, a control or
+      zero-width character, a no-break space): it ends or splits the line in
+      some readers, and in a pasted key it is nearly always an accident.
+    Real API keys contain none of these."""
+    if not value.isprintable():
+        return UNPRINTABLE
+    if "'" in value:
+        return "a single quote"
+    if "\\" in value:
+        return "a backslash"
+    if "${" in value:
+        return "the characters ${"
+    return None
+
+
 def quote_value(value: str) -> str:
-    """The on-disk form of a value: bare when it is plain, otherwise
-    double-quoted with `"` and `\\` escaped (the common dotenv rule)."""
+    """The on-disk form of a value: bare when it is plain, otherwise in
+    single quotes - inside which a shell that sources the file takes every
+    character literally, and Node dotenv and docker compose do too. Raises
+    UnsafeValue for a value that has no form every reader agrees on, so no
+    caller can ever write one."""
+    reason = unsafe_reason(value)
+    if reason:
+        raise UnsafeValue(reason)
     if value and _PLAIN_VALUE_RE.match(value):
         return value
-    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+    return "'" + value + "'"
 
 
 def parse_value(raw: str) -> str:
-    """Read a value back the way dotenv readers do: a double-quoted value
-    is unescaped; a single-quoted one is literal; a bare value ends at the
-    first ` #` comment and is stripped."""
+    """Read a value back the way dotenv readers do: a single-quoted one is
+    literal (what is written now); a double-quoted value is unescaped (what
+    0.3.1 and earlier wrote); a bare value ends at the first ` #` comment
+    and is stripped."""
     s = raw.strip()
     if len(s) >= 2 and s[0] == '"':
         end = _closing_quote(s)
@@ -236,22 +306,76 @@ def _split_lines(text: str) -> list[list[str]]:
     return entries
 
 
-def _occurrences(entries: list[list[str]]) -> dict[str, list[int]]:
-    """{VAR: [index of every line that assigns it, in file order]}."""
-    found: dict[str, list[int]] = {}
-    for i, (content, _ending) in enumerate(entries):
-        m = _ASSIGN_RE.match(content)
-        if m:
-            found.setdefault(m.group(2), []).append(i)
+# What may follow the quote that closes a multi-line value, on its last line.
+_AFTER_CLOSING_QUOTE_RE = re.compile(r"\s*(?:#.*)?\Z")
+
+
+def _quote_end(text: str, quote: str, start: int) -> int:
+    """Index of the first unescaped `quote` in `text` at or after `start`, or
+    -1. Inside double quotes a backslash escapes the next character; inside
+    single quotes nothing does."""
+    i = start
+    while i < len(text):
+        c = text[i]
+        if c == "\\" and quote == '"':
+            i += 2
+            continue
+        if c == quote:
+            return i
+        i += 1
+    return -1
+
+
+def _value_end(entries: list[list[str]], first: int, rest: str) -> int:
+    """The last line of the value that starts on line `first` (`rest` is the
+    text after its `NAME=`): that same line, or - for a quoted value that
+    runs over several lines - the line that closes it.
+
+    python-dotenv, Node dotenv and a shell read a value that opens with a
+    single or double quote (blanks after the = are allowed) and is not closed
+    on its own line as running on to the first unescaped quote of that kind,
+    provided only blanks or a #comment follow that quote; every line in
+    between, whatever it looks like, is part of the value. A quote that is
+    never closed, or whose closing line has other text after the quote, does
+    not open a multi-line value: they read a one-line value and the next
+    line as a new assignment."""
+    value = rest.lstrip()
+    quote = value[:1]
+    if quote not in ('"', "'"):
+        return first
+    if _quote_end(value, quote, 1) != -1:
+        return first                                    # closed on its own line
+    for j in range(first + 1, len(entries)):
+        end = _quote_end(entries[j][0], quote, 0)
+        if end != -1:
+            closes = _AFTER_CLOSING_QUOTE_RE.match(entries[j][0], end + 1)
+            return j if closes else first
+    return first
+
+
+def _occurrences(entries: list[list[str]]) -> dict[str, list[tuple[int, int]]]:
+    """{VAR: [(first line, last line) of every assignment of it, in file
+    order]}. The two differ for a value that runs over several lines; a line
+    inside such a value is part of it, never an assignment."""
+    found: dict[str, list[tuple[int, int]]] = {}
+    i = 0
+    while i < len(entries):
+        m = _ASSIGN_RE.match(entries[i][0])
+        if not m:
+            i += 1
+            continue
+        last = _value_end(entries, i, entries[i][0][m.end():])
+        found.setdefault(m.group(2), []).append((i, last))
+        i = last + 1
     return found
 
 
 def _index(entries: list[list[str]]) -> dict[str, int]:
-    """{VAR: index of the line that takes effect}: the LAST one. python-dotenv,
-    Node dotenv, docker compose and a shell `source` all let a later
-    assignment of a variable override an earlier one, so that is the line
-    that has to hold the key."""
-    return {var: lines[-1] for var, lines in _occurrences(entries).items()}
+    """{VAR: index of the line that takes effect}: the (first line of the)
+    LAST one. python-dotenv, Node dotenv, docker compose and a shell `source`
+    all let a later assignment of a variable override an earlier one, so that
+    is the line that has to hold the key."""
+    return {var: spans[-1][0] for var, spans in _occurrences(entries).items()}
 
 
 def times(count: int) -> str:
@@ -314,11 +438,14 @@ def load_env(path: str) -> dict[str, str]:
     set twice has the value of its last line, as in every dotenv reader).
     For tests and tooling — the CLI itself never reads keys back into memory
     except to hand them to a child process."""
-    lines, index = read_env(path)
+    entries = _split_lines(_read_bytes(path).decode(_ENCODING, _UNDECODABLE))
     values: dict[str, str] = {}
-    for var, i in index.items():
-        m = _ASSIGN_RE.match(lines[i])
-        values[var] = parse_value(lines[i][m.end():])
+    for var, spans in _occurrences(entries).items():
+        first, last = spans[-1]
+        raw = entries[first][0][_ASSIGN_RE.match(entries[first][0]).end():]
+        for k in range(first, last):            # a value over several lines
+            raw += entries[k][1] + entries[k + 1][0]
+        values[var] = parse_value(raw)
     return values
 
 
@@ -379,24 +506,32 @@ def store_key_result(env_var: str, key: str, env_file: str = ".env") -> Stored:
     Refuses a malformed env_var (anything but a shell identifier):
     writing it verbatim would let a hostile recipe inject extra lines
     into the user's .env. Recipe validation normally catches this at
-    load time; this is the last line of defense.
+    load time; this is the last line of defense. Refuses a key with a
+    character the readers disagree on (UnsafeValue, an OSError) before
+    anything is touched.
     """
     if not isinstance(env_var, str) or not ENV_VAR_RE.match(env_var):
         raise ValueError(
             f"refusing to write invalid env var name to {env_file}: "
             f"{env_var!r}")
+    reason = unsafe_reason(key)
+    if reason:
+        raise UnsafeValue(reason, env_file)
     existed = os.path.isfile(env_file)
     entries = _load_for_edit(env_file)      # refuses a link / a non-text file
     newline = _newline_style(entries)
-    lines = _occurrences(entries).get(env_var, [])
+    spans = _occurrences(entries).get(env_var, [])
     value = quote_value(key)
-    if lines:
+    if spans:
         # The LAST assignment is the one every reader ends up using, so it
-        # is the one that gets the key; earlier ones are not touched.
-        i = lines[-1]
-        prefix = _ASSIGN_RE.match(entries[i][0]).group(1)
-        # keeps `export` and the line's own ending
-        entries[i][0] = f"{prefix}{env_var}={value}"
+        # is the one that gets the key; earlier ones are not touched. If its
+        # old value ran over several lines, they all become this one line.
+        first, last = spans[-1]
+        prefix = _ASSIGN_RE.match(entries[first][0]).group(1)
+        # keeps `export` and the ending of the last line it took up
+        entries[first][0] = f"{prefix}{env_var}={value}"
+        entries[first][1] = entries[last][1]
+        del entries[first + 1:last + 1]
         updated = True
     else:
         if entries and not entries[-1][1]:
@@ -409,7 +544,7 @@ def store_key_result(env_var: str, key: str, env_file: str = ".env") -> Stored:
     # Scrub our own reference.
     del value
     return Stored(env_file, updated and existed, protected,
-                  max(len(lines) - 1, 0))
+                  max(len(spans) - 1, 0))
 
 
 def store_key(env_var: str, key: str, env_file: str = ".env") -> tuple[str, bool]:
@@ -423,23 +558,128 @@ def remove_key(env_var: str, env_file: str = ".env") -> int:
     and return how many there were: 0 (false) when the variable is not
     there. All of them, not just the one that takes effect - otherwise an
     older line would spring back and the "forgotten" key would still be
-    live. The rest of the file is kept byte-for-byte (line endings
-    included); the file stays private. A link or a non-text file is
-    refused, as when saving (EnvFileRefused)."""
+    live - and all the lines of one whose value runs over several lines,
+    but never a line inside ANOTHER variable's multi-line value. The rest of
+    the file is kept byte-for-byte (line endings included); the file stays
+    private. A link or a non-text file is refused, as when saving
+    (EnvFileRefused)."""
     entries = _load_for_edit(env_file)
-    lines = _occurrences(entries).get(env_var)
-    if not lines:
+    spans = _occurrences(entries).get(env_var)
+    if not spans:
         return 0
     newline = _newline_style(entries)
-    bom = lines[0] == 0 and entries[0][0].startswith("\ufeff")
-    for i in reversed(lines):
-        del entries[i]
+    bom = spans[0][0] == 0 and entries[0][0].startswith("\ufeff")
+    for first, last in reversed(spans):
+        del entries[first:last + 1]
     if bom and entries:
         # The byte-order mark belongs to the file, not to the line we took
         # out: the next line becomes the first and keeps it.
         entries[0][0] = "\ufeff" + entries[0][0]
     write_private(env_file, _render(entries, newline))
-    return len(lines)
+    return len(spans)
+
+
+@dataclasses.dataclass
+class OtherLinks:
+    names: list[str]       # other names of the file, in its own folder
+    elsewhere: int         # further names we cannot see (other folders)
+
+
+# Do not walk a folder of more than this many entries looking for links.
+_SCAN_LIMIT = 20000
+
+
+def other_links(path: str) -> OtherLinks | None:
+    """The other hard links to the file at `path`, or None when it has none
+    (or is missing, or is not a plain file - a symbolic link is never looked
+    through).
+
+    Why it matters for `forget`: a file is rewritten by renaming a new one
+    over it, and that leaves every other name of the OLD file as it was - old
+    contents, key included. Those names (a `.env.bak` made with `ln`, a
+    backup tool's snapshot) are not safeeasyapi's to delete; it can only say
+    they are there. Call this BEFORE rewriting: afterwards `path` is a new
+    file with one name."""
+    try:
+        info = os.lstat(path)
+    except OSError:
+        return None
+    if not stat.S_ISREG(info.st_mode) or info.st_nlink < 2:
+        return None
+    names: list[str] = []
+    if info.st_ino:
+        base = os.path.basename(path)
+        try:
+            with os.scandir(os.path.dirname(os.path.abspath(path))) as listing:
+                for count, entry in enumerate(listing):
+                    if count >= _SCAN_LIMIT:
+                        break
+                    if entry.name == base:
+                        continue
+                    try:
+                        other = os.lstat(entry.path)
+                    except OSError:
+                        continue
+                    if (stat.S_ISREG(other.st_mode)
+                            and (other.st_ino, other.st_dev)
+                            == (info.st_ino, info.st_dev)):
+                        names.append(entry.name)
+        except OSError:
+            pass
+    names.sort()
+    return OtherLinks(names, max(info.st_nlink - 1 - len(names), 0))
+
+
+# A temp file is only read when it is smaller than this.
+_LEFTOVER_MAX_BYTES = 4 * 1024 * 1024
+
+
+def _holds_variable(path: str, env_var: str) -> bool:
+    """Does the plain file at `path` assign `env_var`? (Nothing else about
+    it is ever looked at, and it is not followed if it is a link.)"""
+    try:
+        info = os.lstat(path)
+        if not stat.S_ISREG(info.st_mode) or info.st_size > _LEFTOVER_MAX_BYTES:
+            return False
+        with open(path, "rb") as f:
+            data = f.read(_LEFTOVER_MAX_BYTES)
+    except OSError:
+        return False
+    entries = _split_lines(data.decode(_ENCODING, _UNDECODABLE))
+    return env_var in _occurrences(entries)
+
+
+def remove_leftovers(env_var: str, env_file: str = ".env",
+                     unlink=os.unlink) -> tuple[list[str], list[tuple[str, str]]]:
+    """Delete the temp files an interrupted write of `env_file` left in its
+    folder - a write killed (SIGKILL, power cut) between creating the temp
+    file and renaming it into place leaves ``.<name>.<8 letters>.tmp``, a
+    complete copy of the file - when they still assign `env_var`. Only files
+    with exactly the name write_private() gives its temp files are touched,
+    and only plain files; any other file, a backup say, is somebody else's.
+
+    Returns ([paths removed], [(path, why not) for those that could not be]).
+    Never raises: a folder that cannot be listed has nothing to remove."""
+    base = os.path.basename(env_file)
+    directory = os.path.dirname(os.path.abspath(env_file))
+    mine = re.compile(r"^\." + re.escape(base) + r"\.[a-z0-9_]{8}\.tmp\Z")
+    removed: list[str] = []
+    failed: list[tuple[str, str]] = []
+    try:
+        names = sorted(os.listdir(directory))
+    except OSError:
+        return removed, failed
+    for name in names:
+        path = os.path.join(directory, name)
+        if not mine.match(name) or not _holds_variable(path, env_var):
+            continue
+        try:
+            unlink(path)
+        except OSError as e:
+            failed.append((path, e.strerror or str(e)))
+        else:
+            removed.append(path)
+    return removed, failed
 
 
 def file_mode(path: str) -> int:

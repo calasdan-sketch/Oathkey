@@ -1082,7 +1082,7 @@ class TestDuplicateKeys(unittest.TestCase):
         self.assertEqual(after, b"ACME_API_KEY='c d'\nACME_API_KEY=" + KEY + b"\n")
         # a key that itself needs quoting is written quoted, still last
         _, after = self.save(b"ACME_API_KEY=a\nACME_API_KEY=b\n", key='ab#c d"e')
-        self.assertEqual(after, b'ACME_API_KEY=a\nACME_API_KEY="ab#c d\\"e"\n')
+        self.assertEqual(after, b"ACME_API_KEY=a\nACME_API_KEY='ab#c d\"e'\n")
 
     def test_behind_a_byte_order_mark(self):
         stored, after = self.save(self.BOM + b"ACME_API_KEY=a\nACME_API_KEY=b\n")

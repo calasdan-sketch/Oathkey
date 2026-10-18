@@ -98,7 +98,8 @@ different hostname: `dashboard.stripe.com` and `api.stripe.com` are both
 `stripe.com`, so Stripe, GitHub (`github.com` / `api.github.com`) and
 Resend connect without a prompt — the transcript above is the whole
 flow. Multi-part public suffixes are understood (`a.co.uk` and `b.co.uk`
-are two owners; so are `a.github.io` and `b.github.io`). Case, a trailing
+are two owners; so are `a.github.io` and `b.github.io`, `a.blogspot.com` and
+`b.blogspot.com`, `a.run.app` and `evil.run.app`). Case, a trailing
 dot, a port and `user@` in front of the host never change the answer, and
 names with non-English letters are compared in their `xn--` (punycode)
 form, so `bücher.example` and `xn--bcher-kva.example` are one owner. When
@@ -114,6 +115,31 @@ inside the package get that shortcut — a recipe from
 `~/.safeeasyapi/recipes` (yours, or one somebody sent you) always prompts
 when the domains differ, whatever it claims.
 
+Which names count as "anyone can register a sub-domain here" is a **compact
+snapshot, not the full Public Suffix List**: country registries by one rule
+(`co`, `com`, `org`, `net`, `gov`, `edu`, `ac`, `or`, `ne`, `go`, `gob`,
+`nom`, `mil`, `sch`, `ltd` or `plc` under a two-letter country code, as in
+`co.uk`, `com.au`, `com.gr`, `gob.mx`) plus a few named ones; a list of the
+hosting and site-builder platforms that hand a sub-domain to anyone
+(`github.io`, `vercel.app`, `pages.dev`, `blogspot.com`, `myshopify.com`,
+...); and a short list of clouds where every single host belongs to one
+customer (`*.amazonaws.com`, `*.run.app`). A registry or platform on none of
+them - the many other country registries (`info.pl`, `gc.ca`), dynamic-DNS
+and small hosting services - is treated as an ordinary domain: two
+sub-domains there look like one owner and connect does not ask. The
+validation preview above, which always shows the full URL, is the check that
+does not depend on the lists.
+
+A recipe is somebody else's text, so it cannot drive your terminal. One
+that holds a control or invisible character anywhere (an ESC that would
+hide the lines below it, a newline that forges one, a right-to-left
+override, a zero-width space) is refused when it is loaded - the other
+recipes still load, and a one-line warning on stderr names the file and
+the field - and whatever of a recipe's words reaches the screen is
+printed so that such a character is shown as a visible escape
+(`\x1b[8m`) instead of being sent. Accented and CJK letters and emoji
+are ordinary text and pass untouched.
+
 In the transcript above the key is shown as `sk-…` — in reality it is
 never printed at all, not even redacted.
 
@@ -124,6 +150,16 @@ header is stripped before the redirect is followed (what browsers and
 to a different origin* instead of guessing from a response that proves
 nothing about the key. A redirect within the same origin (`/me` →
 `/me/`) is followed normally.
+
+A key the request **cannot carry** is turned back too, **before any
+request** is made. An HTTP header holds Latin-1 text only, so a key with a
+character outside it (a curly quote copied along with the key, an emoji)
+or with one you cannot see (a line break, a tab) is refused right after
+the paste, with `✗ that key contains ... Nothing was sent`, and you can
+paste it again. A recipe that uses HTTP Basic puts the key through base64
+first, so any character you can see passes there. The message never
+repeats the key, and neither does the one for anything else the HTTP
+library might refuse to send.
 
 **Run it on your own computer.** The check only means something when it
 is sent straight from your machine. Cloud coding agents, sandboxes and
@@ -142,14 +178,45 @@ is then atomically renamed over the target. No reader ever sees a
 half-written or world-readable key, a crash leaves the old file
 untouched, and a file somebody pre-planted at a guessable name is never
 written through. An existing `ENV_VAR=` or `export ENV_VAR=` line is
-replaced in place (keeping `export`); a value with anything outside
-`A-Z a-z 0-9 _ . + / = : -` is written double-quoted with `"` and `\`
-escaped, so Node dotenv, python-dotenv, docker compose and a shell
-`source` all read the whole key back (an unquoted `ab#c d"e` would have
-been silently truncated). If the file cannot be written (`--env-file` in
+replaced in place (keeping `export`). A value made only of
+`A-Z a-z 0-9 _ . + / = : -` is written as it is; any other value is
+**single-quoted** (`ACME_API_KEY='ab#c d"e'`). A shell that sources the
+file takes every character inside single quotes literally, so `$(...)`,
+backticks and `$VAR` in a value can never run or expand (inside double
+quotes they do), and an unquoted `#` or space cannot cut the value
+short. A key with a single quote, a backslash, `${` or a character you
+cannot see (a tab, a line break, a zero-width or no-break space) is
+**refused**: the readers disagree about those, real API keys contain
+none of them, and a pasted key that has one is nearly always a copy
+accident (a quote mark copied along with the key, say). `connect` says
+so right after the paste, before the key is sent anywhere, and lets you
+paste it again (the OS keychain, `--store keychain`, does not apply this
+rule). If the file cannot be written (`--env-file` in
 a folder that is a file, or unwritable), the connect ends with
 `✗ the key was validated but could NOT be saved` and exit 1 — the key is
 never printed, and nothing is written.
+
+**What was checked.** The tests source the file in a real `sh` and
+`bash` (skipped where there is no POSIX shell) and split every line with
+Python's `shlex`: none of the awkward values (`$(...)`, backticks, `;`,
+`&`, `$HOME`, `~`, spaces, `#`, quote marks) runs anything or comes back
+different. The other readers were checked by hand on Linux in October
+2026 with about sixty awkward values, written by the real code: Node
+dotenv 17.4.2, python-dotenv 1.2.3 and docker compose 5.5.1 all gave
+every storable value back exactly. That is why `${` and a backslash are refused rather
+than written: python-dotenv expands `${NAME}` and reads `\\` as one
+backslash even inside single quotes, and docker compose rejects a value
+that ends in a backslash. Tools that expand `$` after reading the file
+(frameworks that add `dotenv-expand`, for example) were not checked and
+may treat a `$` in a value specially.
+
+**Older files.** Versions 0.3.1 and earlier wrote double quotes, inside
+which a shell still runs `$(...)` and backticks and expands `$VAR`. A key
+made only of letters, digits and `_ . + / = : -` was never quoted, so
+those are unaffected. Double-quoted values are still read, and such a
+line is rewritten in the new form the next time its key is saved:
+`safeeasyapi rotate <service>` does it, and nothing else in the file
+moves.
 
 If the same variable is set more than once in the file, the **last**
 line is the one that is updated: python-dotenv, Node dotenv, docker
@@ -158,6 +225,15 @@ changing the first would save a key that never takes effect. Earlier
 lines are left exactly as they were, and the success line says so
 (`ACME_API_KEY appears twice in .env; I updated the one that takes
 effect`).
+
+A quoted value that **runs over several lines** (a PEM block in single
+quotes, say) belongs to its variable, the way python-dotenv, Node dotenv
+and a shell read it: a line inside it that happens to look like
+`ACME_API_KEY=...` is part of that value, so it is never rewritten or
+removed, and if the variable's own value runs over several lines, they are
+replaced (or removed by `forget`) together. A quote that is never closed,
+or whose closing line has other text after it, is read as a one-line
+value, as those readers do.
 
 Only your key's line changes; every other byte of an existing file is
 kept exactly as it was. A file saved in a Windows code page (cp1252: an
@@ -188,6 +264,18 @@ entry (when this OS has a keychain) and removes the `ENV_VAR=` line from
 the variable is set more than once, every one of those lines goes —
 otherwise an older one would take over again — and it says how many.
 
+`forget` also looks for the temp file an interrupted write (a `kill -9`,
+a power cut) can leave next to the `.env` file - `..env.` and eight
+random characters and `.tmp`, a complete copy of the file - and deletes
+it when it still holds the key; the success line names it. Other names of
+the file are another matter: a hard link (a `.env.bak` made with `ln`)
+keeps the old contents, key included, however the file is rewritten.
+`forget` cannot change that and does not delete files it did not make: it
+names the hard link, says the key is still there, and exits 1 instead of
+claiming it is gone. Copies it cannot know about - an editor's backup
+(`.env~`), version-control history, a shell history, a backup of the
+folder - are yours to remove.
+
 **OS keychain (`--store keychain`).** No `keyring` package; each OS
 uses what it ships with, and the key never goes through `argv`:
 
@@ -203,6 +291,23 @@ A keychain-stored key is consumed with `safeeasyapi run <service> --
 environment, never printed. (Your app does not need to change — it
 still reads `$STRIPE_SECRET_KEY`.) Without a keychain backend `run`
 exits 1 and tells you the key lives in `.env`.
+
+`run` hands back the command's own exit status. A command that cannot
+be started is reported in one line, with no traceback and before the
+keychain is asked for the key: exit status 127 for a command that is not
+on your `PATH` (`command not found`), 126 for one that is there but
+cannot be run (not an executable file, a directory). A command that a
+signal stops gives 128 plus the signal number (137 for a kill), as in a
+shell. Ctrl-C ends `run`, the MCP server or any other command with
+`interrupted.` and exit status 130. On Windows the command is looked up
+the way the shell does it (`PATHEXT`), so `npm` finds `npm.cmd`.
+
+A keychain tool that does not answer within 30 seconds, or cannot be
+started, is handled like any other keychain failure. `connect --store
+keychain` falls back to the `.env` file and says so, so a key that was
+just validated is never lost; `forget` still removes the `.env` line(s),
+then says the keychain entry may still be there and exits 1 (run it again
+when the keychain answers); `run` exits 1 with a message.
 
 ## Find public APIs
 
@@ -271,7 +376,9 @@ Ponytail…); those are saved to `~/.safeeasyapi/recipes/`
 built-in recipe with the same slug. `--recipes-dir` writes elsewhere.
 A slug is `[a-z0-9][a-z0-9_-]{0,63}` — it becomes the file name, so
 `../../evil` is refused — and the expected status codes must be numbers
-(`200,201`). Besides `bearer` / `header` / `basic`, a recipe's
+(`200,201`). The validation call must be a `GET` or `HEAD`: it only
+reads, so a recipe cannot make `connect` send your key with a `DELETE`
+or a `POST`. Besides `bearer` / `header` / `basic`, a recipe's
 `validate` block may set `auth.scheme` (`Token` for Deepgram, `Bot` for
 Discord), `auth.username` for Basic auth with the key as the password
 (Mailgun's `api:<key>`), static `headers` (`anthropic-version`,
@@ -296,7 +403,7 @@ terminal — never ask the user to paste the key into chat. The server
 speaks JSON-RPC 2.0 properly: notifications (`notifications/cancelled`,
 `notifications/initialized`, anything without an `id`) are never
 answered, a non-object message gets `-32600 Invalid Request`, bad JSON
-`-32700 Parse error`, and `params` that is not an object (`null`, a list,
+(a hundred thousand open brackets included) `-32700 Parse error`, and `params` that is not an object (`null`, a list,
 a string…), `arguments` that is not an object, or a missing or wrongly
 typed required argument gets `-32602 Invalid params` — never a crash or
 `-32603` — after which the server simply carries on. (A tool-level miss,
@@ -312,6 +419,10 @@ such as a service that has no recipe, is an ordinary result with
 - A `.env` that is a link is refused, never written through or replaced,
   and the permission step (chmod / icacls) never follows a link to change
   something else.
+- Whatever a recipe or a paste contains, the `.env` file gets exactly one
+  `NAME=value` line from it: a name is a plain identifier (a trailing
+  newline does not slip through), and a value is single-quoted or
+  refused, so sourcing the file runs nothing.
 - Validation is a single minimal HTTPS call; only the status is read,
   response bodies are discarded. The credential never follows a
   redirect to another origin or to plain `http://`.
@@ -323,6 +434,9 @@ such as a service that has no recipe, is an ordinary result with
 - A reply that is not HTTP at all (a captive portal, a TLS mismatch, a
   non-HTTP service on the port) is reported as a validation error, not a
   traceback.
+- A recipe with a control or invisible character in it is refused at load
+  time, and any recipe text that reaches the screen is shown as a visible
+  escape, so a recipe cannot hide or forge the validation preview.
 - Recipes must use `https://` for the key page and the validation URL —
   plain-`http://` recipes (and ones whose URL is malformed) are rejected
   at load time.
@@ -335,11 +449,18 @@ python -m unittest discover -s tests -v
 python -m pytest -q                    # same suite
 ```
 
-249 tests, stdlib only, no network beyond 127.0.0.1: recipe schema,
+The tests use only the standard library and no network beyond
+127.0.0.1 (nothing is downloaded, not even to build a wheel). Two groups
+skip, with a reason, where they cannot run: the tests that build the
+wheel and the sdist need a setuptools 77 or newer, with a `packaging` 24.2
+or newer, installed in the Python that runs them; the tests that read
+`pyproject.toml` need `tomllib`, so they skip on Python 3.10. What they
+cover: recipe schema,
 HTTPS-URL rejection and malformed URLs, slug validation, every shipped
 recipe (parses, https, file name = slug, credential header built),
 `.env` create/update/permissions (random exclusive temp file, crash
-safety, never world-readable, value quoting round-trip, `export` lines,
+safety, never world-readable, value quoting (sourced in a real shell,
+split with `shlex`, values the readers disagree on refused), `export` lines,
 an unwritable path, a cp1252 file, a byte-order mark, CRLF/LF/mixed
 endings and a variable set twice (the last line wins) kept
 byte-for-byte, a UTF-16 file and a symbolic link refused, permissions
@@ -355,8 +476,10 @@ through a fake `advapi32`), the `.env` fallback, `forget`, the honest
 Windows ACL line, MCP provenance labels and quarantine of poisoned
 directory entries, JSON-RPC notification, invalid-request and
 invalid-params handling, MCP protocol round-trip over real stdio, a
-wheel build that must contain the recipes, the package metadata and one
-version number everywhere, output into a pipe that closes early (the
+wheel build that must contain the recipes and an sdist that must carry the
+tests (both built from a clean copy of the folder, so a leftover `build/`
+cannot reach them),
+the package metadata and one version number everywhere, output into a pipe that closes early (the
 real thing, and the different error Windows gives, simulated), and
 never-log assertions on every output path. Tests point
 `HOME`/`USERPROFILE`/`APPDATA` at a throwaway directory, so they never
@@ -367,7 +490,7 @@ is UTF-8 bytes regardless of console code page, console output is
 reconfigured to replace unencodable characters instead of crashing, and
 every text file is opened as UTF-8.
 
-## Scope / limits (v0.3.1)
+## Scope / limits (v0.3.2)
 
 - Keychain storage is best effort and opt-in (`--store keychain`); the
   `.env` file is the default and the fallback. No Doppler / Vault
@@ -377,3 +500,24 @@ every text file is opened as UTF-8.
   if a key page URL redirects, follow it and send a fix.
 - `safeeasyapi mcp` returns recipes; the interactive key paste stays in the
   terminal by design.
+- `forget` removes what safeeasyapi wrote and what a killed write left
+  next to it; it does not find other copies of the file (editor backups,
+  version-control history), and it names - rather than deletes - another
+  hard link to the `.env` file, exiting 1 because the key is still there.
+- Windows: `run` finds `npm.cmd` and other `.cmd`/`.bat` commands through
+  `PATHEXT`. That lookup is tested with a stand-in for the Windows search,
+  not on a Windows machine, and `cmd.exe`, which starts such a file, reads
+  `& | < > ^ %` in its arguments as its own syntax: do not pass one text you
+  do not trust.
+- "Same owner" (the cross-domain prompt) knows a compact snapshot of country
+  registries and hosting platforms, not the whole Public Suffix List: a
+  platform it does not list is treated as an ordinary domain, so two
+  tenants of it do not trigger the prompt. The validation preview always
+  shows the full URL.
+- Windows: the owner-only ACL goes on the `.env` file right after it is
+  moved into place, not before, so for that moment it has the ACL its folder
+  gives it. This is read from the code and checked against a stand-in for
+  `icacls`, not on a Windows machine.
+- The repository's own text files are committed with Windows (CRLF) line
+  endings and there is no `.gitattributes`: keep them when you edit a file.
+  On Linux and macOS `git diff` flags them as trailing whitespace.

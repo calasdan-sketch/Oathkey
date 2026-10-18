@@ -99,7 +99,10 @@ def _cmd_list(catalog: dict) -> int:
     print("\n  services with saved key recipes:\n")
     for slug in sorted(catalog):
         r = catalog[slug]
-        print(f"    {slug:14} {r['display']:38} -> {r['env_var']}")
+        # a recipe is somebody else's text: nothing in it may drive the terminal
+        print(f"    {recipes_mod.printable(slug):14} "
+              f"{recipes_mod.printable(r['display']):38} -> "
+              f"{recipes_mod.printable(r['env_var'])}")
     print("\n  `safeeasyapi connect <service>` to set one up.\n")
     return 0
 
@@ -235,6 +238,18 @@ def keychain_store(recipe: dict, env_file: str, out=None,
     return _store
 
 
+def _describe_links(links) -> str:
+    """The other names of a file, for a message: the ones in its folder by
+    name (shown so that a hostile file name cannot drive the terminal), the
+    rest as a count."""
+    parts = [recipes_mod.printable(name) for name in links.names]
+    if links.elsewhere == 1:
+        parts.append("1 in another folder")
+    elif links.elsewhere:
+        parts.append(f"{links.elsewhere} in other folders")
+    return ", ".join(parts)
+
+
 def _cmd_forget(recipe: dict, env_file: str, out=None,
                 keychain=keychain_mod, remove_env=store_mod.remove_key) -> int:
     """Remove the service's key everywhere it may have been stored: the OS
@@ -243,9 +258,21 @@ def _cmd_forget(recipe: dict, env_file: str, out=None,
     out = out or sys.stdout
     service, env_var = recipe["service"], recipe["env_var"]
     removed = []
+    keychain_problem = None
     backend = keychain.detect_backend()
-    if backend is not None and keychain.delete(service, env_var, backend):
-        removed.append(f"the {keychain.label(backend)} entry")
+    if backend is not None:
+        try:
+            if keychain.delete(service, env_var, backend):
+                removed.append(f"the {keychain.label(backend)} entry")
+        except keychain.KeychainError as e:
+            # The keychain tool hung or would not start. The .env file is
+            # still ours to clean, so carry on - and say plainly that the
+            # keychain entry may still be there.
+            keychain_problem = str(e)
+    # Other names of the file are asked BEFORE the rewrite: afterwards
+    # env_file is a new file with one name, and the old one lives on, key
+    # and all, under the others.
+    links = store_mod.other_links(env_file)
     try:
         lines = remove_env(env_var, env_file)
     except OSError as e:
@@ -253,7 +280,37 @@ def _cmd_forget(recipe: dict, env_file: str, out=None,
         return 1
     if lines:
         removed.append(f"{env_var} from {env_file}")
+    # A write that was killed halfway leaves a whole copy of the file behind.
+    gone, stuck = store_mod.remove_leftovers(env_var, env_file)
+    for path in gone:
+        removed.append(f"a leftover copy in {recipes_mod.printable(path)} "
+                       f"(from an interrupted write)")
+    if keychain_problem:
+        out.write(f"  ✗ could not remove the {keychain.label(backend)} "
+                  f"entry: {keychain_problem}.\n"
+                  f"    The key may still be stored there — run "
+                  f"`safeeasyapi forget {service}` again when it answers.\n")
+    problems = []           # copies of the key that are still on disk
+    for path, why in stuck:
+        problems.append(
+            f"  \u2717 could not remove {recipes_mod.printable(path)}: "
+            f"{recipes_mod.printable(why)}.\n"
+            f"    It is a leftover copy of {recipes_mod.printable(env_file)} "
+            f"from an interrupted write and still holds the key - delete it "
+            f"yourself.\n")
+    if lines and links:
+        problems.append(
+            f"  \u2717 {recipes_mod.printable(env_file)} also has other names "
+            f"(hard links): {_describe_links(links)}.\n"
+            f"    They still hold the old contents, {env_var} included - "
+            f"rewriting a file cannot change its other names.\n"
+            f"    safeeasyapi does not delete files it did not make; delete "
+            f"them yourself if they are stray backups.\n")
+    for text in problems:
+        out.write(text)
     if not removed:
+        if keychain_problem or problems:
+            return 1
         out.write(f"  nothing stored for '{service}' (checked "
                   f"{keychain.label(backend)} and {env_file}).\n")
         return 0
@@ -263,7 +320,7 @@ def _cmd_forget(recipe: dict, env_file: str, out=None,
         both = "both" if lines == 2 else f"all {lines}"
         out.write(f"    note: {env_var} appeared {store_mod.times(lines)} in "
                   f"{env_file}; I removed {both}.\n")
-    return 0
+    return 1 if keychain_problem or problems else 0
 
 
 def _cmd_run(recipe: dict, command: list[str]) -> int:
@@ -280,7 +337,20 @@ def _cmd_run(recipe: dict, command: list[str]) -> int:
               ".env file; load that instead.", file=sys.stderr)
         return 1
     try:
+        # before the keychain is asked for the key: a typo costs no unlock
+        cmd[0] = keychain_mod.locate_program(cmd[0])
+    except keychain_mod.CannotRun as e:
+        print(f"error: {e}", file=sys.stderr)
+        return e.code
+    try:
         return keychain_mod.run_with_key(recipe, cmd, backend)
+    except keychain_mod.CannotRun as e:
+        print(f"error: {e}", file=sys.stderr)
+        return e.code
+    except keychain_mod.KeychainUnavailable as e:
+        print(f"error: the {keychain_mod.label(backend)} did not give the key "
+              f"for '{recipe['service']}': {e}.", file=sys.stderr)
+        return 1
     except keychain_mod.KeychainError:
         print(f"error: no key for '{recipe['service']}' in the "
               f"{keychain_mod.label(backend)} - run "
@@ -341,6 +411,17 @@ def _flush_stdout() -> None:
         flush()
 
 
+def _interrupted() -> int:
+    """Ctrl-C: say so in a line, not a traceback, and use the status a shell
+    reports for a program SIGINT stopped (128 + 2)."""
+    try:
+        sys.stderr.write("\ninterrupted.\n")
+        sys.stderr.flush()
+    except (OSError, ValueError):
+        pass    # nobody is reading stderr either
+    return 130
+
+
 def main(argv: list[str] | None = None) -> int:
     try:
         try:
@@ -361,6 +442,9 @@ def main(argv: list[str] | None = None) -> int:
         if is_closed_pipe(e):
             return _after_broken_pipe()
         raise
+    except KeyboardInterrupt:
+        # Any command, the MCP loop and `run` end up here.
+        return _interrupted()
 
 
 def _main(argv: list[str] | None = None) -> int:
@@ -393,7 +477,8 @@ def _main(argv: list[str] | None = None) -> int:
         if args.store == "keychain":
             store_fn = keychain_store(recipe, args.env_file)
         if args.cmd == "rotate":
-            print(f"\n  rotating {recipe['display']} - the stored key will be replaced.\n")
+            print(f"\n  rotating {recipes_mod.printable(recipe['display'])} - "
+                  f"the stored key will be replaced.\n")
         return connect_mod.connect(recipe, env_file=args.env_file,
                                    browser_open=opener, store_fn=store_fn)
     return 0

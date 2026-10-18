@@ -367,7 +367,10 @@ def serve(catalog: dict[str, dict] | None = None,
             continue
         try:
             request = json.loads(line)
-        except ValueError:
+        except (ValueError, RecursionError):
+            # RecursionError, not ValueError, is what text nested a hundred
+            # thousand brackets deep ("[[[[...") raises: still just a line
+            # we cannot parse
             response = _error(None, PARSE_ERROR, "Parse error")
         else:
             try:
@@ -376,7 +379,15 @@ def serve(catalog: dict[str, dict] | None = None,
                 rid = request.get("id") if isinstance(request, dict) else None
                 response = _error(rid, INTERNAL_ERROR, str(e))
         if response is not None:
-            data = (json.dumps(response) + "\n").encode("utf-8")
+            try:
+                data = (json.dumps(response) + "\n").encode("utf-8")
+            except (ValueError, RecursionError):
+                # The request's `id` is echoed back and may be any JSON
+                # value - one nested too deep to write again. Answer without
+                # it; never let one message end the server.
+                data = (json.dumps(_error(
+                    None, INTERNAL_ERROR, "the reply could not be written"))
+                    + "\n").encode("utf-8")
             if isinstance(writer, io.TextIOBase):
                 writer.write(data.decode("utf-8"))
             else:

@@ -27,7 +27,12 @@ import shutil
 import subprocess
 import sys
 
+from .recipes import printable
+
 TARGET_PREFIX = "safeeasyapi"
+# How long an OS tool (security, secret-tool) may take to answer. A keyring
+# that is waiting for a dialog nobody sees would otherwise hold us forever.
+TOOL_TIMEOUT = 30
 MACOS, WINDOWS, LINUX = "macos-keychain", "windows-credential-manager", "secret-service"
 LABELS = {MACOS: "macOS Keychain", WINDOWS: "Windows Credential Manager",
           LINUX: "Secret Service keyring (secret-tool)"}
@@ -35,6 +40,12 @@ LABELS = {MACOS: "macOS Keychain", WINDOWS: "Windows Credential Manager",
 
 class KeychainError(Exception):
     pass
+
+
+class KeychainUnavailable(KeychainError):
+    """The OS tool could not be run, or did not answer in time. Unlike a
+    plain refusal this says nothing about whether the entry exists, so a
+    caller must not read it as "not stored"."""
 
 
 def target_name(service: str) -> str:
@@ -79,19 +90,20 @@ def _macos(op: str, service: str, account: str, key: str | None, run) -> str | N
         cmd = (f"add-generic-password -U -a {_security_quote(account)} "
                f"-s {_security_quote(target)} -w {_security_quote(key or '')}\n")
         proc = run(["security", "-i"], input=cmd.encode("utf-8"),
-                   capture_output=True, timeout=30)
+                   capture_output=True, timeout=TOOL_TIMEOUT)
         if proc.returncode != 0:
             raise KeychainError("security add-generic-password failed "
                                 f"(exit {proc.returncode})")
         return None
     if op == "read":
         proc = run(["security", "find-generic-password", "-a", account,
-                    "-s", target, "-w"], capture_output=True, timeout=30)
+                    "-s", target, "-w"], capture_output=True,
+                   timeout=TOOL_TIMEOUT)
         if proc.returncode != 0:
             return None
         return proc.stdout.decode("utf-8", "replace").rstrip("\r\n")
     proc = run(["security", "delete-generic-password", "-a", account,
-                "-s", target], capture_output=True, timeout=30)
+                "-s", target], capture_output=True, timeout=TOOL_TIMEOUT)
     return None if proc.returncode == 0 else ""
 
 
@@ -103,17 +115,18 @@ def _secret_tool(op: str, service: str, account: str, key: str | None, run) -> s
         proc = run(["secret-tool", "store", "--label",
                     f"{TARGET_PREFIX} {service} ({account})"] + attrs,
                    input=(key or "").encode("utf-8"), capture_output=True,
-                   timeout=30)
+                   timeout=TOOL_TIMEOUT)
         if proc.returncode != 0:
             raise KeychainError(f"secret-tool store failed (exit {proc.returncode})")
         return None
     if op == "read":
         proc = run(["secret-tool", "lookup"] + attrs, capture_output=True,
-                   timeout=30)
+                   timeout=TOOL_TIMEOUT)
         if proc.returncode != 0 or not proc.stdout:
             return None
         return proc.stdout.decode("utf-8", "replace").rstrip("\r\n")
-    proc = run(["secret-tool", "clear"] + attrs, capture_output=True, timeout=30)
+    proc = run(["secret-tool", "clear"] + attrs, capture_output=True,
+               timeout=TOOL_TIMEOUT)
     return None if proc.returncode == 0 else ""
 
 
@@ -194,14 +207,30 @@ def _windows(op: str, service: str, account: str, key: str | None,
 
 # ------------------------------------------------------------- dispatch
 
+_TOOL_NAMES = {MACOS: "the `security` command", LINUX: "`secret-tool`",
+               WINDOWS: "the Windows Credential Manager"}
+
+
 def _dispatch(op: str, backend: str, service: str, account: str,
               key: str | None, run, ctypes_mod) -> str | None:
-    if backend == MACOS:
-        return _macos(op, service, account, key, run)
-    if backend == LINUX:
-        return _secret_tool(op, service, account, key, run)
-    if backend == WINDOWS:
-        return _windows(op, service, account, key, ctypes_mod)
+    tool = _TOOL_NAMES.get(backend, "the keychain")
+    try:
+        if backend == MACOS:
+            return _macos(op, service, account, key, run)
+        if backend == LINUX:
+            return _secret_tool(op, service, account, key, run)
+        if backend == WINDOWS:
+            return _windows(op, service, account, key, ctypes_mod)
+    except subprocess.TimeoutExpired as e:
+        # Never let this out as a traceback: for `connect` it would arrive
+        # after the key was validated and lose it, for `forget` it would
+        # stop before the .env file was touched. Nothing here names the key
+        # (it travels on stdin, not in argv).
+        raise KeychainUnavailable(
+            f"{tool} did not answer within {e.timeout:g} seconds") from None
+    except (subprocess.SubprocessError, OSError) as e:
+        raise KeychainUnavailable(
+            f"{tool} could not be run ({type(e).__name__})") from None
     raise KeychainError(f"no keychain backend: {backend!r}")
 
 
@@ -235,16 +264,86 @@ def delete(service: str, env_var: str, backend: str | None = None,
                      ctypes_mod) is None
 
 
+class CannotRun(Exception):
+    """The command cannot be started. `code` is the shell's: 127 when it is
+    not there, 126 when it is there but cannot be run. The text names the
+    command, made printable, and nothing else."""
+
+    def __init__(self, code: int, text: str):
+        super().__init__(text)
+        self.code = code
+
+
+BATCH_SUFFIXES = (".cmd", ".bat")
+
+
+def _search_path(env: dict | None, on_windows: bool) -> str:
+    env = os.environ if env is None else env
+    if on_windows:
+        # Windows spells it PATH, Path or path
+        return next((v for k, v in env.items() if k.upper() == "PATH"), "")
+    return env.get("PATH", os.defpath)
+
+
+def _why_not(name: str, search: str) -> CannotRun:
+    """`name` is not a program we can start: not there at all (127), or
+    there but not something that can be run (126) - a shell tells them apart
+    the same way."""
+    shown = printable(name)
+    explicit = bool(os.path.dirname(name))
+    for candidate in ([name] if explicit else
+                      [os.path.join(d, name) for d in search.split(os.pathsep) if d]):
+        if explicit and os.path.isdir(candidate):
+            return CannotRun(126, f"cannot run {shown}: it is a directory")
+        if os.path.isfile(candidate):
+            return CannotRun(126, f"cannot run {shown}: it is there but not "
+                                  f"an executable file")
+    return CannotRun(127, f"command not found: {shown}")
+
+
+def locate_program(name: str, env: dict | None = None, which=shutil.which,
+                   on_windows: bool | None = None) -> str:
+    """Check that `name` can be started, and say what to hand to subprocess.
+
+    Raises CannotRun - before the keychain has been asked for anything, so a
+    typo costs no unlock prompt. On POSIX the name is returned as typed:
+    subprocess searches the child's PATH itself, and argv[0] stays what the
+    person wrote. On Windows CreateProcess looks for `name.exe` only, so a
+    command that is really a batch file (`npm` is `npm.cmd`) would be "not
+    found"; the name is looked up the way the shell does it (PATHEXT) and
+    the full path of a .cmd or .bat file is returned."""
+    if on_windows is None:
+        on_windows = os.name == "nt"
+    search = _search_path(env, on_windows)
+    found = which(name, path=search)
+    if found is None:
+        raise _why_not(name, search)
+    if on_windows and os.path.splitext(found)[1].lower() in BATCH_SUFFIXES:
+        return found
+    return name
+
+
 def run_with_key(recipe: dict, cmd: list[str], backend: str | None = None,
                  env: dict | None = None, read_fn=None, call=None) -> int:
     """Run `cmd` with the recipe's env var injected from the keychain.
     The key goes straight into the child's environment, never to a
-    terminal. Returns the child's exit code; raises KeychainError when no
-    key is stored for the service."""
+    terminal. Returns the child's exit code - 128 plus the signal number for
+    a child a signal stopped, as a shell reports it; raises KeychainError
+    when no key is stored for the service, and CannotRun (126) when the
+    system will not start the command."""
     key = (read_fn or read)(recipe["service"], recipe["env_var"], backend)
     if key is None:
         raise KeychainError(f"no key stored for '{recipe['service']}'")
     child_env = dict(os.environ if env is None else env)
     child_env[recipe["env_var"]] = key
     del key
-    return (call or subprocess.call)(cmd, env=child_env)
+    try:
+        status = (call or subprocess.call)(cmd, env=child_env)
+    except OSError as e:
+        # The caller found the program (locate_program) but the system would
+        # not start it: a script whose interpreter is missing, a file that
+        # is no program, a command line that is too long.
+        raise CannotRun(126, f"cannot run {printable(cmd[0])}: "
+                             f"{printable(e.strerror or type(e).__name__)}"
+                        ) from None
+    return 128 - status if status < 0 else status
