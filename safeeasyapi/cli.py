@@ -149,6 +149,10 @@ def _cmd_add(recipes_dir: str | None) -> int:
         print(f"  '{service}' is not a valid slug: use lowercase letters, "
               "digits, '-' or '_' (1-64 chars), e.g. 'my-api'.")
         return 1
+    reserved = recipes_mod.device_name_problem(service)
+    if reserved:
+        print(f"  {reserved}.")
+        return 1
     recipe = {
         "service": service,
         "display": _prompt("display name"),

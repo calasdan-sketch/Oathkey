@@ -325,6 +325,7 @@ def _send(req: urllib.request.Request, scrubber: _CredentialScrubbingRedirectHan
                     body = resp.read(read_limit + 1)
         except urllib.error.HTTPError as e:
             status = e.code
+            e.close()           # the error object owns the response; Python 3.14 warns when it is only garbage-collected
     except urllib.error.URLError as e:
         raise ValidationError(f"network error during validation: {e.reason}")
     except http.client.HTTPException as e:

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 import re
+import tempfile
 import time
 import urllib.request
 
@@ -20,6 +21,14 @@ from . import __version__
 SOURCE_URL = ("https://raw.githubusercontent.com/public-apis/"
               "public-apis/master/README.md")
 CACHE_TTL = 7 * 24 * 3600
+# How far ahead of the clock a copy's date may be and still count as written
+# just now. A clock that moves in 15 ms steps next to a file system that
+# stamps finer (Windows: the list just downloaded was dated a few
+# milliseconds AHEAD of "now", and the next call downloaded it again), a
+# network drive whose server runs a minute fast, a stick formatted FAT: all
+# of them date a fresh file a little in the future. Days ahead is a clock
+# that was wrong (see _is_fresh).
+CLOCK_SKEW = 3600
 
 _CATEGORY_RE = re.compile(r"^###\s+(.+?)\s*$")
 _ROW_RE = re.compile(
@@ -62,19 +71,46 @@ def cache_path() -> str:
     return os.path.join(d, "public-apis.md")
 
 
+def _is_fresh(path: str) -> bool:
+    """Is the cached file young enough to use? One dated far in the future
+    (the clock was wrong when it was written, a VM snapshot came back) is
+    not: its age is negative, which is "younger than a week" for as long as
+    the future lasts, and the old list would be served all that time. A few
+    seconds ahead is only two clocks that differ (CLOCK_SKEW)."""
+    age = time.time() - os.path.getmtime(path)
+    return -CLOCK_SKEW <= age < CACHE_TTL
+
+
+def _save(path: str, text: str) -> None:
+    """Write the cache in one step: into a temp file next to it, then renamed
+    over it. A reader, or a crash half-way, never meets half a list that
+    carries a fresh date."""
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".public-apis.",
+                               suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
 def fetch(refresh: bool = False) -> str:
-    """Return the README text, using the cache unless stale/refresh."""
+    """Return the README text, using the cache unless stale/refresh. A cache
+    dated in the future counts as stale (see _is_fresh)."""
     path = cache_path()
-    if not refresh and os.path.isfile(path):
-        if time.time() - os.path.getmtime(path) < CACHE_TTL:
-            with open(path, encoding="utf-8") as f:
-                return f.read()
+    if not refresh and os.path.isfile(path) and _is_fresh(path):
+        with open(path, encoding="utf-8") as f:
+            return f.read()
     req = urllib.request.Request(SOURCE_URL,
                                  headers={"User-Agent": f"safeeasyapi/{__version__}"})
     with urllib.request.urlopen(req, timeout=30) as resp:
         text = resp.read().decode("utf-8", errors="replace")
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(text)
+    _save(path, text)
     return text
 
 

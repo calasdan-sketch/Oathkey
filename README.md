@@ -41,11 +41,14 @@ safeeasyapi connect <service> --env-file /path/to/.env
 safeeasyapi connect <service> --store keychain   # OS keychain instead of .env
 safeeasyapi connect <service> --clipboard        # copy-and-go: click Copy, no pasting
 safeeasyapi connect github --via-cli    # zero-copy: the vendor CLI's browser sign-in
+safeeasyapi connect <service> --no-browser       # don't open the key page (its address is printed)
 safeeasyapi run <service> -- <command>  # run with a keychain-stored key in its env
 safeeasyapi rotate <service>            # replace a stored key
 safeeasyapi forget <service>            # remove the key: OS keychain entry + .env line(s)
 safeeasyapi add                         # capture a new service recipe interactively
 safeeasyapi find <query>                # find free public APIs for a task
+safeeasyapi find <query> --category <name>   # only that category (part of its name)
+safeeasyapi find <query> --refresh      # download the directory again now
 safeeasyapi mcp                         # stdio MCP server (for Claude Code)
 ```
 
@@ -80,6 +83,10 @@ $ safeeasyapi connect stripe
 
 (On Windows the line says `owner-only ACL` instead of `mode 0600` — see
 *Where the key goes*.)
+
+`--no-browser` (for `connect` and `rotate`) does not open the key page in
+your browser. Its address is still printed under `Key page:`, so you can
+open it yourself: on another machine, over SSH, in a container.
 
 The validation preview is the security hinge: you see exactly where the
 key will be sent, and the recipe must use `https://` for both the key page
@@ -288,6 +295,12 @@ entry (when this OS has a keychain) and removes the `ENV_VAR=` line from
 the variable is set more than once, every one of those lines goes —
 otherwise an older one would take over again — and it says how many.
 
+On Linux, `secret-tool clear` exits 0 whether or not it found anything, so
+`forget` looks the entry up first and clears it only when it is there. Run
+twice, the second `forget` says `nothing stored` instead of claiming to have
+removed the entry again; an entry that is there and cannot be cleared is
+reported as such, with exit status 1.
+
 `forget` also looks for the temp file an interrupted write (a `kill -9`,
 a power cut) can leave next to the `.env` file - `..env.` and eight
 random characters and `.tmp`, a complete copy of the file - and deletes
@@ -347,7 +360,21 @@ APIs directory (~2,100 free APIs, cached locally for 7 days):
 ```bash
 safeeasyapi find "weather" --auth No        # only keyless APIs
 safeeasyapi find "crypto price" --limit 5
+safeeasyapi find "facts" --category animals # only that category
+safeeasyapi find "weather" --refresh        # download the directory again now
 ```
+
+`--auth` takes the directory's own word (`No`, `apiKey`, `OAuth`, ...) and
+`--limit` caps the list (10 by default). `--category` keeps one category: a
+part of its name, in any case (`animals` finds `Animals`). `--refresh`
+downloads the directory again now, whatever the age of the copy.
+
+A copy older than 7 days is downloaded again, and so is one dated in the
+future by more than an hour (a clock that was wrong when it was saved):
+without that, the old list would be served until that date. A copy dated a
+few seconds or minutes ahead is normal - two clocks never agree exactly - and
+is used. The file is swapped in whole, so an interrupted download never
+leaves half a list behind.
 
 APIs needing a key point straight back at the tunnel:
 
@@ -444,8 +471,14 @@ endpoint), Fireworks (the documented list-models URL is per account).
 Ponytail…); those are saved to `~/.safeeasyapi/recipes/`
 (`%USERPROFILE%\.safeeasyapi\recipes\` on Windows) and override a
 built-in recipe with the same slug. `--recipes-dir` writes elsewhere.
+A recipe file may be saved with Windows (CRLF) line ends and a UTF-8
+byte-order mark, as Windows PowerShell and older Notepad write them: a
+recipe saved with one loads like any other.
 A slug is `[a-z0-9][a-z0-9_-]{0,63}` — it becomes the file name, so
-`../../evil` is refused — and the expected status codes must be numbers
+`../../evil` is refused, and so is a name Windows keeps for a device
+(`con`, `prn`, `aux`, `nul`, `com0` to `com9`, `lpt0` to `lpt9`: a file called
+`nul.json` cannot be saved there, and the refusal says so in one line) —
+and the expected status codes must be numbers
 (`200,201`). The validation call must be a `GET` or `HEAD`: it only
 reads, so a recipe cannot make `connect` send your key with a `DELETE`
 or a `POST`. Besides `bearer` / `header` / `basic`, a recipe's
@@ -570,7 +603,7 @@ is UTF-8 bytes regardless of console code page, console output is
 reconfigured to replace unencodable characters instead of crashing, and
 every text file is opened as UTF-8.
 
-## Scope / limits (v0.4.0)
+## Scope / limits (v0.4.1)
 
 - Keychain storage is best effort and opt-in (`--store keychain`); the
   `.env` file is the default and the fallback. No Doppler / Vault
@@ -594,6 +627,12 @@ every text file is opened as UTF-8.
   platform it does not list is treated as an ordinary domain, so two
   tenants of it do not trigger the prompt. The validation preview always
   shows the full URL.
+- Linux: `secret-tool` is driven through stand-ins in the tests, not against
+  a real Secret Service (GNOME Keyring, KWallet): none was available. That
+  includes `forget`, which relies on `secret-tool lookup` finding nothing
+  (exit status 1) when no entry matches.
+- Windows: the refusal of device names (`nul`, `con`, `com1` ...) as recipe
+  slugs is a plain list of names, tested on Linux, not on a Windows machine.
 - Windows: the owner-only ACL goes on the `.env` file right after it is
   moved into place, not before, so for that moment it has the ACL its folder
   gives it. This is read from the code and checked against a stand-in for

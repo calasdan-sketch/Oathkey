@@ -108,6 +108,26 @@ ENV_VAR_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\Z")
 # like "../../evil" could otherwise write outside the recipes directory.
 SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}\Z")
 
+# On Windows `nul.json`, `con.json`, `com1.json` ... are not files: whatever
+# the extension, the name is a DEVICE (NUL, CON, COM1), so "saving" such a
+# recipe writes into the device and nothing is kept. Microsoft reserves CON,
+# PRN, AUX, NUL, COM0-COM9 and LPT0-LPT9. The slug is the file name, and a
+# recipe made on one machine should be one every machine can keep, so these
+# are refused everywhere.
+WINDOWS_DEVICE_NAMES = frozenset(
+    ["con", "prn", "aux", "nul"]
+    + [f"com{n}" for n in range(10)] + [f"lpt{n}" for n in range(10)])
+
+
+def device_name_problem(slug: str) -> str | None:
+    """One line (no full stop) saying why `slug` is refused when Windows keeps
+    it for a device, else None."""
+    if slug not in WINDOWS_DEVICE_NAMES:
+        return None
+    return (f"'{slug}' is a name Windows keeps for a device (con, prn, aux, "
+            f"nul, com0-com9, lpt0-lpt9), so a file called {slug}.json cannot "
+            f"be saved there - pick another slug, e.g. '{slug}-api'")
+
 
 class RecipeError(ValueError):
     pass
@@ -386,6 +406,9 @@ def validate_recipe(data: dict) -> dict:
         raise RecipeError(
             f"recipe field 'service' must be a slug of lowercase letters, "
             f"digits, '-' or '_' (1-64 chars), got {slug!r}")
+    reserved = device_name_problem(slug)
+    if reserved:
+        raise RecipeError(f"recipe field 'service': {reserved}")
     env_var = data["env_var"]
     if not isinstance(env_var, str) or not ENV_VAR_RE.match(env_var):
         raise RecipeError(
@@ -463,7 +486,10 @@ def _load_dir(directory: str, recipes: dict[str, dict],
             continue
         path = os.path.join(directory, fname)
         try:
-            with open(path, encoding="utf-8") as f:
+            # utf-8-sig: Windows PowerShell 5.1 and older Notepad start a UTF-8
+            # file with a byte-order mark, which json.load refuses ("Unexpected
+            # UTF-8 BOM"). This drops one at the very start and nothing else.
+            with open(path, encoding="utf-8-sig") as f:
                 data = json.load(f)
             validate_recipe(data)
         except (json.JSONDecodeError, RecipeError, OSError, UnicodeDecodeError,

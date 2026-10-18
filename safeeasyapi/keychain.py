@@ -125,9 +125,20 @@ def _secret_tool(op: str, service: str, account: str, key: str | None, run) -> s
         if proc.returncode != 0 or not proc.stdout:
             return None
         return proc.stdout.decode("utf-8", "replace").rstrip("\r\n")
+    # delete. `secret-tool clear` exits 0 whether or not an item matched, so
+    # its exit status cannot say "removed": the entry is looked up first. No
+    # entry is "not stored" (""), and a clear that fails after a hit is an
+    # error, not "nothing stored".
+    found = run(["secret-tool", "lookup"] + attrs, capture_output=True,
+                timeout=TOOL_TIMEOUT)
+    if found.returncode != 0 or not found.stdout:
+        return ""
+    del found                       # it holds the key: only its being there counted
     proc = run(["secret-tool", "clear"] + attrs, capture_output=True,
                timeout=TOOL_TIMEOUT)
-    return None if proc.returncode == 0 else ""
+    if proc.returncode != 0:
+        raise KeychainError(f"secret-tool clear failed (exit {proc.returncode})")
+    return None
 
 
 # --------------------------------------------------------------- Windows
@@ -257,6 +268,8 @@ def read(service: str, env_var: str, backend: str | None = None,
 
 def delete(service: str, env_var: str, backend: str | None = None,
            run=subprocess.run, ctypes_mod=None) -> bool:
+    """True when an entry was there and is removed, False when there was none
+    (or no backend). KeychainError when the tool failed to remove one."""
     backend = backend or detect_backend()
     if backend is None:
         return False
