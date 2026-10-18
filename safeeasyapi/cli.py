@@ -59,6 +59,12 @@ def _build_parser() -> argparse.ArgumentParser:
                             "available; use `safeeasyapi run` to consume it.")
         c.add_argument("--no-browser", action="store_true",
                        help="Don't auto-open the key page.")
+        c.add_argument("--clipboard", action="store_true",
+                       help="Copy-and-go: click the vendor's Copy button and the key "
+                            "is taken from the clipboard (then emptied) - no pasting.")
+        c.add_argument("--via-cli", action="store_true",
+                       help="Get the key from the vendor's own CLI after its browser "
+                            "sign-in (built-in recipes that support it, e.g. github).")
 
     sub.add_parser("list", help="List services with saved recipes.")
 
@@ -102,7 +108,7 @@ def _cmd_list(catalog: dict) -> int:
         # a recipe is somebody else's text: nothing in it may drive the terminal
         print(f"    {recipes_mod.printable(slug):14} "
               f"{recipes_mod.printable(r['display'], words=True):38} -> "
-              f"{recipes_mod.printable(r['env_var'])}")
+              f"{', '.join(recipes_mod.printable(v) for v in recipes_mod.env_vars(r))}")
     print("\n  `safeeasyapi connect <service>` to set one up.\n")
     return 0
 
@@ -486,7 +492,9 @@ def _main(argv: list[str] | None = None) -> int:
         if args.cmd == "run":
             return _cmd_run(recipe, args.command)
         if args.cmd == "forget":
-            return _cmd_forget(recipe, args.env_file)
+            # one pass per stored value: an App ID and its secret are both removed
+            return max(_cmd_forget(dict(recipe, env_var=var), args.env_file)
+                       for var in recipes_mod.env_vars(recipe))
         import webbrowser
         opener = (lambda url: None) if args.no_browser else webbrowser.open
         store_fn = None
@@ -496,8 +504,17 @@ def _main(argv: list[str] | None = None) -> int:
             print(f"\n  rotating "
                   f"{recipes_mod.printable(recipe['display'], words=True)} - "
                   f"the stored key will be replaced.\n")
+        clip = None
+        if args.clipboard:
+            from . import clipboard as clipboard_mod
+            try:
+                clip = clipboard_mod.backend()
+            except clipboard_mod.Unavailable as e:
+                print(f"  (copy-and-go unavailable: {recipes_mod.printable(e)} - "
+                      f"using the hidden paste instead)")
         return connect_mod.connect(recipe, env_file=args.env_file,
-                                   browser_open=opener, store_fn=store_fn)
+                                   browser_open=opener, store_fn=store_fn,
+                                   clipboard=clip, via_cli=args.via_cli)
     return 0
 
 

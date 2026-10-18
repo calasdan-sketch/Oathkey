@@ -39,6 +39,8 @@ safeeasyapi list                        # services with saved recipes
 safeeasyapi connect <service>           # guided key setup -> .env
 safeeasyapi connect <service> --env-file /path/to/.env
 safeeasyapi connect <service> --store keychain   # OS keychain instead of .env
+safeeasyapi connect <service> --clipboard        # copy-and-go: click Copy, no pasting
+safeeasyapi connect github --via-cli    # zero-copy: the vendor CLI's browser sign-in
 safeeasyapi run <service> -- <command>  # run with a keychain-stored key in its env
 safeeasyapi rotate <service>            # replace a stored key
 safeeasyapi forget <service>            # remove the key: OS keychain entry + .env line(s)
@@ -368,6 +370,44 @@ discovers free APIs instead of improvising or reaching for paid services:
 
 No secrets ever pass through MCP — only public how-to.
 
+## Copy-and-go, two-value keys, every kind of check (0.4.0)
+
+**Copy-and-go** (`--clipboard`): instead of pasting, click the vendor's own
+**Copy** button. safeeasyapi notices the new, key-shaped value on the
+clipboard, takes it and **empties the clipboard**, then validates and
+stores it as usual; nothing is typed, pasted or shown. It looks only while
+it is waiting for a key, takes only a value that matches the field's
+`pattern` (when the recipe has one) or looks like a key (one line, no
+spaces, 8-4096 visible characters, different from what was already on the
+clipboard), and falls back to the hidden prompt after 3 minutes or when no
+clipboard tool exists (Windows needs nothing; macOS uses `pbpaste`; Linux
+`wl-paste`, `xclip` or `xsel`). Windows clipboard history (Win+V) and
+clipboard managers can keep their own copy, which safeeasyapi cannot clear.
+
+**Zero-copy** (`--via-cli`): for a built-in recipe whose vendor has a CLI
+with a browser sign-in (`github` uses `gh auth login --web`), safeeasyapi
+runs that sign-in and reads the token from the CLI, then validates and
+stores it. The programs a recipe may run are fixed in the code
+(`recipes.CLI_PROGRAMS`); a recipe from `~/.safeeasyapi` cannot use this.
+
+**Two-value credentials**: a recipe may list several `fields` (an App ID
+and a secret, an access key and its secret). Each is collected hidden (or
+copied), they are validated together, and each is stored under its own
+variable; `run` injects them all and `forget` removes them all.
+
+**Every common check**: besides `bearer`, `header` and `basic`, a recipe can
+use `headers` (several headers from `{field}` templates), `basic` with a
+field as the username (`username_field`), `query` (the key as a URL
+parameter; such a request follows no redirect), `oauth2_client_credentials`
+(the client id and secret go in ONE POST to the vendor's `token_url`, which
+follows no redirect, is shown in the preview, must be `https://` and needs
+a typed `yes` on another domain; the short-lived token then makes the
+`GET`, or with `token_only` the token answer is the verdict), and
+`aws_sigv4` (a signed STS `GetCallerIdentity`; the secret signs and is
+never sent, and the signature is tested against botocore's). A recipe is
+refused at load time when it names a field it does not collect, collects
+one it never checks, or puts its token endpoint on `http://`.
+
 ## Why it exists
 
 Agents (and humans) forget per-service key flows and improvise imprecise
@@ -376,7 +416,7 @@ exact click path, scopes, and a validation endpoint. Teach it once with
 `safeeasyapi add`, use it forever — and Claude Code can pull the exact recipe via
 `safeeasyapi mcp` instead of guessing.
 
-Ships with 29 recipes inside the package (so `pip install` carries
+Ships with 35 recipes inside the package (so `pip install` carries
 them), each checked against the provider's own docs for the key page,
 the validation endpoint and the auth header, and smoke-tested live with
 a fake key (every one answers with a clean "key rejected"):
@@ -388,12 +428,14 @@ a fake key (every one answers with a clean "key rejected"):
 | infra | `github`, `supabase` (Management API token), `vercel`, `netlify`, `cloudflare`, `pinecone` |
 | email / payments | `stripe`, `resend`, `sendgrid`, `mailgun`, `postmark` (server token) |
 | productivity / search | `notion`, `airtable`, `discord` (bot token), `tavily`, `brave-search` |
+| two values / other checks (0.4.0) | `ebay` and `spotify` (OAuth2 client credentials), `paypal` (OAuth2, token only), `twilio` (Account SID + token), `aws` (SigV4), `openweather` (key in the URL) |
 
 Each validation call is a free, read-only request (list models, "who am
 I", verify token) — except `brave-search`, whose only authenticated
 endpoint is the search itself, so validating costs one tiny query (the
-recipe says so). Not included because the shape does not fit a
-one-key/one-GET check: Twilio (Account SID + token pair), Slack (`auth.test`
+recipe says so). The 0.4.0 recipes were written from each provider's docs,
+checked against a local fake API, and smoke-tested live with fake
+credentials (each answers "rejected"). Not included: Slack (`auth.test`
 answers HTTP 200 even to a bad token), Linear (GraphQL needs a POST
 body), Shopify (per-store URL), Perplexity/Exa/Serper (no free GET
 endpoint), Fireworks (the documented list-models URL is per account).
@@ -471,6 +513,10 @@ read, not a traceback.
   one leeway: a space of another width and a joiner between two visible
   characters are text in a name, a step or a scope - the list of what is
   refused is in *A connect, annotated*.)
+- The only POST safeeasyapi sends is the OAuth2 token request, to the
+  `token_url` the recipe names and shown before anything is asked for;
+  it and a `query` request follow no redirect. Copy-and-go empties the
+  clipboard as soon as it takes a value.
 - Recipes must use `https://` for the key page and the validation URL —
   plain-`http://` recipes (and ones whose URL is malformed) are rejected
   at load time.
@@ -524,7 +570,7 @@ is UTF-8 bytes regardless of console code page, console output is
 reconfigured to replace unencodable characters instead of crashing, and
 every text file is opened as UTF-8.
 
-## Scope / limits (v0.3.3)
+## Scope / limits (v0.4.0)
 
 - Keychain storage is best effort and opt-in (`--store keychain`); the
   `.env` file is the default and the fallback. No Doppler / Vault

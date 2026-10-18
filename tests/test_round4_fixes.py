@@ -597,7 +597,9 @@ class TestShippedCatalog(unittest.TestCase):
                 "together", "elevenlabs", "deepgram", "assemblyai", "replicate",
                 "supabase", "vercel", "netlify", "cloudflare", "sendgrid", "mailgun",
                 "postmark", "notion", "airtable", "pinecone", "tavily",
-                "brave-search", "discord"}
+                "brave-search", "discord",
+                # 0.4.0: two-value credentials and the other check types
+                "ebay", "twilio", "paypal", "spotify", "aws", "openweather"}
 
     def test_every_recipe_parses_is_https_and_matches_its_file(self):
         err = io.StringIO()
@@ -618,11 +620,16 @@ class TestShippedCatalog(unittest.TestCase):
                 self.assertEqual(host, connect_mod._host(r["validate"]["url"]), slug)
             # validation requests are buildable with every shape used, and
             # the credential lands in the header the recipe names
-            req = validate_mod._build_request(r["validate"], "k")
+            atype = r["validate"]["auth"]["type"]
+            creds = {f["name"]: "k" + f["name"] for f in recipes_mod.fields(r)}
+            req = validate_mod._build_request(r["validate"], creds, bearer_token="ktoken")
+            if atype == "query":
+                self.assertIn("k" + recipes_mod.DEFAULT_FIELD, req.full_url, slug)
+                continue
             cred = validate_mod._credential_header(r["validate"])
             self.assertTrue(req.has_header(cred.capitalize()), (slug, cred))
             sent = req.get_header(cred.capitalize())
-            if r["validate"]["auth"]["type"] == "basic":
+            if atype == "basic":
                 import base64
                 sent = base64.b64decode(sent.split(" ", 1)[1]).decode()
             self.assertIn("k", sent, slug)

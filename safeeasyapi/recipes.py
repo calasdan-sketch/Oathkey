@@ -25,6 +25,36 @@ Schema:
     "trusted_hosts": ["api.vendor.net"]       # optional, BUILT-IN recipes
   }                              #   only: validation hosts of the same
 }                                #   vendor under another domain
+
+Credentials of more than one value (an App ID and a secret, an access key
+and its secret) are listed in "fields"; without it the recipe has the one
+field "key" stored as env_var:
+
+  "fields": [
+    {"name": "app_id", "env_var": "EBAY_APP_ID", "label": "App ID (Client ID)",
+     "pattern": "^[A-Za-z0-9-]+-PRD-[0-9a-f-]+$"},     # optional: lets the
+    {"name": "cert_id", "env_var": "EBAY_CERT_ID",     #   clipboard capture
+     "label": "Cert ID (Client Secret)"}               #   recognise a copy
+  ],                                    # env_var must be the first field's
+
+More auth shapes, each naming the fields it uses (default "key"):
+    {"type": "bearer", "field": "token"}
+    {"type": "header", "header": "X-Key", "field": "key"}
+    {"type": "headers", "headers": {"X-App-Id": "{app_id}", "X-Key": "{key}"}}
+    {"type": "basic", "username_field": "sid", "password_field": "token"}
+    {"type": "query", "param": "appid"}            # follows no redirect
+    {"type": "oauth2_client_credentials", "token_url": "https://...",
+     "client_id_field": "app_id", "client_secret_field": "cert_id",
+     "scope": "...", "send": "basic" | "body", "token_only": false}
+    {"type": "aws_sigv4", "region": "us-east-1", "service": "sts",
+     "access_key_field": "access_key_id", "secret_key_field": "secret_access_key"}
+
+Every field must be used by the auth, so nothing is collected that the
+check does not prove. The token_url gets the only POST safeeasyapi makes.
+
+"cli_token" (BUILT-IN recipes only) gets the key from the vendor's own CLI
+after its browser sign-in, so nothing is copied at all:
+  "cli_token": {"login": ["gh", "auth", "login", "--web"], "token": ["gh", "auth", "token"]}
 """
 
 from __future__ import annotations
@@ -49,7 +79,18 @@ def user_recipes_dir() -> str:
 
 REQUIRED = ("service", "display", "key_url", "env_var", "steps", "validate")
 VALIDATE_REQUIRED = ("method", "url", "auth", "expect")
-AUTH_TYPES = ("bearer", "header", "basic")
+AUTH_TYPES = ("bearer", "header", "headers", "basic", "query",
+              "oauth2_client_credentials", "aws_sigv4")
+DEFAULT_FIELD = "key"
+FIELD_NAME_RE = re.compile(r"^[a-z_][a-z0-9_]{0,31}\Z")
+HEADER_NAME_RE = re.compile(r"^[A-Za-z0-9!#$%&'*+.^_`|~-]{1,64}\Z")
+PLACEHOLDER_RE = re.compile(r"\{([a-z_][a-z0-9_]*)\}")
+MAX_FIELDS = 6
+MAX_PATTERN = 200
+# Programs a built-in recipe may run to fetch a key after the vendor's own
+# browser sign-in. Fixed here, not in the recipe: a recipe never chooses
+# what runs on your computer.
+CLI_PROGRAMS = ("gh",)
 # A validation call proves a key by READING something. A recipe from
 # somebody else must not be able to make `connect` send the real key with a
 # DELETE or a POST to an endpoint on the key's own domain, where the
@@ -192,6 +233,146 @@ def _invisible_problem(data) -> str | None:
             f"or invisible character ({shown}) - a recipe is plain text")
 
 
+def fields(recipe: dict) -> list[dict]:
+    """The values a recipe collects, in order: [{name, env_var, label,
+    pattern}]. A recipe without "fields" has one: "key", stored as its
+    env_var."""
+    listed = recipe.get("fields")
+    if not listed:
+        return [{"name": DEFAULT_FIELD, "env_var": recipe["env_var"],
+                 "label": "API key", "pattern": None}]
+    return [{"name": f["name"], "env_var": f["env_var"],
+             "label": f.get("label") or f["name"], "pattern": f.get("pattern")}
+            for f in listed]
+
+
+def env_vars(recipe: dict) -> list[str]:
+    """Every variable the recipe stores, in field order."""
+    return [f["env_var"] for f in fields(recipe)]
+
+
+def _check_fields(data: dict) -> None:
+    listed = data.get("fields")
+    if listed is None:
+        return
+    if not isinstance(listed, list) or not 1 <= len(listed) <= MAX_FIELDS:
+        raise RecipeError(f"'fields' must be a list of 1 to {MAX_FIELDS} fields")
+    names, envs = set(), set()
+    for f in listed:
+        if not isinstance(f, dict):
+            raise RecipeError("each entry in 'fields' must be an object")
+        name, env = f.get("name"), f.get("env_var")
+        if not isinstance(name, str) or not FIELD_NAME_RE.match(name):
+            raise RecipeError(f"field name must be lowercase letters, digits or '_': {name!r}")
+        if not isinstance(env, str) or not ENV_VAR_RE.match(env):
+            raise RecipeError(f"field '{name}' env_var is not a valid shell variable name: {env!r}")
+        if name in names or env in envs:
+            raise RecipeError(f"field '{name}' repeats a name or env_var")
+        names.add(name)
+        envs.add(env)
+        label = f.get("label")
+        if label is not None and not (isinstance(label, str) and label.strip()):
+            raise RecipeError(f"field '{name}' label must be text")
+        pattern = f.get("pattern")
+        if pattern is not None:
+            if not isinstance(pattern, str) or not pattern or len(pattern) > MAX_PATTERN:
+                raise RecipeError(f"field '{name}' pattern must be a regular expression "
+                                  f"of at most {MAX_PATTERN} characters")
+            try:
+                re.compile(pattern)
+            except re.error as e:
+                raise RecipeError(f"field '{name}' pattern does not compile: {e}") from None
+    if data["env_var"] != listed[0]["env_var"]:
+        raise RecipeError("env_var must be the first field's env_var")
+
+
+def _need(auth: dict, key: str, what: str) -> str:
+    value = auth.get(key)
+    if not isinstance(value, str) or not value.strip():
+        raise RecipeError(f"auth.type '{auth['type']}' needs auth.{key} ({what})")
+    return value
+
+
+def _check_auth(auth: dict, known: set[str]) -> None:
+    """Every field the auth names exists, and every field is used."""
+    atype = auth["type"]
+    used: set[str] = set()
+
+    def field(key: str, default: str = DEFAULT_FIELD) -> None:
+        name = auth.get(key, default)
+        if not isinstance(name, str) or name not in known:
+            raise RecipeError(f"auth.{key} names field {name!r}, which is not in 'fields'")
+        used.add(name)
+
+    if atype == "header":
+        header = _need(auth, "header", "a header name")
+        if not HEADER_NAME_RE.match(header):
+            raise RecipeError(f"auth.header is not a header name: {header!r}")
+        field("field")
+    elif atype == "bearer":
+        field("field")
+    elif atype == "headers":
+        headers = auth.get("headers")
+        if not isinstance(headers, dict) or not headers:
+            raise RecipeError("auth.type 'headers' needs auth.headers {name: \"{field}\"}")
+        for name, tpl in headers.items():
+            if not isinstance(name, str) or not HEADER_NAME_RE.match(name) or not isinstance(tpl, str):
+                raise RecipeError(f"auth.headers entry {name!r} is not a header name and template")
+            refs = PLACEHOLDER_RE.findall(tpl)
+            if not refs:
+                raise RecipeError(f"auth.headers[{name}] must hold a {{field}} placeholder")
+            for ref in refs:
+                if ref not in known:
+                    raise RecipeError(f"auth.headers[{name}] names unknown field {ref!r}")
+                used.add(ref)
+    elif atype == "basic":
+        if "username_field" in auth:
+            field("username_field")
+        field("password_field")
+    elif atype == "query":
+        param = _need(auth, "param", "the query parameter name")
+        if not re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", param):
+            raise RecipeError(f"auth.param is not a plain parameter name: {param!r}")
+        field("field")
+    elif atype == "oauth2_client_credentials":
+        _need(auth, "token_url", "the vendor's OAuth2 token endpoint")
+        field("client_id_field", "client_id")
+        field("client_secret_field", "client_secret")
+        if auth.get("send", "basic") not in ("basic", "body"):
+            raise RecipeError("auth.send must be 'basic' or 'body'")
+        scope = auth.get("scope")
+        if scope is not None and not isinstance(scope, str):
+            raise RecipeError("auth.scope must be text")
+        if not isinstance(auth.get("token_only", False), bool):
+            raise RecipeError("auth.token_only must be true or false")
+    elif atype == "aws_sigv4":
+        for key in ("region", "service"):
+            if not re.fullmatch(r"[a-z0-9-]{2,32}", str(auth.get(key, ""))):
+                raise RecipeError(f"auth.type 'aws_sigv4' needs auth.{key} (e.g. us-east-1 / sts)")
+        field("access_key_field", "access_key_id")
+        field("secret_key_field", "secret_access_key")
+        if "session_token_field" in auth:
+            field("session_token_field")
+    unused = known - used
+    if unused:
+        raise RecipeError(f"fields {sorted(unused)} are collected but never checked by the auth")
+
+
+def _check_cli_token(data: dict) -> None:
+    cli = data.get("cli_token")
+    if cli is None:
+        return
+    if not isinstance(cli, dict) or set(cli) - {"login", "token"} or "token" not in cli:
+        raise RecipeError("cli_token must be {\"login\": [...], \"token\": [...]}")
+    for key, argv in cli.items():
+        if not (isinstance(argv, list) and argv and all(isinstance(a, str) and a for a in argv)):
+            raise RecipeError(f"cli_token.{key} must be a list of arguments")
+        if argv[0] not in CLI_PROGRAMS:
+            raise RecipeError(f"cli_token may only run {', '.join(CLI_PROGRAMS)}")
+    if data.get("fields") and len(data["fields"]) > 1:
+        raise RecipeError("cli_token works for single-key recipes only")
+
+
 def validate_recipe(data: dict) -> dict:
     problem = _invisible_problem(data)
     if problem:
@@ -248,10 +429,15 @@ def validate_recipe(data: dict) -> dict:
     if hosts is not None and not (isinstance(hosts, list) and all(
             isinstance(h, str) and h for h in hosts)):
         raise RecipeError("validate.trusted_hosts must be a list of hostnames")
-    # A pasted key must never travel in cleartext: the mint page and the
-    # validation endpoint must both be HTTPS.
-    for label, url in (("key_url", data["key_url"]),
-                       ("validate.url", v["url"])):
+    _check_fields(data)
+    _check_auth(auth, {f["name"] for f in fields(data)})
+    _check_cli_token(data)
+    # A pasted key must never travel in cleartext: the mint page, the
+    # validation endpoint and any token endpoint must all be HTTPS.
+    urls = [("key_url", data["key_url"]), ("validate.url", v["url"])]
+    if auth["type"] == "oauth2_client_credentials":
+        urls.append(("validate.auth.token_url", auth["token_url"]))
+    for label, url in urls:
         try:
             scheme = urllib.parse.urlsplit(url).scheme.lower()
         except ValueError:

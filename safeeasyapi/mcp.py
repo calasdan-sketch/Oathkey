@@ -105,9 +105,11 @@ def _argument_problem(schema: dict, args: dict) -> str | None:
 
 
 def _public_recipe(recipe: dict) -> dict:
-    return {k: recipe.get(k) for k in
-            ("service", "display", "key_url", "steps", "scopes",
-             "env_var", "docs")}
+    out = {k: recipe.get(k) for k in
+           ("service", "display", "key_url", "steps", "scopes",
+            "env_var", "docs")}
+    out["env_vars"] = recipes_mod.env_vars(recipe)
+    return out
 
 
 def _pa_entries(loader) -> list[dict]:
@@ -273,7 +275,8 @@ def handle(request, catalog: dict[str, dict],
             return err(INVALID_PARAMS, f"Invalid params: {problem}")
         if name == "list_services":
             services = [{"service": r["service"], "display": r["display"],
-                         "env_var": r["env_var"]}
+                         "env_var": r["env_var"],
+                         "env_vars": recipes_mod.env_vars(r)}
                         for r in catalog.values()]
             return ok({"content": [{"type": "text",
                                     "text": json.dumps(services)}]})

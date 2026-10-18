@@ -331,12 +331,15 @@ def run_with_key(recipe: dict, cmd: list[str], backend: str | None = None,
     a child a signal stopped, as a shell reports it; raises KeychainError
     when no key is stored for the service, and CannotRun (126) when the
     system will not start the command."""
-    key = (read_fn or read)(recipe["service"], recipe["env_var"], backend)
-    if key is None:
-        raise KeychainError(f"no key stored for '{recipe['service']}'")
+    from .recipes import env_vars
     child_env = dict(os.environ if env is None else env)
-    child_env[recipe["env_var"]] = key
-    del key
+    for var in env_vars(recipe):
+        key = (read_fn or read)(recipe["service"], var, backend)
+        if key is None:
+            raise KeychainError(f"no key stored for '{recipe['service']}'"
+                                + ("" if var == recipe["env_var"] else f" ({var})"))
+        child_env[var] = key
+        del key
     try:
         status = (call or subprocess.call)(cmd, env=child_env)
     except OSError as e:

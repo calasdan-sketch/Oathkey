@@ -1,18 +1,40 @@
-"""Key validation: one minimal API call to prove the key works.
+"""Key validation: one minimal API call to prove the credentials work.
 
 Only the HTTP status is inspected - response bodies are discarded
-immediately so nothing secret-adjacent lingers.
+immediately so nothing secret-adjacent lingers. The one exception is the
+OAuth2 token exchange, whose JSON answer is read for its access_token and
+dropped as soon as the validation call has used it.
 
-Redirects: the credential header travels ONLY to the origin named in the
-recipe. If the validation endpoint redirects to another host, another
-port, or from https to http, the credential is stripped before the
-redirect is followed (what browsers and `requests` do) and the result is
-reported as a validation error, because a response from somewhere else
-proves nothing about the key.
+A credential is one value or several (see recipes.fields): an API key, an
+App ID plus a secret, an AWS access key plus its secret. `validate_key`
+takes either the single key as a string or a {field name: value} dict.
 
-A key an HTTP header cannot carry (a character outside Latin-1, a line
+Auth shapes (recipes.AUTH_TYPES):
+
+- bearer:  ``Authorization: <scheme> <value>``
+- header:  the raw value in one named header
+- headers: several named headers, each a value template ("{app_id}")
+- basic:   HTTP Basic - a static username or a field as the username, and
+           the key as the password
+- query:   the value as a URL query parameter (``?appid=...``); such a
+           request follows NO redirect, because the key is in the URL
+- oauth2_client_credentials: POST the client id and secret to the vendor's
+           token endpoint (the ONLY POST safeeasyapi ever makes, and only to
+           the token_url the recipe names), then GET validate.url with the
+           temporary token - or, with token_only, judge the token answer
+- aws_sigv4: an AWS Signature Version 4 signed GET (STS GetCallerIdentity)
+
+Redirects: credentials travel ONLY to the origin named in the recipe. If
+the validation endpoint redirects to another host, another port, or from
+https to http, the credential headers are stripped before the redirect is
+followed (what browsers and `requests` do) and the result is reported as a
+validation error, because a response from somewhere else proves nothing
+about the key. Requests that carry a credential where a header cannot be
+stripped (the URL, a POST body) follow no redirect at all.
+
+A value an HTTP request cannot carry (a character outside Latin-1, a line
 break or any other character that cannot be seen) is refused BEFORE any
-request is built, with a sentence that never repeats the key
+request is built, with a sentence that never repeats the value
 (UnsendableKey). Whatever else the HTTP library refuses to put in a
 header is reported without its message, which can hold the whole header
 value - the key included.
@@ -21,17 +43,25 @@ value - the key included.
 from __future__ import annotations
 
 import base64
+import datetime
+import hashlib
+import hmac
 import http.client
+import json
+import re
 import urllib.error
 import urllib.parse
 import urllib.request
 
 from . import __version__
-from .recipes import ALLOWED_METHODS, printable
+from .recipes import ALLOWED_METHODS, DEFAULT_FIELD, printable
 
 USER_AGENT = f"safeeasyapi/{__version__}"
 DEFAULT_PORTS = {"http": 80, "https": 443}
 REJECT_DEFAULT = (401, 403)
+TOKEN_REJECT = (400, 401, 403)    # OAuth2: invalid_client is usually a 400 or 401
+MAX_TOKEN_BYTES = 64 * 1024       # an access-token answer is a few KB at most
+PLACEHOLDER = re.compile(r"\{([a-z_][a-z0-9_]*)\}")
 
 
 class ValidationError(Exception):
@@ -45,13 +75,15 @@ NOT_LATIN_1 = ("a character outside Latin-1 (a curly quote or an emoji, say), "
 
 
 class UnsendableKey(ValidationError):
-    """The key cannot go into the request: it holds a character an HTTP
-    header cannot carry. Raised before anything is built or sent. `reason`
-    completes "the key contains ..." and never repeats the key."""
+    """A value cannot go into the request: it holds a character an HTTP
+    request cannot carry. Raised before anything is built or sent. `reason`
+    completes "the key contains ..." and never repeats the value; `field`
+    names which value (None for a single-key recipe)."""
 
-    def __init__(self, reason: str):
+    def __init__(self, reason: str, field: str | None = None):
         super().__init__(f"the key contains {reason}")
         self.reason = reason
+        self.field = field
 
 
 def _unsendable_reason(atype: str, key: str) -> str | None:
@@ -59,13 +91,14 @@ def _unsendable_reason(atype: str, key: str) -> str | None:
 
     http.client puts a header value on the wire as Latin-1 and refuses a
     line break in it - and its error message holds the whole value. Basic
-    auth base64-encodes the key (as UTF-8), so any visible character does
-    for it. A character that cannot be seen is refused for every kind: in a
-    pasted key it is nearly always a copy accident, and the .env file
-    refuses it too."""
+    auth base64-encodes the key (as UTF-8), and a query parameter, a POST
+    body and a signing secret are percent-encoded or hashed, so any visible
+    character does for those. A character that cannot be seen is refused
+    for every kind: in a pasted key it is nearly always a copy accident, and
+    the .env file refuses it too."""
     if not key.isprintable():
         return NOT_PRINTABLE
-    if atype != "basic":
+    if atype not in ("basic", "query", "body", "secret"):
         try:
             key.encode("latin-1")
         except UnicodeEncodeError:
@@ -73,29 +106,61 @@ def _unsendable_reason(atype: str, key: str) -> str | None:
     return None
 
 
-def _credential_header(spec: dict) -> str:
+def _creds(key) -> dict[str, str]:
+    """A single key string becomes {DEFAULT_FIELD: key}."""
+    return {DEFAULT_FIELD: key} if isinstance(key, str) else dict(key)
+
+
+def _value(creds: dict[str, str], name: str, kind: str) -> str:
+    """The credential called `name`, checked for what `kind` of carrier
+    can hold. A recipe that names a field nobody filled in is a bug in the
+    recipe, said without any value."""
+    if name not in creds:
+        raise ValidationError(f"recipe auth names field '{printable(name)}' "
+                              f"but no value was collected for it")
+    value = creds[name]
+    reason = _unsendable_reason(kind, value)
+    if reason:
+        raise UnsendableKey(reason, None if name == DEFAULT_FIELD else name)
+    return value
+
+
+def _fill(template: str, creds: dict[str, str], kind: str) -> str:
+    return PLACEHOLDER.sub(lambda m: _value(creds, m.group(1), kind), template)
+
+
+def _credential_headers(spec: dict) -> set[str]:
+    """Lower-case names of every header that carries a credential - the ones
+    stripped when a redirect leaves the origin."""
     auth = spec.get("auth", {})
     atype = auth.get("type", "bearer")
-    if atype in ("bearer", "basic"):
-        return "Authorization"
+    if atype in ("bearer", "basic", "oauth2_client_credentials"):
+        return {"authorization"}
+    if atype == "aws_sigv4":
+        return {"authorization", "x-amz-security-token"}
     if atype == "header":
-        return auth["header"]
+        return {auth["header"].lower()}
+    if atype == "headers":
+        return {name.lower() for name in auth["headers"]}
+    if atype == "query":
+        return set()
     raise ValidationError(f"unknown auth type: {atype}")
 
 
-def _build_request(spec: dict, key: str) -> urllib.request.Request:
-    """The one request that proves the key. Auth shapes:
+def _credential_header(spec: dict) -> str:
+    """The main credential header (kept for callers of the one-header API)."""
+    names = _credential_headers(spec)
+    return "Authorization" if "authorization" in names or not names else next(iter(names))
 
-    - bearer: ``Authorization: <scheme> <key>`` — scheme defaults to
-      ``Bearer``; Deepgram uses ``Token``, Discord bots use ``Bot``.
-    - header: the raw key in the named header (``x-api-key``, ``xi-api-key``).
-    - basic:  HTTP Basic with the key as the password when ``username`` is
-      given (Mailgun: ``api:<key>``), else the key as the username.
 
-    ``spec["headers"]`` adds static headers some APIs insist on
-    (``anthropic-version``, ``Notion-Version``); the credential header
-    always wins over a same-named static one.
-    """
+def _base_headers(spec: dict) -> dict[str, str]:
+    headers: dict[str, str] = {"User-Agent": USER_AGENT}
+    for name, value in (spec.get("headers") or {}).items():
+        headers[str(name)] = str(value)
+    return headers
+
+
+def _check_method(spec: dict) -> str:
     method = str(spec.get("method", "GET")).upper()
     if method not in ALLOWED_METHODS:
         # The loader refuses such a recipe; this is for one that never went
@@ -103,29 +168,96 @@ def _build_request(spec: dict, key: str) -> urllib.request.Request:
         raise ValidationError(
             f"validate.method must be GET or HEAD - a validation call only "
             f"reads - got {printable(spec.get('method'))!r}")
+    return method
+
+
+def _build_request(spec: dict, key, bearer_token: str | None = None) -> urllib.request.Request:
+    """The one request that proves the credentials. `key` is the single key
+    (a string) or {field: value}. See the module docstring for the auth
+    shapes; ``spec["headers"]`` adds static headers some APIs insist on
+    (``anthropic-version``, ``Notion-Version``) and a credential header
+    always wins over a same-named static one."""
+    method = _check_method(spec)
+    creds = _creds(key)
     url = spec["url"]
     auth = spec.get("auth", {})
     atype = auth.get("type", "bearer")
-    reason = _unsendable_reason(atype, key)
-    if reason:
-        raise UnsendableKey(reason)
-    headers: dict[str, str] = {"User-Agent": USER_AGENT}
-    for name, value in (spec.get("headers") or {}).items():
-        headers[str(name)] = str(value)
+    headers = _base_headers(spec)
     if atype == "bearer":
         scheme = auth.get("scheme") or "Bearer"
-        headers["Authorization"] = f"{scheme} {key}"
+        headers["Authorization"] = f"{scheme} {_value(creds, auth.get('field', DEFAULT_FIELD), atype)}"
     elif atype == "header":
-        headers[auth["header"]] = key
+        headers[auth["header"]] = _value(creds, auth.get("field", DEFAULT_FIELD), atype)
+    elif atype == "headers":
+        filled = {name: _fill(tpl, creds, "header") for name, tpl in auth["headers"].items()}
+        headers.update(filled)
     elif atype == "basic":
-        username = auth.get("username")
-        pair = f"{username}:{key}" if username else f"{key}:"
-        creds = base64.b64encode(pair.encode()).decode()
-        headers["Authorization"] = f"Basic {creds}"
+        if auth.get("username_field"):
+            user = _value(creds, auth["username_field"], "basic")
+            password = _value(creds, auth.get("password_field", DEFAULT_FIELD), "basic")
+            pair = f"{user}:{password}"
+        else:
+            key_value = _value(creds, auth.get("password_field", DEFAULT_FIELD), "basic")
+            username = auth.get("username")
+            pair = f"{username}:{key_value}" if username else f"{key_value}:"
+        headers["Authorization"] = "Basic " + base64.b64encode(pair.encode()).decode()
+    elif atype == "query":
+        value = _value(creds, auth.get("field", DEFAULT_FIELD), "query")
+        parts = urllib.parse.urlsplit(url)
+        query = urllib.parse.parse_qsl(parts.query, keep_blank_values=True)
+        query.append((auth["param"], value))
+        url = urllib.parse.urlunsplit(parts._replace(query=urllib.parse.urlencode(query)))
+    elif atype == "oauth2_client_credentials":
+        if bearer_token is None:
+            raise ValidationError("internal: the OAuth2 token must be fetched first")
+        headers["Authorization"] = f"Bearer {bearer_token}"
+    elif atype == "aws_sigv4":
+        headers.update(_sigv4_headers(auth, creds, method, url))
     else:
         raise ValidationError(f"unknown auth type: {atype}")
     return urllib.request.Request(url, headers=headers, method=method)
 
+
+# ---- AWS Signature Version 4 (GET with a query string, empty body) ----------
+
+def _sigv4_headers(auth: dict, creds: dict[str, str], method: str, url: str,
+                   now: datetime.datetime | None = None) -> dict[str, str]:
+    access = _value(creds, auth.get("access_key_field", "access_key_id"), "header")
+    secret = _value(creds, auth.get("secret_key_field", "secret_access_key"), "secret")
+    token_field = auth.get("session_token_field")
+    token = _value(creds, token_field, "header") if token_field and creds.get(token_field) else None
+    region, service = auth["region"], auth["service"]
+    now = now or datetime.datetime.now(datetime.timezone.utc)
+    amz_date, day = now.strftime("%Y%m%dT%H%M%SZ"), now.strftime("%Y%m%d")
+    parts = urllib.parse.urlsplit(url)
+    host = parts.hostname or ""
+    query = sorted(urllib.parse.parse_qsl(parts.query, keep_blank_values=True))
+    canonical_query = "&".join(f"{urllib.parse.quote(k, safe='-_.~')}={urllib.parse.quote(v, safe='-_.~')}"
+                               for k, v in query)
+    signed = {"host": host, "x-amz-date": amz_date}
+    if token:
+        signed["x-amz-security-token"] = token
+    names = sorted(signed)
+    # AWS double-encodes the path for every service but S3 (as botocore does)
+    path = urllib.parse.quote(parts.path or "/", safe="/-_.~")
+    canonical = "\n".join([method, path, canonical_query,
+                           "".join(f"{n}:{signed[n]}\n" for n in names), ";".join(names),
+                           hashlib.sha256(b"").hexdigest()])
+    scope = f"{day}/{region}/{service}/aws4_request"
+    to_sign = "\n".join(["AWS4-HMAC-SHA256", amz_date, scope, hashlib.sha256(canonical.encode()).hexdigest()])
+    k = ("AWS4" + secret).encode()
+    for part in (day, region, service, "aws4_request"):
+        k = hmac.new(k, part.encode(), hashlib.sha256).digest()
+    signature = hmac.new(k, to_sign.encode(), hashlib.sha256).hexdigest()
+    out = {"X-Amz-Date": amz_date,
+           "Authorization": (f"AWS4-HMAC-SHA256 Credential={access}/{scope}, "
+                             f"SignedHeaders={';'.join(names)}, Signature={signature}")}
+    if token:
+        out["X-Amz-Security-Token"] = token
+    return out
+
+
+# ---- redirects ---------------------------------------------------------------
 
 def _origin(url: str) -> tuple[str, str, int | None]:
     p = urllib.parse.urlsplit(url)
@@ -150,43 +282,47 @@ def should_strip_auth(old_url: str, new_url: str) -> bool:
 
 
 class _CredentialScrubbingRedirectHandler(urllib.request.HTTPRedirectHandler):
-    """Follow redirects like urllib does, but never carry the credential
-    header across an origin change. Remembers that it had to strip."""
+    """Follow redirects like urllib does, but never carry a credential
+    header across an origin change. Remembers that it had to strip.
+    `credential_header` is one header name or several. With
+    follow=False no redirect is followed at all (credentials in the URL or
+    the body cannot be stripped) and the target is remembered."""
 
-    def __init__(self, credential_header: str):
+    def __init__(self, credential_header, follow: bool = True):
         super().__init__()
-        self._cred = credential_header.lower()
+        names = [credential_header] if isinstance(credential_header, str) else list(credential_header)
+        self._creds = {n.lower() for n in names}
+        self._follow = follow
         self.stripped_to: str | None = None
+        self.blocked_to: str | None = None
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if not self._follow:
+            self.blocked_to = newurl
+            return None
         new_req = super().redirect_request(req, fp, code, msg, headers, newurl)
         if new_req is None:
             return None
         if should_strip_auth(req.full_url, newurl):
             for name in list(new_req.headers) + list(new_req.unredirected_hdrs):
-                if name.lower() == self._cred:
+                if name.lower() in self._creds:
                     new_req.remove_header(name)
             self.stripped_to = newurl
         return new_req
 
 
-def validate_key(spec: dict, key: str, timeout: float = 10.0) -> bool:
-    """Return True if the API accepts the key (status in spec['expect']).
-
-    Raises ValidationError on network failure, or when the endpoint
-    redirected off-origin (the key was NOT sent there). Never logs the key.
-    """
-    req = _build_request(spec, key)
-    expect = set(spec.get("expect", [200]))
-    # statuses that mean "the API looked at the key and said no" (Google
-    # answers 400 to a bad key, Brave 422) — a verdict, not a crash
-    reject = set(spec.get("reject") or REJECT_DEFAULT)
-    scrubber = _CredentialScrubbingRedirectHandler(_credential_header(spec))
+def _send(req: urllib.request.Request, scrubber: _CredentialScrubbingRedirectHandler,
+          timeout: float, read_limit: int = 0) -> tuple[int, bytes]:
+    """(status, up to read_limit bytes of body). Errors become
+    ValidationError without repeating anything the request carried."""
     opener = urllib.request.build_opener(scrubber)
+    body = b""
     try:
         try:
             with opener.open(req, timeout=timeout) as resp:
                 status = resp.status
+                if read_limit:
+                    body = resp.read(read_limit + 1)
         except urllib.error.HTTPError as e:
             status = e.code
     except urllib.error.URLError as e:
@@ -212,13 +348,89 @@ def validate_key(spec: dict, key: str, timeout: float = 10.0) -> bool:
             "the HTTP library refused to send the request (its message is "
             "left out - it can hold the key). Check the key you pasted and "
             "the recipe's validate section") from None
+    if scrubber.blocked_to is not None:
+        raise ValidationError(
+            f"the endpoint redirected to {printable(scrubber.blocked_to)}; the "
+            f"credentials were not sent there. Fix the recipe to point at the "
+            f"final endpoint.")
     if scrubber.stripped_to is not None:
         raise ValidationError(
             "validation endpoint redirected to a different origin "
-            f"({scrubber.stripped_to}); the key was not sent there. "
+            f"({printable(scrubber.stripped_to)}); the key was not sent there. "
             "Fix the recipe's validate.url to point at the final endpoint.")
-    if status in expect:
+    return status, body
+
+
+def _verdict(status: int, spec: dict, reject_default=REJECT_DEFAULT) -> bool:
+    if status in set(spec.get("expect", [200])):
         return True
-    if status in reject:
-        return False  # key rejected (validation failed, not a crash)
+    if status in set(spec.get("reject") or reject_default):
+        return False  # credentials rejected (validation failed, not a crash)
     raise ValidationError(f"validation endpoint error: HTTP {status}")
+
+
+# ---- OAuth2 client credentials -----------------------------------------------
+
+def _fetch_token(spec: dict, creds: dict[str, str], timeout: float) -> str | None:
+    """POST the client credentials to the recipe's token_url. Returns the
+    access token, or None when the vendor said the credentials are wrong.
+    No redirect is followed: a token endpoint never needs one, and the
+    secret must reach that exact origin or nowhere."""
+    auth = spec["auth"]
+    client_id = _value(creds, auth.get("client_id_field", "client_id"), "basic")
+    secret = _value(creds, auth.get("client_secret_field", "client_secret"), "basic")
+    form = {"grant_type": "client_credentials"}
+    if auth.get("scope"):
+        form["scope"] = auth["scope"]
+    headers = _base_headers(spec)
+    headers["Content-Type"] = "application/x-www-form-urlencoded"
+    headers["Accept"] = "application/json"
+    if auth.get("send", "basic") == "body":
+        form.update({"client_id": client_id, "client_secret": secret})
+    else:
+        pair = f"{client_id}:{secret}"
+        headers["Authorization"] = "Basic " + base64.b64encode(pair.encode()).decode()
+    req = urllib.request.Request(auth["token_url"], data=urllib.parse.urlencode(form).encode(),
+                                 headers=headers, method="POST")
+    status, body = _send(req, _CredentialScrubbingRedirectHandler("Authorization", follow=False),
+                         timeout, MAX_TOKEN_BYTES)
+    if status in TOKEN_REJECT:
+        return None
+    if status != 200:
+        raise ValidationError(f"token endpoint error: HTTP {status}")
+    try:
+        token = json.loads(body[:MAX_TOKEN_BYTES]).get("access_token")
+    except (ValueError, AttributeError):
+        token = None
+    finally:
+        body = None
+    if not isinstance(token, str) or not token or _unsendable_reason("bearer", token):
+        raise ValidationError("the token endpoint answered 200 but gave no usable access_token")
+    return token
+
+
+def validate_key(spec: dict, key, timeout: float = 10.0) -> bool:
+    """Return True if the API accepts the credentials (status in
+    spec['expect']). `key` is the single key or {field: value}.
+
+    Raises ValidationError on network failure, or when the endpoint
+    redirected off-origin (the credentials were NOT sent there). Never logs
+    a value."""
+    creds = _creds(key)
+    auth = spec.get("auth", {})
+    atype = auth.get("type", "bearer")
+    token = None
+    if atype == "oauth2_client_credentials":
+        token = _fetch_token(spec, creds, timeout)
+        if token is None:
+            return False
+        if auth.get("token_only"):
+            return True    # the vendor issued a token: the id and secret are good
+    try:
+        req = _build_request(spec, creds, bearer_token=token)
+        scrubber = _CredentialScrubbingRedirectHandler(_credential_headers(spec),
+                                                       follow=atype != "query")
+        status, _ = _send(req, scrubber, timeout)
+    finally:
+        token = None
+    return _verdict(status, spec)

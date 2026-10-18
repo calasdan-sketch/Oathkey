@@ -25,7 +25,7 @@ class TestRecipes(unittest.TestCase):
         for r in catalog.values():
             self.assertTrue(r["steps"])
             self.assertIn(r["validate"]["auth"]["type"],
-                          ("bearer", "header", "basic"))
+                          recipes_mod.AUTH_TYPES)
 
     def test_missing_field_rejected(self):
         bad = good_recipe()

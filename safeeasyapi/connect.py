@@ -9,13 +9,16 @@ from __future__ import annotations
 
 import getpass
 import ipaddress
+import shutil
+import subprocess
 import sys
 import urllib.parse
 import webbrowser
 
+from . import clipboard as clipboard_mod
 from . import store as store_mod
 from . import validate as validate_mod
-from .recipes import printable
+from .recipes import DEFAULT_FIELD, fields as recipe_fields, printable
 
 MAX_ATTEMPTS = 3
 # Typed confirmation required when the validation URL is on a different
@@ -143,10 +146,30 @@ def render_validation_preview(recipe: dict, out=None) -> None:
     poisoned recipe can't turn `safeeasyapi connect` into a key harvest."""
     out = out or sys.stdout
     v = recipe["validate"]
+    auth = v.get("auth", {})
     method = printable(str(v.get("method", "GET")).upper())
-    out.write(f"\n  This key will be validated with: {method} "
-              f"{printable(v['url'])}\n")
+    if auth.get("type") == "oauth2_client_credentials":
+        out.write(f"\n  This key will be validated with: POST "
+                  f"{printable(auth['token_url'])}  (exchanged for a short-lived token)\n")
+        if not auth.get("token_only"):
+            out.write(f"    then {method} {printable(v['url'])}  (with that token)\n")
+    else:
+        out.write(f"\n  This key will be validated with: {method} "
+                  f"{printable(v['url'])}\n")
     out.flush()
+
+
+def destinations(recipe: dict) -> list[str]:
+    """Every URL the credentials are sent to while checking them."""
+    v = recipe["validate"]
+    auth = v.get("auth", {})
+    urls = []
+    if auth.get("type") == "oauth2_client_credentials":
+        urls.append(auth["token_url"])
+        if auth.get("token_only"):
+            return urls
+    urls.append(v["url"])
+    return urls
 
 
 def _normalize_host(host: str) -> str:
@@ -261,17 +284,23 @@ def _require_cross_domain_confirmation(recipe: dict, out,
     the user to type the confirmation word. Returns True when the flow may
     proceed."""
     v = recipe["validate"]
-    if same_owner(v["url"], recipe["key_url"]):
+    trusted = {_normalize_host(h) for h in v.get("trusted_hosts") or []}
+    foreign = []
+    for url in destinations(recipe):
+        if same_owner(url, recipe["key_url"]):
+            continue
+        host = _host(url)
+        if recipe.get("_builtin") and host in trusted:
+            # A built-in (reviewed, shipped-with-the-code) recipe may vouch for
+            # its vendor's second domain: api.anthropic.com for a key page on
+            # claude.com. A recipe from ~/.safeeasyapi never gets this shortcut.
+            out.write(f"  (validation host {printable(describe_domain(host))} is "
+                      f"this vendor's API domain — built-in recipe)\n")
+            continue
+        foreign.append(host)
+    if not foreign:
         return True
-    host = _host(v["url"])
-    if recipe.get("_builtin") and host in {
-            _normalize_host(h) for h in v.get("trusted_hosts") or []}:
-        # A built-in (reviewed, shipped-with-the-code) recipe may vouch for
-        # its vendor's second domain: api.anthropic.com for a key page on
-        # claude.com. A recipe from ~/.safeeasyapi never gets this shortcut.
-        out.write(f"  (validation host {printable(describe_domain(host))} is "
-                  f"this vendor's API domain — built-in recipe)\n")
-        return True
+    host = foreign[0]
     domains = [registrable_domain(host),
                registrable_domain(_host(recipe["key_url"]))]
     spelled = [describe_domain(d) for d in domains]
@@ -314,6 +343,61 @@ def store_in_env_file(env_file: str):
     return _store
 
 
+def _ask_one(field: dict, single: bool, prompt, out, clip, taken: set) -> str | None:
+    """One value: from the clipboard when copy-and-go is on, else the hidden
+    prompt. Returns None when the person cancelled. Never shows the value."""
+    label = printable(field["label"], words=True)
+    if clip is not None:
+        get, clear = clip
+        out.write(f"  Click Copy next to the {label} - I'll take it from the clipboard "
+                  f"and empty it\n    (waiting up to "
+                  f"{clipboard_mod.WAIT_SECONDS // 60} minutes; nothing is shown)\n")
+        out.flush()
+        try:
+            value = clipboard_mod.wait_for_key(field.get("pattern"), taken, get, clear)
+        except KeyboardInterrupt:
+            value = None
+            out.write("\n")
+        if value:
+            out.write(f"  got the {label} ({len(value)} characters) - clipboard emptied\n")
+            return value
+        out.write("  nothing key-shaped was copied - type or paste it instead:\n")
+    text = "  Paste your API key (hidden): " if single else f"  Paste the {label} (hidden): "
+    try:
+        return prompt(text).strip()
+    except (EOFError, KeyboardInterrupt):
+        return None
+
+
+def _cli_token(recipe: dict, out, run=subprocess.run, call=subprocess.call,
+               which=shutil.which) -> str | None:
+    """The key from the vendor's own CLI after its browser sign-in (built-in
+    recipes only, programs fixed in recipes.CLI_PROGRAMS). The token goes
+    from the program's output to this variable and nowhere else."""
+    cli = recipe["cli_token"]
+    if not which(cli["token"][0]):
+        out.write(f"  {printable(cli['token'][0])} is not installed - "
+                  f"use the normal steps instead (drop --via-cli).\n")
+        return None
+    if cli.get("login"):
+        out.write("  Signing in with the vendor's own tool (it opens your browser)...\n")
+        out.flush()
+        if call(cli["login"]) != 0:
+            out.write("  sign-in did not finish.\n")
+            return None
+    try:
+        done = run(cli["token"], capture_output=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired):
+        out.write("  couldn't ask the vendor's tool for the key.\n")
+        return None
+    token = done.stdout.decode("utf-8", "replace").strip() if done.returncode == 0 else ""
+    done = None
+    if not token:
+        out.write("  the vendor's tool gave no key.\n")
+        return None
+    return token
+
+
 def connect(
     recipe: dict,
     env_file: str = ".env",
@@ -323,14 +407,22 @@ def connect(
     validate_fn=validate_mod.validate_key,
     confirm_in=input,
     store_fn=None,
+    clipboard=None,
+    via_cli: bool = False,
+    cli_token_fn=None,
 ) -> int:
     """Run the guided flow. Returns 0 on success, 1 on failure.
 
-    `store_fn(env_var, key) -> description` decides where the validated
-    key goes (default: the .env file). Injectable browser_open / prompt /
-    validate_fn / confirm_in / store_fn exist for tests and the CLI.
+    `store_fn(env_var, key) -> description` decides where each validated
+    value goes (default: the .env file). `clipboard` is a (get, clear) pair
+    for copy-and-go, None for the hidden prompt. `via_cli` takes the key
+    from the vendor's own CLI (built-in recipes with cli_token only).
+    Injectable browser_open / prompt / validate_fn / confirm_in / store_fn /
+    clipboard / cli_token_fn exist for tests and the CLI.
     """
     out = out or sys.stdout
+    fields = recipe_fields(recipe)
+    single = len(fields) == 1 and fields[0]["name"] == DEFAULT_FIELD
     if store_fn is None:
         # The key is headed for the .env file. If that file is one we will
         # not edit (a link, a UTF-16 file) say so NOW - before the browser
@@ -342,79 +434,112 @@ def connect(
             out.write(f"\n  ✗ {env_file}: {e.strerror or e}.\n"
                       f"    Nothing was asked for and nothing was sent.\n")
             return 1
-    _print_steps(recipe, out)
-    try:
-        browser_open(recipe["key_url"])
-    except Exception as e:
-        out.write(f"  (couldn't open a browser: {e} — open the URL above manually)\n")
+    if via_cli and not (recipe.get("_builtin") and recipe.get("cli_token")):
+        out.write("  --via-cli works only for built-in recipes that have a vendor CLI "
+                  "(e.g. github).\n")
+        return 1
+    if not via_cli:
+        _print_steps(recipe, out)
+        try:
+            browser_open(recipe["key_url"])
+        except Exception as e:
+            out.write(f"  (couldn't open a browser: {e} — open the URL above manually)\n")
 
     # Preview exactly where the key will go BEFORE asking for it.
     render_validation_preview(recipe, out)
     if not _require_cross_domain_confirmation(recipe, out, confirm_in):
         return 1
 
-    key = None
+    values: dict[str, str] | None = None
     for attempt in range(1, MAX_ATTEMPTS + 1):
-        try:
-            key = prompt("  Paste your API key (hidden): ").strip()
-        except (EOFError, KeyboardInterrupt):
+        values = {}
+        taken: set[str] = set()
+        cancelled = again = False
+        for field in fields:
+            if via_cli:
+                value = (cli_token_fn or _cli_token)(recipe, out)
+                if value is None:
+                    return 1
+            else:
+                value = _ask_one(field, single, prompt, out, clipboard, taken)
+            if value is None:
+                cancelled = True
+                break
+            if not value:
+                out.write("  empty — try again.\n")
+                again = True
+                break
+            problem = None if store_fn is not None else store_mod.unsafe_reason(value)
+            if problem:
+                # Said right after the paste - before the key goes anywhere: the
+                # .env file cannot hold this key in a form every reader agrees
+                # on (see store.unsafe_reason), so asking the API about it would
+                # only waste the paste. A keychain store_fn has no such rule.
+                what = "that key" if single else f"the {printable(field['label'], words=True)}"
+                out.write(f"  ✗ {what} contains {problem}, which .env readers "
+                          f"do not agree on -\n"
+                          f"    real API keys do not have one. Nothing was sent. "
+                          f"Check what you pasted\n"
+                          f"    (a copied quote mark or an invisible character?) "
+                          f"and try again.\n")
+                again = True
+                break
+            values[field["name"]] = value
+            taken.add(value)
+        if cancelled:
+            values = None
             out.write("\ncancelled.\n")
             return 1
-        if not key:
-            out.write("  empty — try again.\n")
-            continue
-        problem = None if store_fn is not None else store_mod.unsafe_reason(key)
-        if problem:
-            # Said right after the paste - before the key goes anywhere: the
-            # .env file cannot hold this key in a form every reader agrees
-            # on (see store.unsafe_reason), so asking the API about it would
-            # only waste the paste. A keychain store_fn has no such rule.
-            out.write(f"  ✗ that key contains {problem}, which .env readers "
-                      f"do not agree on -\n"
-                      f"    real API keys do not have one. Nothing was sent. "
-                      f"Check what you pasted\n"
-                      f"    (a copied quote mark or an invisible character?) "
-                      f"and try again.\n")
-            key = None
+        if again:
+            values = None
             continue
         out.write("  validating…\n")
         out.flush()
         try:
-            ok = validate_fn(recipe["validate"], key)
+            ok = validate_fn(recipe["validate"],
+                             values[DEFAULT_FIELD] if single else values)
         except validate_mod.UnsendableKey as e:
-            # The key cannot go into an HTTP header (see validate.py): said
+            # The key cannot go into an HTTP request (see validate.py): said
             # before anything was sent, without repeating the key, and the
             # person can paste again - this is not "couldn't reach the API".
-            out.write(f"  \u2717 that key contains {printable(e.reason)}. "
+            label = next((f["label"] for f in fields if f["name"] == e.field), None)
+            what = f"the {printable(label, words=True)}" if label else "that key"
+            out.write(f"  ✗ {what} contains {printable(e.reason)}. "
                       f"Nothing was sent. Check what you\n"
                       f"    pasted (a copied quote mark or an invisible "
                       f"character?) and try again.\n")
-            key = None
+            values = None
             continue
         except validate_mod.ValidationError as e:
+            values = None
             out.write(f"  couldn't reach the API: {printable(e)}\n")
             return 1
         if ok:
             break
         left = MAX_ATTEMPTS - attempt
-        out.write(f"  key rejected by the API."
+        what = "key" if single else "credentials"
+        out.write(f"  {what} rejected by the API."
                   f"{f' {left} tries left.' if left else ''}\n")
-        # Scrub the rejected key immediately.
-        key = None
+        # Scrub the rejected values immediately.
+        values = None
+        if via_cli:
+            return 1
     else:
         out.write("  giving up — double-check the key and run me again.\n")
         return 1
 
     store_fn = store_fn or store_in_env_file(env_file)
+    saved: list[str] = []
     try:
-        description = store_fn(recipe["env_var"], key)
+        for field in fields:
+            saved.append(store_fn(field["env_var"], values[field["name"]]))
     except store_mod.UnsafeValue as e:
         # Only reachable when the key was headed elsewhere first (the
         # keychain falling back to the .env file): the paste loop stops an
         # unstorable key before it is sent when the .env file is the target.
         out.write(f"\n  ✗ the key was validated but could NOT be saved: "
                   f"{e.strerror}\n"
-                  f"    Nothing was written.\n")
+                  f"    {_partly(saved)}\n")
         return 1
     except OSError as e:
         # e.g. --env-file in a folder that is a file, or not writable.
@@ -422,12 +547,20 @@ def connect(
         # the user still has it on the clipboard.
         out.write(f"\n  ✗ the key was validated but could NOT be saved: "
                   f"{e.strerror or e} ({e.filename or env_file})\n"
-                  f"    Nothing was written. Fix the path (or pass "
+                  f"    {_partly(saved)} Fix the path (or pass "
                   f"--env-file) and run me again.\n")
         return 1
     finally:
-        # Scrub the key from this frame whatever happens.
-        key = None
-        del key
-    out.write(f"\n  ✓ {description}\n")
+        # Scrub the values from this frame whatever happens.
+        values = None
+        del values
+    for description in saved:
+        out.write(f"\n  ✓ {description}\n")
     return 0
+
+
+def _partly(saved: list[str]) -> str:
+    if not saved:
+        return "Nothing was written."
+    return ("Only part was written: " + "; ".join(saved) +
+            " - run `safeeasyapi forget` for this service and connect again.")
