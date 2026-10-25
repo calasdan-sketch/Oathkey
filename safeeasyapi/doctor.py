@@ -82,8 +82,9 @@ def fetch(url: str, timeout: float = TIMEOUT) -> tuple[int | None, str | None, s
     return last_status, None, None
 
 
-def check_url(url: str, fetch_fn=fetch, timeout: float = TIMEOUT) -> dict:
+def check_url(url: str, fetch_fn=None, timeout: float = TIMEOUT) -> dict:
     """Follow redirects by hand (up to MAX_HOPS) and judge the end."""
+    fetch_fn = fetch_fn or fetch
     hops = []
     current = url
     for _ in range(MAX_HOPS + 1):
@@ -145,8 +146,9 @@ def _without_query(url: str) -> str:
     return urllib.parse.urlunsplit(parts._replace(query="", fragment=""))
 
 
-def run(catalog: dict, fetch_fn=fetch, only: list[str] | None = None,
+def run(catalog: dict, fetch_fn=None, only: list[str] | None = None,
         timeout: float = TIMEOUT) -> list[dict]:
+    fetch_fn = fetch_fn or fetch
     rows = []
     seen: dict[str, dict] = {}
     for slug in sorted(catalog):
@@ -181,8 +183,9 @@ def exit_code(rows: list[dict]) -> int:
     return 1 if any(r["verdict"] == ROT for r in rows) else 0
 
 
-def cmd_doctor(args, catalog: dict, out=None, fetch_fn=fetch) -> int:
+def cmd_doctor(args, catalog: dict, out=None, fetch_fn=None) -> int:
     out = out or sys.stdout
+    fetch_fn = fetch_fn or fetch
     unknown = [s for s in (args.service or []) if s not in catalog]
     if unknown:
         out.write(f"unknown service: {', '.join(recipes_mod.printable(u) for u in unknown)}\n")

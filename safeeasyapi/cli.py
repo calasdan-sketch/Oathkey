@@ -737,7 +737,11 @@ def _main(argv: list[str] | None = None) -> int:
     if args.cmd in ("connect", "rotate", "run", "forget"):
         recipe = catalog.get(args.service)
         if not recipe:
-            print(f"unknown service '{recipes_mod.printable(args.service)}'.")
+            # only a short plain name is echoed back: a long or odd one could
+            # be a key typed in the wrong place
+            shown = (args.service if len(args.service) <= 24
+                     and recipes_mod.SLUG_RE.match(args.service) else "(not shown)")
+            print(f"unknown service '{shown}'.")
             _cmd_list(catalog)
             return 1
         if args.cmd == "run":

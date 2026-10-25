@@ -177,7 +177,9 @@ def status_rows(manifest: dict, root: str, catalog: dict, env_file: str,
             places.append("OS keychain")
         entry = ledger_mod.get(root, slug, index_path)
         age = ledger_mod.age_days(entry, now)
-        if where["complete"]:
+        if recipe is None and not variables:
+            state = "no recipe"
+        elif where["complete"]:
             state = "stored"
         elif places:
             state = "partly stored"

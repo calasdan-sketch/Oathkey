@@ -223,7 +223,7 @@ class TestClipboardRefusesLinks(unittest.TestCase):
         cat = recipes_mod.load_recipes(recipes_mod.RECIPES_DIR)
         samples = {"openai": "sk-proj-abcdefghijklmnop1234", "anthropic": "sk-ant-api03-abcdefghijklmnop",
                    "groq": "gsk_abcdefghijklmnop1234", "huggingface": "hf_abcdefghijklmnop1234",
-                   "replicate": "r8_abcdefghijklmnopqrstuvwxyz0123456789ABCD", "sendgrid": "SG.abcdefghijklmnop.qrstuvwxyz1234",
+                   "replicate": "r8_abcdefghijklmnopqrstuvwxyz0123456789A", "sendgrid": "SG.abcdefghijklmnop.qrstuvwxyz1234",
                    "tavily": "tvly-abcdefghijklmnop1234", "openrouter": "sk-or-v1-abcdefghijklmnop12"}
         for slug, sample in samples.items():
             field = recipes_mod.fields(cat[slug])[0]

@@ -118,3 +118,21 @@ for _var in ENV_VARS:
     os.environ[_var] = FAKE_HOME
 os.environ["SAFEEASYAPI_TEST_HOME"] = FAKE_HOME  # subprocesses share it
 atexit.register(_cleanup)
+
+
+# No test may reach the real network: a connect to anything but this machine
+# fails the test (unix sockets and 127.0.0.1 / ::1 stub servers are fine).
+import socket as _socket
+
+_real_connect = _socket.socket.connect
+
+
+def _local_only_connect(self, address):
+    if self.family in (_socket.AF_INET, _socket.AF_INET6):
+        host = address[0] if isinstance(address, tuple) else address
+        if host not in ("127.0.0.1", "::1", "localhost"):
+            raise AssertionError(f"a test tried to reach the real network: {host!r}")
+    return _real_connect(self, address)
+
+
+_socket.socket.connect = _local_only_connect
