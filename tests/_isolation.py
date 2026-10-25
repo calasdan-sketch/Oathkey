@@ -120,6 +120,11 @@ for _var in ENV_VARS:
 os.environ["SAFEEASYAPI_TEST_HOME"] = FAKE_HOME  # subprocesses share it
 atexit.register(_cleanup)
 
+# the consent folder comes from the system's user database, not from $HOME:
+# keep tests out of the real one
+from safeeasyapi import consent as _consent  # noqa: E402
+_consent.home_dir = lambda: FAKE_HOME
+
 
 # No test may reach the real network: a connect to anything but this machine
 # fails the test (unix sockets and 127.0.0.1 / ::1 stub servers are fine).

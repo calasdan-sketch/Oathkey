@@ -175,6 +175,9 @@ def _build_parser() -> argparse.ArgumentParser:
     aa.add_argument("--revoke", action="store_true",
                     help="Take the permission back (all services if none is named).")
     aa.add_argument("--list", action="store_true", help="Show what is allowed in this project.")
+    aa.add_argument("--env-file", default=None, metavar="NAME",
+                    help="Let the agent write the key to this .env-style file of the project "
+                         "(default: .env only).")
     aa.add_argument("--allow-clipboard-history", action="store_true",
                     help="Also accept that Windows clipboard history (Win+V) keeps a copy "
                          "of the key. Without it the agent is refused while history is on.")
@@ -266,9 +269,23 @@ def _build_parser() -> argparse.ArgumentParser:
     ski = sksub.add_parser("install", help="Copy SKILL.md to ~/.claude/skills/safeeasyapi/ "
                                            "(or ./.claude/skills/ with --project).")
     ski.add_argument("--project", action="store_true", help="Install for this project only.")
+    ski.add_argument("--for", dest="for_client", default="claude",
+                     choices=["claude", "cursor", "codex", "gemini", "all"],
+                     help="Which client's rules file: Claude Code's skill (default), or "
+                          "the marked block in .cursor/rules/safeeasyapi.mdc, AGENTS.md "
+                          "(Codex) or GEMINI.md (always in this project's folder).")
     ski.add_argument("--yes", action="store_true", help="Replace a different existing file without asking.")
 
-    sub.add_parser("mcp", help="Run the MCP server on stdio (for Claude Code).")
+    mc = sub.add_parser("mcp", help="Run the MCP server on stdio (for Claude Code).")
+    mc.add_argument("--default-store", choices=["env", "keychain"], default="env",
+                    help="Where agent-captured keys go unless safeeasyapi.json says "
+                         "otherwise (setup-agent uses keychain for clients that have "
+                         "no .env hook).")
+    sa = sub.add_parser("setup-agent", help="Show or write the MCP entry for an AI client "
+                                            "(absolute Python path).")
+    sa.add_argument("client", choices=["claude-code", "claude-desktop", "cursor", "codex", "gemini"])
+    sa.add_argument("--write", action="store_true",
+                    help="Add the entry to the client's config file (other entries are kept).")
 
     f = sub.add_parser("find", help="Find free public APIs for a task.")
     f.add_argument("query", help="What you need, e.g. 'weather', 'crypto price'.")
@@ -747,7 +764,13 @@ def _main(argv: list[str] | None = None) -> int:
     if args.cmd == "add":
         return _cmd_add(args.recipes_dir)
     if args.cmd == "mcp":
+        if args.default_store != "env":
+            from . import capture as capture_mod
+            capture_mod.set_manager(capture_mod.Manager(default_store=args.default_store))
         return mcp_mod.serve(catalog)
+    if args.cmd == "setup-agent":
+        from . import agentsetup
+        return agentsetup.cmd_setup_agent(args)
     if args.cmd == "init":
         from . import projectcmds
         return projectcmds.cmd_init(args, catalog)
@@ -886,8 +909,7 @@ def _project_root() -> str:
     """The folder holding safeeasyapi.json (found from here upward), else here:
     the key `status` looks the record up by."""
     from . import manifest as manifest_mod
-    found = manifest_mod.find()
-    return os.path.dirname(found) if found else os.getcwd()
+    return manifest_mod.project_root()
 
 
 if __name__ == "__main__":

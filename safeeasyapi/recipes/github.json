@@ -41,6 +41,7 @@
     "expect": [
       200
     ],
+    "identity": "login",
     "method": "GET",
     "url": "https://api.github.com/user",
     "reject": [

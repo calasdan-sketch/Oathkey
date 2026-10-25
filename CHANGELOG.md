@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.7.1
+
+Fixes from an independent review of 0.7.0 (security, correctness, architecture, tests).
+
+- **Hook:** a quote-split file name (`cat .e''nv`) is now refused like `.env`.
+- **Consent cannot be forged by a file edit.** The permission is asked in a window of
+  the operating system shown by the MCP server (`dialog.py`; terminal route as the
+  weaker fallback), and recorded in `~/.safeeasyapi/agent-consent.json` (home from the
+  user database) with an HMAC; the secret lives in DPAPI / the macOS keychain / the
+  Linux Secret Service, else a 0600 file marked advisory. A file that does not verify
+  is no consent. Corrupt files are kept as `.bak`, never overwritten silently.
+- Replacing a stored key needs its own yes in a window; the keychain case is checked
+  too; the result names the account (GitHub login).
+- Agent writes only the project's `.env` (or a file the grant names); one shared
+  `.env`-name rule for writer and hook; public/static/dist folders refused.
+- Services without a documented key format answer `unsupported_gateless`; per-field
+  gates for two-value services; a copied value must be one line without spaces;
+  only a stale value shaped like the service's key is wiped, other clipboard content
+  is left alone.
+- The clipboard is emptied and verified (`clipboard_warning` instead of a false
+  "emptied"), Windows uses the clipboard sequence number, xclip/wl-copy no longer stall.
+- States `validating` and `storing`; `status` waits ~25 s and returns on any change;
+  `cancel` is honest (`too_late`); a failed arm never leaves the manager busy; server
+  shutdown cancels and clears; clipboard-history check fails closed.
+- Hook: clipboard readers, and quote/variable-insensitive consent-file and
+  `allow-agent` mentions (a speed bump, not the lock).
+- Client-neutral rules; `setup-agent` for Claude Code/Desktop, Cursor, Codex, Gemini
+  (absolute Python path); `skill install --for cursor|codex|gemini|all`; README
+  "what is enforced where".
+
 ## 0.7.0
 
 **Agent-driven key capture.** The person says "connect GitHub"; the agent opens

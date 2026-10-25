@@ -16,18 +16,23 @@ the clipboard, tests it and stores it.
    (`present`, `missing`, `unknown`). It never returns a value.
 2. For one service, call `request_connect` with the service name. It returns
    `{service, env_var, status, instructions, browser, rules}`.
-3. **Use `capture_key`** (`service`, `action: "start"`). If it answers
-   `consent_needed`, ask the person whether you may; if they agree they run
-   `safeeasyapi allow-agent <service>` in their own terminal (you cannot).
-   If it answers `refused` (Windows clipboard history) or `unavailable` (no
-   clipboard access, headless), tell the person what it says; only then ask
-   them to run `safeeasyapi connect <service>`.
-4. When it answers `waiting`, you drive the browser: open `browser.open`,
-   follow `browser.steps` with the smallest permissions, one project, a short
-   expiry, and click the vendor's **Copy** button. Nothing else. Then call
-   `capture_key` with `action: "status"` and `wait_seconds: 60`. It returns
-   `state: stored` (done), `failed` (the vendor rejected it: nothing was
-   saved; start again once), or `timeout`.
+3. **Use `capture_key`** (experimental; `service`, `action: "start"`). The answer's
+   `state` tells you what to do:
+   - `consent_pending` / `consent_granted`: a window asked the person; wait for
+     their answer (`action: "status"`), then `start` again. `consent_needed`: ask
+     whether you may; they run `safeeasyapi allow-agent <service>` (you cannot).
+   - `unavailable`, `unsupported_gateless`, `refused`: tell the person what it
+     says and ask them to run `safeeasyapi connect <service>` themselves.
+   - `already_stored`: do nothing, unless they asked for a new key (`replace: true`;
+     they are asked in a window).
+   - `waiting`: you drive the browser (below), then call `action: "status"`. It
+     waits up to 25 seconds and returns when the state changes: `validating`,
+     `storing` (wait again), then `stored` (done; `account` names the account),
+     `failed` (nothing saved; start again once), `timeout`.
+4. If you have no browser tool that can click, stop at once and ask the person to
+   run `safeeasyapi connect <service>`. Otherwise open `browser.open`, follow
+   `browser.steps` with the smallest permissions, one project, a short expiry, and
+   click the vendor's **Copy** button. Nothing else.
 5. Write code that uses the environment variable by NAME (for example
    `os.environ["OPENAI_API_KEY"]`). To run it with the key, ask the person
    to start it: `safeeasyapi run <service> -- <command>` (or `--all`). Do
@@ -36,8 +41,8 @@ the clipboard, tests it and stores it.
 
 ## In the browser
 
-- Never read, screenshot, zoom into or extract the text of the key field, and
-  do not use page-text or read-page tools on it. Click Copy only.
+- Never look at the key: no tool that returns page content, the DOM, an
+  accessibility tree, text or a screenshot of the area that shows it. Click Copy only.
 - Never type or paste the key anywhere. You do not need it.
 - Login, 2FA, a CAPTCHA, or a password prompt (GitHub "sudo mode"): stop and
   ask the person to do it in the browser. Never enter a password yourself.

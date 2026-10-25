@@ -13,6 +13,8 @@ import os
 import sys
 
 from . import capture as capture_mod
+from . import consent as consent_mod
+from . import manifest as manifest_mod
 from . import recipes as recipes_mod
 
 
@@ -45,11 +47,12 @@ HISTORY_NOTE = """
 
 
 def cmd_allow_agent(args, catalog: dict, ask=input, terminal=_terminal, out=None,
-                    consent_file: str | None = None, cwd: str | None = None) -> int:
+                    consent_file: str | None = None, cwd: str | None = None,
+                    store=None) -> int:
     out = out or sys.stdout
     root = capture_mod.project_root(cwd)
     if args.list:
-        grants = capture_mod.grants_for(root, consent_file)
+        grants = consent_mod.grants_for(root, consent_file, store)
         if not grants:
             out.write("  No service is allowed for agent capture in this project.\n")
         for g in grants:
@@ -57,7 +60,7 @@ def cmd_allow_agent(args, catalog: dict, ask=input, terminal=_terminal, out=None
             out.write(f"  {recipes_mod.printable(g['service'])}{extra}\n")
         return 0
     if args.revoke:
-        n = capture_mod.revoke(root, args.service, consent_file)
+        n = consent_mod.revoke(root, args.service, consent_file, store)
         out.write(f"  Removed {n} permission(s) for agent capture in this project.\n")
         return 0
     if not args.service:
@@ -68,6 +71,12 @@ def cmd_allow_agent(args, catalog: dict, ask=input, terminal=_terminal, out=None
         out.write("error: agent capture works only with the built-in services "
                   "(see `safeeasyapi list`).\n")
         return 2
+    env_file = getattr(args, "env_file", None)
+    if env_file:
+        problem = manifest_mod.env_file_problem(env_file)
+        if problem:
+            out.write(f"error: {recipes_mod.printable(problem)}\n")
+            return 2
     if not terminal():
         out.write("error: this must be typed by a person in a terminal. An agent cannot "
                   "give itself this permission.\n")
@@ -89,6 +98,8 @@ def cmd_allow_agent(args, catalog: dict, ask=input, terminal=_terminal, out=None
     if (answer or "").strip().lower() != "yes":
         out.write("  Nothing changed.\n")
         return 1
-    capture_mod.grant(root, args.service, args.allow_clipboard_history, consent_file)
+    consent_mod.grant(root, args.service, args.allow_clipboard_history, consent_file,
+                      env_file, store)
+    out.write(f"  (Kept in {consent_mod.integrity()}.)\n")
     out.write(f"  Allowed. Undo any time: safeeasyapi allow-agent {args.service} --revoke\n")
     return 0

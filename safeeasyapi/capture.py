@@ -1,40 +1,50 @@
-"""Agent-driven key capture: the agent drives the browser, this process takes the key.
+"""Agent-driven key capture (experimental): the agent clicks Copy, this process takes the key.
 
 The person tells the agent "connect GitHub". The agent opens the vendor's
 key page with its own browser tools, makes the key and clicks the vendor's
 own Copy button. THIS process (the MCP server, running as the person on
 their own computer) sees the clipboard change, takes the new key-shaped
-value, EMPTIES the clipboard, tests the key with the vendor, stores it
-(.env or the OS keychain) and tells the agent only: stored, which variable,
-where, how long. The key is never in a tool result, an error, a log, the
-chat or on screen, and the agent never types it anywhere.
+value, EMPTIES the clipboard (and checks that it is empty), tests the key
+with the vendor, stores it (.env or the OS keychain) and tells the agent
+only: stored, which variable, where, how long, which account. The key is
+never in a tool result, an error, a log, the chat or on screen.
 
-Guards (all of them, because the agent is not the owner of the key):
-  - the person said yes once for this project and service, in their own
-    terminal (`safeeasyapi allow-agent <service>`), recorded in the user's
-    home folder - a place the agent's tools and the hook do not reach;
-  - built-in recipes only (their validation hosts are reviewed);
-  - one capture at a time, a time limit (10 to 180 s), few starts per hour;
-  - only a value that CHANGES the clipboard after arming, and only one that
-    has the service's key format; what was on the clipboard before is wiped
-    and never used;
-  - a Windows clipboard history (Win+V) keeps a copy this cannot remove:
-    refused unless the person accepted that when granting;
-  - a key the vendor rejects, or that cannot be stored, is kept nowhere.
+States an answer can carry (`state`):
+  consent_needed   the person has not allowed this; no window could be shown
+  consent_pending  a confirmation window is on the person's screen
+  consent_denied   the person said no
+  unavailable      no usable clipboard here (reason in the message)
+  unsupported_gateless  the service has no documented key format to recognise
+  refused          not allowed (clipboard history, recipe of your own, limits)
+  busy             another capture is running
+  already_stored   a key exists; replace needs the person's separate yes
+  waiting          armed: waiting for the Copy
+  validating       a key was taken; the vendor is being asked
+  storing          valid; being written (cannot be cancelled now)
+  stored           done
+  failed / timeout / cancelled   nothing was saved
+  idle             nothing has been started
+
+Guards: the person's yes (consent.py: a window of the OS, or a terminal
+command), built-in recipes with a key format only, one at a time, 10-180 s,
+six starts an hour, only a value that CHANGES the clipboard after arming and
+has the service's key format, a rejected or unstorable key is kept nowhere,
+and clipboard history (Windows) or an unknown state of it refuses.
 """
 
 from __future__ import annotations
 
 import datetime
-import json
 import os
+import re
 import secrets
-import tempfile
 import threading
 import time
 
 from . import clipboard as clipboard_mod
 from . import connect as connect_mod
+from . import consent as consent_mod
+from . import dialog as dialog_mod
 from . import ledger as ledger_mod
 from . import manifest as manifest_mod
 from . import recipes as recipes_mod
@@ -45,104 +55,50 @@ from . import validate as validate_mod
 MIN_TIMEOUT = 10.0
 DEFAULT_TIMEOUT = 120.0
 MAX_TIMEOUT = 180.0
-MAX_STATUS_WAIT = 60.0
+DEFAULT_STATUS_WAIT = 25.0
+MAX_STATUS_WAIT = 45.0
 STARTS_PER_HOUR = 6
+DIALOGS_PER_HOUR = 4
 POLL = 0.1
-CONSENT_VERSION = 1
+REPLACE_WINDOW = 300.0
 
+# the grant helpers live in consent.py; kept here under their old names
+grant = consent_mod.grant
+revoke = consent_mod.revoke
+consent_for = consent_mod.consent_for
+grants_for = consent_mod.grants_for
+project_root = manifest_mod.project_root
 
-# ---------------------------------------------------------------- consent
-
-def consent_path() -> str:
-    """~/.safeeasyapi/agent-consent.json, resolved when asked (HOME may change)."""
-    return os.path.join(os.path.expanduser("~"), ".safeeasyapi", "agent-consent.json")
-
-
-def project_root(cwd: str | None = None) -> str:
-    """The folder holding safeeasyapi.json (found upward), else `cwd`."""
-    here = cwd or os.getcwd()
-    found = manifest_mod.find(here)
-    return os.path.realpath(os.path.dirname(found) if found else here)
-
-
-def _load_grants(path: str | None = None) -> list[dict]:
-    try:
-        with open(path or consent_path(), encoding="utf-8") as f:
-            data = json.load(f)
-    except (OSError, ValueError, RecursionError):
-        return []
-    items = data.get("grants") if isinstance(data, dict) else None
-    return [g for g in (items or []) if isinstance(g, dict)
-            and isinstance(g.get("project"), str) and isinstance(g.get("service"), str)]
-
-
-def _save_grants(grants: list[dict], path: str | None = None) -> None:
-    path = path or consent_path()
-    folder = os.path.dirname(path)
-    os.makedirs(folder, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=folder, prefix=".consent-")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump({"version": CONSENT_VERSION, "grants": grants}, f, indent=2)
-        try:
-            os.chmod(tmp, 0o600)
-        except OSError:
-            pass
-        os.replace(tmp, path)
-    except BaseException:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
-
-
-def _same(a: str, b: str) -> bool:
-    return os.path.normcase(os.path.realpath(a)) == os.path.normcase(os.path.realpath(b))
-
-
-def consent_for(project: str, service: str, path: str | None = None) -> dict | None:
-    """The person's grant for this project and service, or None."""
-    for g in _load_grants(path):
-        if g["service"] == service and _same(g["project"], project):
-            return g
-    return None
-
-
-def grant(project: str, service: str, history_ok: bool = False,
-          path: str | None = None, now: datetime.datetime | None = None) -> None:
-    grants = [g for g in _load_grants(path)
-              if not (g["service"] == service and _same(g["project"], project))]
-    stamp = (now or datetime.datetime.now(datetime.timezone.utc)).replace(microsecond=0)
-    grants.append({"project": os.path.realpath(project), "service": service,
-                   "clipboard_history_ok": bool(history_ok), "granted": stamp.isoformat()})
-    _save_grants(grants, path)
-
-
-def revoke(project: str, service: str | None = None, path: str | None = None) -> int:
-    """Remove the grant(s); how many were removed."""
-    grants = _load_grants(path)
-    keep = [g for g in grants if not (_same(g["project"], project)
-                                      and (service is None or g["service"] == service))]
-    if len(keep) != len(grants):
-        _save_grants(keep, path)
-    return len(grants) - len(keep)
-
-
-def grants_for(project: str, path: str | None = None) -> list[dict]:
-    return [g for g in _load_grants(path) if _same(g["project"], project)]
-
-
-# ---------------------------------------------------------------- the capture
 
 def length_class(n: int) -> str:
     return "short (under 32 characters)" if n < 32 else (
         "medium (32 to 63 characters)" if n < 64 else "long (64 characters or more)")
 
 
+ORPHAN = ("If a key was already created at the vendor and not captured, it still "
+          "exists there: ask the person to delete it on the vendor's page.")
+MANAGERS = ("A clipboard manager or clipboard history app may keep its own copy of "
+            "what is copied; this tool cannot remove that.")
+
+
+def environment_problem(env=None, read=None) -> str | None:
+    """Why this is not the person's desktop (SSH, WSL), or None."""
+    env = os.environ if env is None else env
+    if env.get("SSH_CONNECTION") or env.get("SSH_TTY"):
+        return ("this server runs inside an SSH session, so its clipboard is not the "
+                "person's desktop clipboard")
+    try:
+        text = (read or (lambda: open("/proc/version", encoding="utf-8").read()))()
+    except OSError:
+        return None
+    if "microsoft" in text.lower():
+        return ("this server runs inside WSL; the Linux clipboard tools here cannot see "
+                "the Windows clipboard")
+    return None
+
+
 class _Capture:
-    def __init__(self, slug: str, recipe: dict, root: str, env_file: str, store: str,
-                 timeout: float, started: float):
+    def __init__(self, slug, recipe, root, env_file, store, timeout, started):
         self.id = secrets.token_hex(4)
         self.slug = slug
         self.recipe = recipe
@@ -150,17 +106,31 @@ class _Capture:
         self.env_file = env_file
         self.store = store
         self.deadline = started + timeout
-        self.timeout = timeout
         self.state = "waiting"
         self.message = ""
         self.waiting_for = ""
         self.ignored = 0
         self.stored_in: list[str] = []
         self.length_classes: list[str] = []
-        self.note: str | None = None
-        self.history_note: str | None = None
+        self.note = None
+        self.account = None
+        self.history_note = None
+        self.clipboard_warning = None
+        self.stale_note = None
+        self.finished_at = None
         self.cancel = threading.Event()
         self.done = threading.Event()
+        self.cond = threading.Condition()
+
+    def set(self, state: str, message: str | None = None) -> None:
+        with self.cond:
+            self.state = state
+            if message is not None:
+                self.message = message
+            if state in ("stored", "failed", "timeout", "cancelled"):
+                self.finished_at = datetime.datetime.now(datetime.timezone.utc).replace(
+                    microsecond=0).isoformat()
+            self.cond.notify_all()
 
     def public(self) -> dict:
         out = {"capture_id": self.id, "service": self.slug, "state": self.state,
@@ -175,25 +145,43 @@ class _Capture:
             out["stored"] = True
             out["stored_in"] = self.stored_in
             out["key_length"] = self.length_classes
+            if self.account:
+                out["account"] = self.account
         if self.note:
             out["vendor_note"] = self.note
-        if self.history_note:
-            out["clipboard_history_warning"] = self.history_note
+        for key, value in (("clipboard_history_warning", self.history_note),
+                           ("clipboard_warning", self.clipboard_warning),
+                           ("clipboard_note", self.stale_note)):
+            if value:
+                out[key] = value
+        if self.finished_at:
+            out["finished_at"] = self.finished_at
         return out
+
+
+class _Job:
+    """A confirmation window shown to the person, answered off the main thread."""
+
+    def __init__(self, kind, root, slug):
+        self.kind, self.root, self.slug = kind, root, slug
+        self.answer = None              # None while open, then True / False
+        self.done = threading.Event()
 
 
 class Manager:
     """One capture at a time. Everything the outside world touches is a
-    parameter, so tests use a fake clipboard and a fake vendor."""
+    parameter, so tests use a fake clipboard, a fake vendor and a fake window."""
 
     def __init__(self, backend=clipboard_mod.backend,
                  validate_fn=validate_mod.validate_key,
                  history_fn=clipboard_mod.history_warning,
                  now=time.monotonic, sleep=time.sleep, poll: float = POLL,
-                 consent_file: str | None = None,
+                 consent_file: str | None = None, secret_store=None,
                  timeout_limits: tuple[float, float] = (MIN_TIMEOUT, MAX_TIMEOUT),
                  starts_per_hour: int = STARTS_PER_HOUR, store_factory=None,
-                 record_fn=ledger_mod.record):
+                 record_fn=ledger_mod.record, ask_person=dialog_mod.confirm,
+                 window_available=dialog_mod.available, env_problem=environment_problem,
+                 default_store: str = "env", clear_wait: float = 3.0):
         self.backend = backend
         self.validate_fn = validate_fn
         self.history_fn = history_fn
@@ -201,64 +189,154 @@ class Manager:
         self.sleep = sleep
         self.poll = poll
         self.consent_file = consent_file
+        self.secret_store = secret_store
         self.limits = timeout_limits
         self.starts_per_hour = starts_per_hour
         self.store_factory = store_factory
         self.record_fn = record_fn
+        self.ask_person = ask_person
+        self.window_available = window_available
+        self.env_problem = env_problem
+        self.default_store = default_store
+        self.clear_wait = clear_wait
         self._lock = threading.Lock()
         self._current: _Capture | None = None
+        self._job: _Job | None = None
+        self._dialogs: list[float] = []
+        self._denied: dict = {}
+        self._replace_ok: dict = {}
         self._starts: list[float] = []
+
+    # ---- consent helpers
+
+    def _consent(self, root, slug):
+        return consent_mod.consent_for(root, slug, self.consent_file, self.secret_store)
+
+    def _ask(self, kind, root, slug, recipe) -> dict:
+        """Put a window in front of the person (once; not again right after a
+        'no'); the answer is recorded by this server, never by the agent."""
+        key = (consent_mod.project_key(root), slug, kind)
+        t = self.now()
+        job = self._job
+        if job is not None and not job.done.is_set():
+            return {"state": "consent_pending", "service": slug, "message": _PENDING}
+        if t - self._denied.get(key, -1e9) < 600:
+            return {"state": "consent_denied", "service": slug, "message": (
+                "The person said no. Do not ask again unless they bring it up.")}
+        self._dialogs[:] = [d for d in self._dialogs if t - d < 3600]
+        if len(self._dialogs) >= DIALOGS_PER_HOUR:
+            return {"state": "refused", "service": slug,
+                    "message": "Too many permission windows were shown in the last hour."}
+        self._dialogs.append(t)
+        job = _Job(kind, root, slug)
+        self._job = job
+        display = recipes_mod.printable(recipe["display"], words=True)
+        where = recipes_mod.printable(root)
+        if kind == "consent":
+            title = "safeeasyapi: allow an AI agent to capture a key?"
+            text = (f"An AI agent wants to connect {display} for the project:\n{where}\n\n"
+                    f"If you allow it, the agent clicks Copy on {display}'s key page. "
+                    f"safeeasyapi takes the key from your clipboard, empties it, tests it "
+                    f"and stores it as {recipe['env_var']}. The agent never sees the key.\n\n"
+                    f"Allow only if YOU asked the agent to do this.")
+        else:
+            title = "safeeasyapi: replace the stored key?"
+            text = (f"An AI agent wants to REPLACE the {display} key already stored for:\n"
+                    f"{where}\n\nThe old key will be overwritten. "
+                    f"Allow only if YOU asked for a new key.")
+
+        def run():
+            try:
+                job.answer = bool(self.ask_person(title, text))
+            except Exception:
+                job.answer = False
+            try:
+                if job.answer and kind == "consent":
+                    consent_mod.grant(root, slug, False, self.consent_file, None, self.secret_store)
+                elif job.answer:
+                    self._replace_ok[key] = self.now()
+                else:
+                    self._denied[key] = self.now()
+            except Exception:
+                job.answer = False
+            finally:
+                job.done.set()
+        threading.Thread(target=run, daemon=True).start()
+        return {"state": "consent_pending", "service": slug, "message": _PENDING}
 
     # ---- the three actions
 
     def start(self, slug: str, recipe: dict, cwd: str | None, timeout=None,
               replace: bool = False) -> dict:
+        with self._lock:
+            if self._current is not None and self._current.done.is_set():
+                self._current = None            # an old result is not news any more
         root = project_root(cwd)
         if recipe.get("_builtin") is not True:
             return _refused("agent capture works only with the recipes that ship with "
                             "safeeasyapi; a recipe of your own is not allowed. Ask the "
                             "person to run `safeeasyapi connect " + slug + "` themselves.")
-        grant_ = consent_for(root, slug, self.consent_file)
-        if grant_ is None:
-            return {"state": "consent_needed", "service": slug, "message": (
-                "The person has not allowed agent-driven key capture for this service "
-                "in this project. Ask them, in plain words, whether you may do it. If "
-                "they agree, tell them to run this in their OWN terminal (you cannot "
-                "and must not run it): safeeasyapi allow-agent " + slug +
-                " - then call capture_key again. Until then do not open the key page "
-                "or click anything.")}
+        fields = recipes_mod.fields(recipe)
+        problem = _gate_problem(recipe, fields)
+        if problem:
+            return {"state": "unsupported_gateless", "service": slug, "message": problem}
+        why = self.env_problem()
+        if why:
+            return _unavailable(slug, why)
         try:
             get, clear = self.backend()
-        except clipboard_mod.Unavailable:
-            return {"state": "unavailable", "service": slug, "message": (
-                "This computer's clipboard cannot be read from here (no clipboard "
-                "tool, or no desktop session). Ask the person to run: safeeasyapi "
-                "connect " + slug + " in their own terminal.")}
+        except clipboard_mod.Unavailable as e:
+            return _unavailable(slug, str(e))
+        grant_ = self._consent(root, slug)
+        if grant_ is None:
+            if self.window_available():
+                return self._ask("consent", root, slug, recipe)
+            return {"state": "consent_needed", "service": slug, "message": (
+                "The person has not allowed agent-driven key capture for this service in "
+                "this project, and no window can be shown here. Ask them, in plain words, "
+                "whether you may. If they agree they run, in their OWN terminal: "
+                "safeeasyapi allow-agent " + slug + " - then call capture_key again. (A "
+                "terminal grant is weaker than the window: a program can fake a terminal.) "
+                "Until then do not open the key page or click anything.")}
         warning = None
         try:
             warning = self.history_fn()
         except Exception:
-            warning = None
+            warning = "Whether a clipboard history is on could not be checked."   # fail closed
         if warning and not grant_.get("clipboard_history_ok"):
             return {"state": "refused", "service": slug, "clipboard_history": True,
                     "message": (
-                        "Windows clipboard history is on: it would keep a copy of the key "
-                        "after this tool empties the clipboard, and nothing can remove "
-                        "that copy. Nothing was started. Tell the person: either turn "
-                        "clipboard history off (Settings > System > Clipboard) and ask "
-                        "again, or - if they accept the risk - run in their own "
-                        "terminal: safeeasyapi allow-agent " + slug +
-                        " --allow-clipboard-history")}
-        env_file, store = _where(root, slug, recipe)
+                        "Clipboard history is on (or could not be checked): it would keep a "
+                        "copy of the key after the clipboard is emptied, and nothing can "
+                        "remove that copy. Nothing was started. Tell the person: either turn "
+                        "clipboard history off (Settings > System > Clipboard) and ask again, "
+                        "or - if they accept the risk - run in their own terminal: "
+                        "safeeasyapi allow-agent " + slug + " --allow-clipboard-history")}
+        env_file, store = _where(root, slug, grant_, self.default_store)
         if env_file is None:
-            return _refused("safeeasyapi.json has an env_file that is not allowed; "
-                            "ask the person to fix it.")
+            return _refused("the key file for this project is not allowed; ask the person "
+                            "to look at safeeasyapi.json or re-run allow-agent.")
         if store == "env":
             try:
                 store_mod.check_env_file(env_file)
             except OSError as e:
                 return _refused(f"the key file cannot be used ({e.strerror or 'refused'}); "
                                 "nothing was started. Ask the person to look at it.")
+        present = _present(recipe, env_file, store, slug)
+        if present:
+            key = (consent_mod.project_key(root), slug, "replace")
+            if not replace:
+                return {"state": "already_stored", "service": slug,
+                        "env_vars": recipes_mod.env_vars(recipe), "message": (
+                            "A key is already stored. Do not capture another unless the "
+                            "person asked to replace it (then pass replace=true and they "
+                            "will be asked in a window).")}
+            if self.now() - self._replace_ok.pop(key, -1e9) > REPLACE_WINDOW:
+                if self.window_available():
+                    return self._ask("replace", root, slug, recipe)
+                return _refused("replacing a stored key needs the person's yes in a window, "
+                                "and none can be shown here. Ask them to run: safeeasyapi "
+                                f"rotate {slug}")
         with self._lock:
             if self._current is not None and not self._current.done.is_set():
                 return {"state": "busy", "service": self._current.slug,
@@ -276,46 +354,79 @@ class Manager:
             except (TypeError, ValueError):
                 seconds = DEFAULT_TIMEOUT
             seconds = max(low, min(high, seconds)) if seconds == seconds else DEFAULT_TIMEOUT
-            if not replace and _present(recipe, env_file, store):
-                return {"state": "already_stored", "service": slug,
-                        "env_vars": recipes_mod.env_vars(recipe), "message": (
-                            "The key is already stored. Do not capture another unless "
-                            "the person asked to replace it (then pass replace=true).")}
             self._starts.append(t)
             cap = _Capture(slug, recipe, root, env_file, store, seconds, t)
             cap.history_note = warning
+            cap.waiting_for = "the key" if len(fields) == 1 else f"the {fields[0]['label']}"
             self._current = cap
-        # The "before" picture is taken HERE, before start() returns: a Copy
-        # that happens a moment later must count as new, not as old.
-        first = recipes_mod.fields(recipe)[0]
-        seen = _snapshot(get, clear, _gate(first))
-        threading.Thread(target=self._run, args=(cap, get, clear, seen), daemon=True).start()
+        try:
+            # The "before" picture is taken HERE, before start() returns: a Copy
+            # a moment later must count as new, not as old.
+            seen = _snapshot(get, clear, _gate(fields[0]), cap, self.clear_wait)
+            threading.Thread(target=self._run, args=(cap, get, clear, seen), daemon=True).start()
+        except Exception:
+            cap.set("failed", "Capture could not be armed (the clipboard did not answer). "
+                              "Nothing was started.")
+            cap.done.set()
+            return cap.public()
         out = cap.public()
         out["timeout_seconds"] = int(seconds)
-        out["message"] = ("Armed. Now, in the browser, create the key and click the "
-                          "vendor's Copy button - nothing else. Then call "
-                          "capture_key with action=status (it can wait up to "
-                          f"{int(MAX_STATUS_WAIT)} seconds).")
+        out["message"] = ("Armed. Now, in the browser, create the key and click the vendor's "
+                          "Copy button - nothing else. Then call capture_key with "
+                          "action=status (it waits up to 25 seconds and returns as soon as "
+                          "anything changes). " + MANAGERS)
         return out
 
     def status(self, wait=None) -> dict:
         cap = self._current
+        job = self._job
         if cap is None:
+            if job is not None:
+                return _job_state(job, self._consent(job.root, job.slug))
             return {"state": "idle", "message": "No capture has been started."}
         try:
-            seconds = max(0.0, min(MAX_STATUS_WAIT, float(wait or 0)))
+            seconds = DEFAULT_STATUS_WAIT if wait is None else float(wait)
         except (TypeError, ValueError):
-            seconds = 0.0
-        cap.done.wait(seconds)
+            seconds = DEFAULT_STATUS_WAIT
+        seconds = max(0.0, min(MAX_STATUS_WAIT, seconds))
+        end = time.monotonic() + seconds
+        with cap.cond:
+            entry = cap.state
+            while not cap.done.is_set() and cap.state == entry:
+                left = end - time.monotonic()
+                if left <= 0:
+                    break
+                cap.cond.wait(left)
         return cap.public()
 
     def cancel(self) -> dict:
         cap = self._current
         if cap is None or cap.done.is_set():
             return {"state": "idle", "message": "Nothing is running."}
+        if cap.state == "storing":
+            out = cap.public()
+            out["cancel"] = "too_late"
+            out["message"] = "The key is being written now; it cannot be cancelled."
+            return out
         cap.cancel.set()
-        cap.done.wait(5)
-        return cap.public()
+        cap.done.wait(15)
+        out = cap.public()
+        if not cap.done.is_set():
+            out["message"] = ("Cancel requested; the key will not be stored. "
+                              "It is still being checked with the vendor.")
+        return out
+
+    def shutdown(self) -> None:
+        """The server is ending: stop any armed capture, leave nothing on the clipboard."""
+        cap = self._current
+        if cap is not None and not cap.done.is_set():
+            cap.cancel.set()
+            cap.done.wait(5)
+            try:
+                get, clear = self.backend()
+                clipboard_mod.clear_verified(get, clear, wait=1.0)
+            except Exception:
+                pass
 
     # ---- the worker
 
@@ -326,46 +437,58 @@ class Manager:
             if cap.state == "waiting":
                 self._finish(cap, values)
         except Exception:                       # never lets the key into a message
-            cap.state = "failed"
-            cap.message = "Capture failed unexpectedly. Nothing was saved."
+            cap.set("failed", "Capture failed unexpectedly. Nothing was saved.")
         finally:
             values.clear()
-            if cap.state == "waiting":
-                cap.state = "failed"
+            if cap.state in ("waiting", "validating", "storing"):
+                cap.set("failed", "Capture failed unexpectedly. Nothing was saved.")
             cap.done.set()
 
     def _collect(self, cap, get, clear, values, seen) -> None:
         fields = recipes_mod.fields(cap.recipe)
         single = len(fields) == 1 and fields[0]["name"] == recipes_mod.DEFAULT_FIELD
+        sequence = getattr(get, "sequence", None)
+        last_seq = None
         for index, field in enumerate(fields):
             cap.waiting_for = "the key" if single else f"the {field['label']}"
             gate = _gate(field)
             if index:
-                seen = _snapshot(get, clear, gate)
+                seen = ""                       # just verified empty: a fast second Copy counts
             while True:
                 if cap.cancel.is_set():
-                    cap.state = "cancelled"
-                    cap.message = "Cancelled. Nothing was saved."
+                    cap.set("cancelled", "Cancelled. Nothing was saved.")
                     return
                 if self.now() >= cap.deadline:
-                    cap.state = "timeout"
-                    cap.message = ("No key was copied in time. Nothing was saved. If "
-                                   "the person's browser needed a login, 2FA, a CAPTCHA "
-                                   "or a password, ask them to do that in the browser, "
-                                   "then start again.")
+                    cap.set("timeout", (
+                        "No key was copied in time. Nothing was saved. Possible reasons: the "
+                        "browser needed a login, 2FA, a CAPTCHA or a password (the person does "
+                        "those); the page's Copy click did not reach the system clipboard (the "
+                        "browser window may need focus or clipboard permission) - then ask the "
+                        "person to press the vendor's Copy button once themselves, and call "
+                        "capture_key again. " + ORPHAN))
                     return
                 self.sleep(self.poll)
+                if sequence is not None:
+                    try:
+                        number = sequence()
+                    except Exception:
+                        number = None
+                    if number is not None and number == last_seq:
+                        continue
+                    last_seq = number
                 current = (get() or "").strip()
                 if current == seen:
                     continue
                 seen = current
-                if not current:
-                    continue
-                if current in values.values():
+                if not current or current in values.values():
                     continue
                 if clipboard_mod.looks_like(current, gate):
                     values[field["name"]] = current
-                    clear()                     # emptied the moment it is taken
+                    ok = clipboard_mod.clear_verified(get, clear, self.clear_wait)
+                    if not ok:
+                        cap.clipboard_warning = (
+                            "The clipboard could NOT be emptied: the key may still be on it. "
+                            "Ask the person to copy some other text now to replace it.")
                     break
                 cap.ignored += 1                # something else was copied: not used
             current = None
@@ -375,75 +498,109 @@ class Manager:
         fields = recipes_mod.fields(recipe)
         single = len(fields) == 1 and fields[0]["name"] == recipes_mod.DEFAULT_FIELD
         scrub = redact_mod.Redactor(list(values.values()))
-        if cap.store == "env":
-            for value in values.values():
-                if store_mod.unsafe_reason(value):
-                    cap.state = "failed"
-                    cap.message = ("The copied value has a character a .env file cannot "
-                                   "hold safely, so it is not a usable key. Nothing was "
-                                   "sent or saved.")
-                    return
+        cap.set("validating", "A key was taken. Asking the vendor whether it works.")
+        for value in values.values():
+            if store_mod.unsafe_reason(value):
+                cap.set("failed", "The copied value has a character that cannot be stored "
+                                  "safely, so it is not a usable key. Nothing was sent or saved.")
+                return
+        if cap.cancel.is_set():
+            cap.set("cancelled", "Cancelled before the key was checked. Nothing was saved.")
+            return
         try:
             ok = self.validate_fn(recipe["validate"],
                                   values[recipes_mod.DEFAULT_FIELD] if single else dict(values))
         except validate_mod.UnsendableKey:
-            cap.state = "failed"
-            cap.message = "The copied value cannot be used as a key. Nothing was saved."
+            cap.set("failed", "The copied value cannot be used as a key. Nothing was saved.")
             return
-        except validate_mod.ValidationError as e:
-            cap.state = "failed"
-            cap.message = ("The vendor could not be reached or answered oddly: "
-                           + scrub.text(recipes_mod.printable(e))[:200]
-                           + ". Nothing was saved.")
+        except Exception as e:                  # a vendor error is never allowed to carry the key
+            cap.set("failed", ("The vendor could not be reached or answered oddly: "
+                               + scrub.text(recipes_mod.printable(e))[:200]
+                               + ". Nothing was saved. " + ORPHAN))
             return
         if not ok:
-            cap.state = "failed"
-            cap.message = ("The vendor rejected the copied value - it was not the key, "
-                           "or it is expired. Nothing was saved. Check which button "
-                           "was clicked, then start again.")
+            cap.set("failed", "The vendor rejected the copied value - it was not the key, or "
+                              "it is expired. Nothing was saved. Check which button was "
+                              "clicked, then start again. " + ORPHAN)
+            return
+        if cap.cancel.is_set():
+            cap.set("cancelled", "Cancelled before saving. The key was not stored. " + ORPHAN)
             return
         cap.note = getattr(ok, "note", None) and scrub.text(
             recipes_mod.printable(ok.note, words=True))
+        identity = getattr(ok, "identity", None)
+        cap.account = identity and scrub.text(recipes_mod.printable(identity))
+        cap.set("storing", "The key is valid. Saving it.")
         store_fn = (self.store_factory or _default_store)(recipe, cap.env_file, cap.store)
         saved = []
         try:
             for field in fields:
                 saved.append(store_fn(field["env_var"], values[field["name"]]))
         except Exception as e:
-            cap.state = "failed"
             why = scrub.text(recipes_mod.printable(getattr(e, "strerror", None) or e))[:200]
-            cap.message = (f"The key was valid but could NOT be saved ({why}). It is "
-                           "not kept anywhere. " + (
-                               "Only part was written; ask the person to run "
-                               f"safeeasyapi forget {cap.slug}." if saved else
-                               "Nothing was written."))
+            cap.set("failed", (
+                f"The key was valid but could NOT be saved ({why}). It is not kept anywhere. "
+                + ("Only part was written; ask the person to run "
+                   f"safeeasyapi forget {cap.slug}." if saved else "Nothing was written.")))
             return
         cap.stored_in = [scrub.text(_first_line(d)) for d in saved]
         cap.length_classes = [length_class(len(v)) for v in values.values()]
-        cap.state = "stored"
-        cap.message = ("Stored and the clipboard was emptied. The key was not shown "
-                       "to you and must not be looked for. Use the variable by name.")
+        emptied = "" if cap.clipboard_warning else "The clipboard was emptied. "
+        cap.set("stored", "Stored. " + emptied + "The key was not shown to you and must not "
+                          "be looked for. Use the variable by name.")
         try:
             self.record_fn(cap.root, cap.slug, cap.store)
         except Exception:
             pass
 
 
+_PENDING = ("A confirmation window was put on the person's screen (it may be behind other "
+            "windows). Ask them to answer it, then call capture_key again with action=status "
+            "or action=start. Do not open the key page yet.")
+
+
+def _job_state(job: _Job, granted) -> dict:
+    if not job.done.is_set():
+        return {"state": "consent_pending", "message": _PENDING}
+    if job.answer:
+        return {"state": "consent_granted" if job.kind == "consent" else "replace_granted",
+                "message": "The person said yes. Call capture_key with action=start now."}
+    return {"state": "consent_denied", "message": "The person said no."}
+
+
 def _gate(field: dict):
     """The key format a copied value must have: the recipe's accept pattern, or
-    its detect pattern when that is a documented ("known") shape; else None
-    (a plausible single-token value)."""
+    its detect pattern when that is a documented ("known") shape; else None."""
     return field.get("accept") or (field.get("detect")
                                    if field.get("detect_confidence") == "known" else None)
 
 
-def _snapshot(get, clear, gate) -> str:
-    """What is on the clipboard now is OLD. Key-like content is wiped, so that
-    copying the same key again counts as a change; anything else is just
-    remembered as 'before'."""
+def _gate_problem(recipe: dict, fields: list) -> str | None:
+    if recipe.get("capture_safe") is True and not len(fields) > 1:
+        return None
+    gates = [_gate(f) for f in fields]
+    if any(g is None for g in gates):
+        return ("This service has no documented key format, so a copied value cannot be "
+                "recognised as its key (anything on the clipboard could be taken). Agent "
+                "capture is not available for it: ask the person to run `safeeasyapi "
+                f"connect {recipe['service']}` themselves.")
+    if len(set(gates)) != len(gates):
+        return ("This service's values look alike, so they could be swapped; agent capture "
+                "is not available for it. Ask the person to run `safeeasyapi connect "
+                f"{recipe['service']}`.")
+    return None
+
+
+def _snapshot(get, clear, gate, cap=None, wait: float = 3.0) -> str:
+    """What is on the clipboard now is OLD. A value shaped like THIS service's
+    key is wiped (so that copying it again counts as a change - said in the
+    result); anything else is left alone and just remembered as 'before'."""
     seen = (get() or "").strip()
-    if seen and (clipboard_mod.looks_like(seen, None) or clipboard_mod.looks_like(seen, gate)):
-        clear()
+    if seen and clipboard_mod.looks_like(seen, gate):
+        clipboard_mod.clear_verified(get, clear, wait)
+        if cap is not None:
+            cap.stale_note = ("A value shaped like this service's key was already on the "
+                              "clipboard; it was removed and not used.")
         return ""
     return seen
 
@@ -456,28 +613,38 @@ def _refused(message: str) -> dict:
     return {"state": "refused", "message": message}
 
 
-def _where(root: str, slug: str, recipe: dict):
-    manifest = None
+def _unavailable(slug: str, reason: str) -> dict:
+    return {"state": "unavailable", "service": slug, "message": (
+        "Agent capture cannot be used here: " + re.sub(r"\s+", " ", reason)[:200] + ". Ask "
+        "the person to run: safeeasyapi connect " + slug + " in their own terminal.")}
+
+
+def _where(root: str, slug: str, grant_: dict, default_store: str):
+    """(env file, store). The file is the project's .env unless the person's
+    grant names another .env-style file; the manifest only chooses the store."""
+    name = grant_.get("env_file") or ".env"
+    if manifest_mod.env_file_problem(name) is not None:
+        return None, None
+    store = default_store
     path = os.path.join(root, manifest_mod.FILE_NAME)
     if os.path.isfile(path):
         try:
-            manifest = manifest_mod.load(path)
+            data = manifest_mod.load(path)
         except manifest_mod.ManifestError:
-            manifest = None
-    try:
-        env_file = manifest_mod.env_file_in(root, manifest)
-    except manifest_mod.ManifestError:
-        return None, None
-    store = "env"
-    for item in (manifest or {}).get("services", []):
-        if item["service"] == slug:
-            store = item.get("store", "env")
-    return env_file, store
+            data = {"services": []}
+        for item in data.get("services", []):
+            if item["service"] == slug:
+                store = item.get("store", store)
+    return os.path.join(root, *name.split("/")), store
 
 
-def _present(recipe: dict, env_file: str, store: str) -> bool:
+def _present(recipe: dict, env_file: str, store: str, slug: str) -> bool:
     if store == "keychain":
-        return False
+        from . import keychain as keychain_mod
+        try:
+            return all(keychain_mod.read(slug, v) for v in recipes_mod.env_vars(recipe))
+        except Exception:
+            return False
     from . import presence as presence_mod
     have = presence_mod.env_names(env_file)
     return all(v in have for v in recipes_mod.env_vars(recipe))
@@ -487,8 +654,8 @@ def _default_store(recipe: dict, env_file: str, store: str):
     """store_fn for an agent capture. Never asks the person anything: a
     keychain that fails does not fall back to a plain file."""
     if store == "keychain":
-        from . import cli as cli_mod
         import io
+        from . import cli as cli_mod
         return cli_mod.keychain_store(recipe, env_file, out=io.StringIO(),
                                       interactive=lambda: False)
     return connect_mod.store_in_env_file(env_file)
@@ -505,6 +672,11 @@ def default_manager() -> Manager:
 
 
 def set_manager(manager: Manager | None) -> None:
-    """For tests: replace (or reset) the process-wide manager."""
     global _MANAGER
     _MANAGER = manager
+
+
+def shutdown() -> None:
+    """Called when the server ends."""
+    if _MANAGER is not None:
+        _MANAGER.shutdown()

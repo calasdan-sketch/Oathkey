@@ -42,13 +42,15 @@ AGENT_RULE = ("Do not ask the person to paste a key into chat, and do not read o
 
 
 CAPTURE_RULES = (
-    "Never read, screenshot, zoom into or extract the text of the token/key field "
-    "or any page area that shows the key (no page-text, read-page or find tools on it).",
-    "Never type, paste or send the key anywhere; you do not need it. Only click the "
-    "vendor's own Copy button; safeeasyapi takes it from the clipboard.",
-    "Never enter a password, a 2FA code or solve a CAPTCHA. If the page asks for a "
-    "login, 2FA, a CAPTCHA or a password prompt (for example GitHub's sudo mode), "
-    "stop and ask the person to do that step in the browser, then continue.",
+    "Never look at the key. Do not use any tool that returns page content, the DOM, an "
+    "accessibility tree, text or a screenshot of the page area that shows the key. Click the "
+    "vendor's own Copy button only; safeeasyapi takes the key from the clipboard.",
+    "Never type, paste or send the key anywhere; you do not need it.",
+    "Never enter a password, a 2FA code or solve a CAPTCHA. If the page asks for a login, "
+    "2FA, a CAPTCHA or a password prompt (for example GitHub's sudo mode), stop and ask the "
+    "person to do that step in the browser, then continue.",
+    "If you have no browser tool that can click, stop and use the human route: ask the "
+    "person to run `safeeasyapi connect <service>` in their own terminal.",
     "Choose the smallest permissions that work, one project or repository only, and a "
     "short expiry (30 to 90 days).",
     "Do not copy anything else while capture is armed: the next key-shaped copy is taken.",
@@ -173,7 +175,7 @@ def request_connect(service, catalog: dict, open_key_page: bool = False,
     if recipe is None:
         return {"error": "no such service. Call list_services for the names I know.",
                 "isError": True}
-    root = cwd or os.getcwd()
+    root = manifest_mod.project_root(cwd)
     manifest = _project_manifest(root)
     store = "env"
     env_file = os.path.join(root, ".env")
@@ -285,25 +287,29 @@ def as_text(payload: dict, catalog: dict, cwd: str | None = None) -> str:
     return guard_text(json.dumps(payload), catalog, cwd)
 
 
+CAPTURE_ACTIONS = ("start", "status", "cancel")
+
+
 def capture_key(args: dict, catalog: dict, cwd: str | None = None, manager=None) -> dict:
-    """The agent-driven capture (capture.py). `action`: start (default),
-    status or cancel. Returns state words and names only - never a value."""
+    """The agent-driven capture (capture.py, experimental). `action`: start
+    (default), status or cancel. Returns state words and names only - never a
+    value."""
     manager = manager or capture_mod.default_manager()
     action = args.get("action") or "start"
+    if action not in CAPTURE_ACTIONS:
+        return {"error": "action must be start, status or cancel", "isError": True}
     if action == "status":
         return manager.status(args.get("wait_seconds"))
     if action == "cancel":
         return manager.cancel()
-    if action != "start":
-        return {"error": "action must be start, status or cancel", "isError": True}
     slug = clean_slug(args.get("service"))
     recipe = catalog.get(slug) if slug else None
     if recipe is None:
-        return {"error": "no such service. Call list_services for the names I know.",
+        return {"error": "action=start needs a service from list_services, like 'github'.",
                 "isError": True}
     out = manager.start(slug, recipe, cwd, args.get("timeout_seconds"),
                         bool(args.get("replace")))
-    if out.get("state") in ("waiting",):
+    if out.get("state") == "waiting":
         out["browser"] = browser_steps(recipe)
         out["rules"] = list(CAPTURE_RULES)
     return out

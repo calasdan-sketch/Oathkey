@@ -14,6 +14,7 @@ from unittest import mock
 
 import _isolation  # noqa: F401
 from safeeasyapi import agent as agent_mod
+from safeeasyapi import consent as consent_mod
 from safeeasyapi import allowcmd
 from safeeasyapi import capture as capture_mod
 from safeeasyapi import clipboard as clip_mod
@@ -53,6 +54,43 @@ class FakeClipboard:
         return self.get, self.clear
 
 
+class MemorySecret:
+    """A secret store that lives in memory (no keychain, no DPAPI, no file)."""
+    kind = "memory"
+    advisory = False
+
+    def __init__(self):
+        self.secret = None
+
+    def load(self):
+        return self.secret
+
+    def save(self, secret):
+        self.secret = secret
+
+
+TERMINAL = ("stored", "failed", "timeout", "cancelled")
+
+
+def until(mgr, states=TERMINAL, limit=20.0):
+    """Ask for the status until it is one of `states` (a condition with a
+    deadline, never a fixed sleep)."""
+    end = time.monotonic() + limit
+    out = mgr.status(0)
+    while out.get("state") not in states and time.monotonic() < end:
+        out = mgr.status(0.2)
+    return out
+
+
+def wait_for(condition, limit=20.0):
+    end = time.monotonic() + limit
+    while time.monotonic() < end:
+        if condition():
+            return True
+        time.sleep(0.005)
+    return condition()
+
+
 class Vendor:
     def __init__(self, answer=None, error=None):
         self.answer = validate_mod.Result("valid") if answer is None else answer
@@ -74,17 +112,24 @@ class Base(unittest.TestCase):
         self.vendor = Vendor()
         self.history = None
         self.recorded = []
+        self.secret = MemorySecret()
+        self.mgrs = []
 
     def manager(self, **kw):
         defaults = dict(backend=self.clip.backend, validate_fn=self.vendor,
                         history_fn=lambda: self.history, poll=0.002,
-                        consent_file=self.consent, timeout_limits=(0.05, 180),
+                        consent_file=self.consent, secret_store=self.secret,
+                        timeout_limits=(0.05, 180), clear_wait=0.05,
+                        window_available=lambda: False, env_problem=lambda: None,
                         record_fn=lambda *a, **k: self.recorded.append(a))
         defaults.update(kw)
-        return capture_mod.Manager(**defaults)
+        mgr = capture_mod.Manager(**defaults)
+        self.mgrs.append(mgr)
+        self.addCleanup(mgr.cancel)
+        return mgr
 
     def allow(self, service="github", history_ok=False):
-        capture_mod.grant(self.proj, service, history_ok, self.consent)
+        consent_mod.grant(self.proj, service, history_ok, self.consent, None, self.secret)
 
     def start(self, mgr, service="github", **kw):
         return mgr.start(service, CATALOG[service], self.proj, **kw)
@@ -120,7 +165,7 @@ class TestConsent(Base):
 
     def test_revoke_takes_it_back(self):
         self.allow()
-        self.assertEqual(capture_mod.revoke(self.proj, "github", self.consent), 1)
+        self.assertEqual(consent_mod.revoke(self.proj, "github", self.consent, self.secret), 1)
         self.assertEqual(self.start(self.manager())["state"], "consent_needed")
 
     def test_the_grant_is_not_kept_in_the_project(self):
@@ -143,7 +188,7 @@ class TestCapture(Base):
         armed = self.start(mgr)
         self.assertEqual(armed["state"], "waiting")
         self.clip.copy(GH_KEY)
-        done = mgr.status(5)
+        done = until(mgr)
         self.assertEqual(done["state"], "stored", done)
         self.assertEqual(done["env_vars"], ["GITHUB_TOKEN"])
         self.assertIn("GITHUB_TOKEN=" + GH_KEY, self.env_text())
@@ -159,7 +204,7 @@ class TestCapture(Base):
         self.clip.copy(GH_KEY)                  # an old copy of a real-looking key
         mgr = self.manager()
         self.start(mgr, timeout=0.3)
-        done = mgr.status(5)
+        done = until(mgr)
         self.assertEqual(done["state"], "timeout")
         self.assertEqual(self.vendor.seen, [])
         self.assertEqual(self.env_text(), "")
@@ -170,29 +215,27 @@ class TestCapture(Base):
         self.clip.copy(GH_KEY)
         mgr = self.manager()
         self.start(mgr, timeout=20)
-        time.sleep(0.05)
         self.clip.copy(GH_KEY)                  # the Copy button, same text
-        self.assertEqual(mgr.status(5)["state"], "stored")
+        self.assertEqual(until(mgr)["state"], "stored")
 
     def test_a_key_of_another_service_is_rejected(self):
         self.allow()
         mgr = self.manager()
         self.start(mgr, timeout=20)
         self.clip.copy(OTHER)
-        time.sleep(0.1)
+        self.assertTrue(wait_for(lambda: mgr.status(0).get("ignored_clipboard_changes", 0) >= 1))
         mid = mgr.status(0)
         self.assertEqual(mid["state"], "waiting")
-        self.assertGreaterEqual(mid.get("ignored_clipboard_changes", 0), 1)
         self.assertEqual(self.vendor.seen, [])
         self.clip.copy(GH_KEY)
-        self.assertEqual(mgr.status(5)["state"], "stored")
+        self.assertEqual(until(mgr)["state"], "stored")
         self.assertNotIn(OTHER, self.env_text())
 
     def test_timeout_saves_nothing(self):
         self.allow()
         mgr = self.manager()
         self.start(mgr, timeout=0.2)
-        done = mgr.status(5)
+        done = until(mgr)
         self.assertEqual(done["state"], "timeout")
         self.assertIn("2FA", done["message"])
         self.assertEqual(self.env_text(), "")
@@ -203,7 +246,7 @@ class TestCapture(Base):
         mgr = self.manager()
         self.start(mgr)
         self.clip.copy(GH_KEY)
-        done = mgr.status(5)
+        done = until(mgr)
         self.assertEqual(done["state"], "failed")
         self.assertEqual(self.env_text(), "")
         self.assertEqual(self.clip.value, "")
@@ -215,7 +258,7 @@ class TestCapture(Base):
         mgr = self.manager()
         self.start(mgr)
         self.clip.copy(GH_KEY)
-        done = mgr.status(5)
+        done = until(mgr)
         self.assertEqual(done["state"], "failed")
         self.assertNoKey(done)
         self.assertEqual(self.env_text(), "")
@@ -226,7 +269,7 @@ class TestCapture(Base):
         mgr = self.manager()
         self.start(mgr)
         self.clip.copy(GH_KEY)
-        done = mgr.status(5)
+        done = until(mgr)
         self.assertEqual(done["state"], "stored")
         self.assertIn("may not read", done["vendor_note"])
 
@@ -240,7 +283,7 @@ class TestCapture(Base):
         mgr = self.manager(store_factory=broken)
         self.start(mgr)
         self.clip.copy(GH_KEY)
-        done = mgr.status(5)
+        done = until(mgr)
         self.assertEqual(done["state"], "failed")
         self.assertIn("NOT be saved", done["message"])
         self.assertNoKey(done)
@@ -248,24 +291,26 @@ class TestCapture(Base):
     def test_two_value_recipes_collect_each_in_order(self):
         recipe = {"service": "duo", "display": "Duo", "key_url": "https://duo.test/keys",
                   "env_var": "DUO_ID", "steps": ["x"], "_builtin": True,
-                  "fields": [{"name": "app", "env_var": "DUO_ID", "label": "App ID"},
-                             {"name": "secret", "env_var": "DUO_SECRET", "label": "Secret"}],
+                  "fields": [{"name": "app", "env_var": "DUO_ID", "label": "App ID",
+                              "accept": "^gh" + "p_"},
+                             {"name": "secret", "env_var": "DUO_SECRET", "label": "Secret",
+                              "accept": "^zz" + "-"}],
                   "validate": {"method": "GET", "url": "https://duo.test/me",
                                "auth": {"type": "basic"}, "expect": [200]}}
-        capture_mod.grant(self.proj, "duo", False, self.consent)
+        consent_mod.grant(self.proj, "duo", False, self.consent, None, self.secret)
         mgr = self.manager()
         out = mgr.start("duo", recipe, self.proj, timeout=20)
         self.assertEqual(out["state"], "waiting")
         self.clip.copy(GH_KEY)
-        time.sleep(0.1)
+        self.assertTrue(wait_for(lambda: self.clip.value == ""))      # the first one was taken
         self.assertEqual(mgr.status(0)["state"], "waiting")
-        self.clip.copy(GH_KEY2)
-        done = mgr.status(5)
+        self.clip.copy(OTHER)
+        done = until(mgr)
         self.assertEqual(done["state"], "stored", done)
         text = self.env_text()
         self.assertIn("DUO_ID=" + GH_KEY, text)
-        self.assertIn("DUO_SECRET=" + GH_KEY2, text)
-        self.assertEqual(self.vendor.seen, [{"app": GH_KEY, "secret": GH_KEY2}])
+        self.assertIn("DUO_SECRET=" + OTHER, text)
+        self.assertEqual(self.vendor.seen, [{"app": GH_KEY, "secret": OTHER}])
 
     def test_an_existing_key_is_not_replaced_unless_asked(self):
         self.allow()
@@ -273,7 +318,16 @@ class TestCapture(Base):
             f.write("GITHUB_TOKEN=already-there-12345\n")
         mgr = self.manager()
         self.assertEqual(self.start(mgr)["state"], "already_stored")
-        self.assertEqual(self.start(mgr, replace=True)["state"], "waiting")
+        # replacing needs the person's yes in a window; none here -> refused
+        self.assertEqual(self.start(mgr, replace=True)["state"], "refused")
+        asked = []
+        mgr2 = self.manager(window_available=lambda: True,
+                            ask_person=lambda title, text: asked.append(text) or True)
+        self.assertEqual(self.start(mgr2, replace=True)["state"], "consent_pending")
+        self.assertTrue(wait_for(lambda: mgr2.status(0)["state"] != "consent_pending"))
+        self.assertEqual(mgr2.status(0)["state"], "replace_granted")
+        self.assertIn("REPLACE", asked[0])
+        self.assertEqual(self.start(mgr2, replace=True)["state"], "waiting")
 
 
 class TestLimits(Base):
@@ -363,6 +417,9 @@ class TestThroughMcp(Base):
         self.assertIn("browser", start)
         self.clip.copy(GH_KEY)
         text2, _ = self.call({"action": "status", "wait_seconds": 5})
+        if json.loads(text2)["state"] != "stored":
+            self.assertTrue(wait_for(lambda: self.mgr.status(0)["state"] == "stored"))
+            text2, _ = self.call({"action": "status", "wait_seconds": 0})
         self.assertEqual(json.loads(text2)["state"], "stored")
         self.assertNoKey(text, text2)
         self.assertNotIn(GH_KEY, text + text2)
@@ -382,7 +439,7 @@ class TestThroughMcp(Base):
         self.assertIn("capture_key", r["instructions"])
         self.assertTrue(r["browser"]["steps"])
         self.assertTrue(any("Never enter a password" in x for x in r["rules"]))
-        self.assertTrue(any("Never read" in x for x in r["rules"]))
+        self.assertTrue(any("Never look at the key" in x for x in r["rules"]))
         self.assertTrue(any("short expiry" in x for x in r["rules"]))
         self.assertIn("safeeasyapi connect github", r["instructions"])     # the fallback
 
@@ -397,37 +454,37 @@ class TestAllowAgentCommand(Base):
         out = io.StringIO()
         code = allowcmd.cmd_allow_agent(args, CATALOG, ask=lambda p: answer,
                                         terminal=lambda: terminal, out=out,
-                                        consent_file=self.consent, cwd=self.proj)
+                                        consent_file=self.consent, cwd=self.proj, store=self.secret)
         return code, out.getvalue()
 
     def test_without_a_terminal_nothing_is_granted(self):
         code, text = self.go(self.run_cmd(), terminal=False)
         self.assertEqual(code, 2)
-        self.assertIsNone(capture_mod.consent_for(self.proj, "github", self.consent))
+        self.assertIsNone(consent_mod.consent_for(self.proj, "github", self.consent, self.secret))
 
     def test_anything_but_yes_grants_nothing(self):
         for answer in ("", "y", "ok"):
             code, _ = self.go(self.run_cmd(), answer=answer)
             self.assertEqual(code, 1)
-        self.assertIsNone(capture_mod.consent_for(self.proj, "github", self.consent))
+        self.assertIsNone(consent_mod.consent_for(self.proj, "github", self.consent, self.secret))
 
     def test_yes_grants_and_list_and_revoke_work(self):
         code, text = self.go(self.run_cmd())
         self.assertEqual(code, 0)
         self.assertIn("EMPTIES", text)
-        self.assertIsNotNone(capture_mod.consent_for(self.proj, "github", self.consent))
+        self.assertIsNotNone(consent_mod.consent_for(self.proj, "github", self.consent, self.secret))
         listing = self.go(type("A", (), dict(service=None, revoke=False, list=True,
                                              allow_clipboard_history=False))())[1]
         self.assertIn("github", listing)
         code, text = self.go(type("A", (), dict(service="github", revoke=True, list=False,
                                                 allow_clipboard_history=False))())
-        self.assertIsNone(capture_mod.consent_for(self.proj, "github", self.consent))
+        self.assertIsNone(consent_mod.consent_for(self.proj, "github", self.consent, self.secret))
 
     def test_history_acceptance_is_recorded(self):
         args = type("A", (), dict(service="github", revoke=False, list=False,
                                    allow_clipboard_history=True))()
         self.go(args)
-        self.assertTrue(capture_mod.consent_for(self.proj, "github", self.consent)["clipboard_history_ok"])
+        self.assertTrue(consent_mod.consent_for(self.proj, "github", self.consent, self.secret)["clipboard_history_ok"])
 
     def test_only_builtin_services(self):
         args = type("A", (), dict(service="not-a-service", revoke=False, list=False,

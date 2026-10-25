@@ -114,9 +114,31 @@ STEAL_RULES = (
     (re.compile(r"\b(?:import|from)\s+keyring\b|\bkeyring\.get_password\b", re.I), "read the keyring from code"),
     (re.compile(r"/proc/[\w$*{}/-]*/environ", re.I), "read another program's environment"),
     (re.compile(r"[/\\~]\.safeeasyapi(?![\w])", re.I), "read safeeasyapi's own store"),
-    (re.compile(r"safeeasyapi(?:\.exe)?\b(?:(?!\s--\s)[^\n;&|])*\sallow-agent\b|-m\s+safeeasyapi\b[^\n;&|]*\sallow-agent\b", re.I),
+    (re.compile(_SAFE + r"(?:pbpaste|wl-paste|Get-Clipboard|xclip\b[^\n;&|]*\s-(?:o\b|out\b)|xsel\b[^\n;&|]*\s(?:-o\b|--output\b))", re.I),
+     "read the clipboard"),
+    (re.compile(r"\b(?:Windows\.Forms\.Clipboard|GetClipboardData|pyperclip|clipboard_get)\b", re.I),
+     "read the clipboard from code"),
+)
+
+
+# What only the person may do (grant an agent the right to capture keys), and
+# the files that record it. Matched against the command with quotes, carets,
+# backslashes and shell variables taken out, so allow""-agent and
+# a${x}llow-agent do not slip through. A speed bump, not a lock: the grant
+# itself is protected by a confirmation window the agent cannot answer
+# (see consent.py).
+CONSENT_RULES = (
+    (re.compile(r"allow[-_]agent|agent[-_]consent|allowcmd|safeeasyapi\.(?:consent|capture)\b|"
+                r"(?:consent|capture)_mod\b|consent\.(?:grant|_save_grants)|capture\.grant", re.I),
      "give itself permission to capture keys (only the person may)"),
 )
+
+
+def _squash(text: str) -> tuple[str, str]:
+    """`text` without quotes, carets, backticks and backslashes; and also
+    without shell variables."""
+    plain = re.sub(r"[\'\"`^\\]", "", text)
+    return plain, re.sub(r"\$\{[^}]*\}|\$\w+|\$\(\)", "", plain)
 
 
 def steals_key(text: str) -> str | None:
@@ -125,6 +147,10 @@ def steals_key(text: str) -> str | None:
     for rx, what in STEAL_RULES:
         if rx.search(text) or (flat is not text and rx.search(flat)):
             return what
+    for variant in _squash(text):
+        for rx, what in CONSENT_RULES:
+            if rx.search(variant):
+                return what
     return None
 
 
@@ -196,6 +222,12 @@ def decide(payload) -> str | None:
         hits = find_env_files(text)
         if hits:
             return hits[0]
+        if re.search(r"[\'\"`^]", text):
+            # c''at .e''nv: the shell joins the pieces, so look at the joined text too
+            for variant in _squash(text):
+                hits = find_env_files(variant)
+                if hits:
+                    return hits[0]
     return None
 
 

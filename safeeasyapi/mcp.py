@@ -21,6 +21,7 @@ import sys
 
 from . import __version__
 from . import agent as agent_mod
+from . import capture as capture_mod
 from . import publicapis as pa_mod
 from . import recipes as recipes_mod
 
@@ -65,6 +66,7 @@ def _too_deep(text: str, limit: int = MAX_JSON_DEPTH) -> bool:
     return False
 
 
+SUPPORTED_PROTOCOLS = ("2024-11-05", "2025-03-26", "2025-06-18")
 _METHODS = ("initialize", "ping", "tools/list", "tools/call")
 
 
@@ -96,23 +98,25 @@ def _tool_defs() -> list[dict]:
                                                "description": "Also open the vendor's key page in the person's browser."}},
                          "required": ["service"]}},
         {"name": "capture_key",
-         "description": ("Get an API key into the project without anyone typing or "
+         "description": ("EXPERIMENTAL. Get an API key into the project without anyone typing or "
                          "pasting it. action=start arms a one-shot capture in this "
                          "(local) server and returns the browser steps and rules; YOU "
                          "then create the key in the browser and click the vendor's Copy "
                          "button - never read, type or screenshot the key. This server "
                          "takes it from the clipboard, empties the clipboard, tests it "
                          "with the vendor and stores it. action=status waits up to 60 s "
-                         "and returns {state: stored|waiting|failed|timeout, env_vars, "
-                         "stored_in} - never the key. The person must have allowed it "
-                         "once (`safeeasyapi allow-agent <service>`); the answer says "
-                         "so when not. Login, 2FA, CAPTCHA and password prompts are for "
-                         "the person to do in the browser."),
+                         "and returns {state, env_vars, stored_in, account} - never the "
+                         "key. States: consent_pending/consent_needed/consent_denied, "
+                         "unavailable, unsupported_gateless, refused, busy, already_stored, "
+                         "waiting, validating, storing, stored, failed, timeout, cancelled, "
+                         "idle. The person is asked to allow it in a window (or with "
+                         "`safeeasyapi allow-agent`). Login, 2FA, CAPTCHA and password "
+                         "prompts are for the person to do in the browser."),
          "inputSchema": {"type": "object",
                          "properties": {
                              "service": {"type": "string"},
-                             "action": {"type": "string",
-                                        "description": "start (default), status or cancel."},
+                             "action": {"type": "string", "enum": ["start", "status", "cancel"],
+                                        "description": "start (default; needs service), status or cancel."},
                              "timeout_seconds": {"type": "integer",
                                                  "description": "How long to wait for the Copy, 10 to 180 (default 120)."},
                              "wait_seconds": {"type": "integer",
@@ -355,7 +359,8 @@ def _handle(request, catalog: dict[str, dict],
                    "Invalid params: 'params' must be an object")
 
     if method == "initialize":
-        return ok({"protocolVersion": "2024-11-05",
+        wanted = params.get("protocolVersion")
+        return ok({"protocolVersion": wanted if wanted in SUPPORTED_PROTOCOLS else "2024-11-05",
                    "capabilities": {"tools": {}},
                    "serverInfo": SERVER_INFO})
     if method == "ping":
@@ -414,7 +419,7 @@ def _handle(request, catalog: dict[str, dict],
         if name == "capture_key":
             answer = agent_mod.capture_key(args, catalog, cwd)
             failed = answer.pop("isError", False)
-            result = {"content": [{"type": "text", "text": json.dumps(answer)}]}
+            result = {"content": [{"type": "text", "text": agent_mod.as_text(answer, catalog, cwd)}]}
             if failed:
                 result["isError"] = True
             return ok(result)
@@ -482,6 +487,16 @@ def _handle(request, catalog: dict[str, dict],
 
 def serve(catalog: dict[str, dict] | None = None,
           pa_loader=None, stdin=None, stdout=None) -> int:
+    """Run the server; when it ends for any reason, stop an armed key capture
+    and leave nothing on the clipboard."""
+    try:
+        return _serve(catalog, pa_loader, stdin, stdout)
+    finally:
+        capture_mod.shutdown()
+
+
+def _serve(catalog: dict[str, dict] | None = None,
+           pa_loader=None, stdin=None, stdout=None) -> int:
     """Newline-delimited JSON-RPC over stdio. The wire is UTF-8 bytes
     whatever the console code page (Windows cp1252 included).
 

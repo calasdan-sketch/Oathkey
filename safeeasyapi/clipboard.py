@@ -56,6 +56,8 @@ def _windows():
     kernel32.GlobalLock.restype = ctypes.c_void_p
     kernel32.GlobalLock.argtypes = [ctypes.c_void_p]
     kernel32.GlobalUnlock.argtypes = [ctypes.c_void_p]
+    user32.GetClipboardSequenceNumber.restype = wintypes.DWORD
+    user32.EmptyClipboard.restype = wintypes.BOOL
     cf_unicode = 13
 
     def opened(fn):
@@ -82,9 +84,15 @@ def _windows():
                 kernel32.GlobalUnlock(handle)
         return opened(read) or ""
 
-    def clear() -> None:
-        opened(user32.EmptyClipboard)
+    def clear() -> bool:
+        return bool(opened(user32.EmptyClipboard))
 
+    def sequence() -> int:
+        """Changes whenever anything is copied (even the same text again):
+        a cheap check before opening the clipboard at all."""
+        return int(user32.GetClipboardSequenceNumber())
+
+    get.sequence = sequence
     return get, clear
 
 
@@ -96,11 +104,15 @@ def _command(read: list[str], clear: list[str]):
             return ""
         return done.stdout.decode("utf-8", "replace") if done.returncode == 0 else ""
 
-    def wipe() -> None:
+    def wipe() -> bool:
+        # no pipes to hold: xclip and wl-copy stay alive to serve the
+        # selection, and a captured pipe would make us wait for them
         try:
-            subprocess.run(clear, input=b"", capture_output=True, timeout=5)
+            done = subprocess.run(clear, input=b"", stdout=subprocess.DEVNULL,
+                                  stderr=subprocess.DEVNULL, timeout=5)
         except (OSError, subprocess.TimeoutExpired):
-            pass
+            return False
+        return done.returncode == 0
     return get, wipe
 
 
@@ -170,6 +182,10 @@ def looks_like(value: str, pattern: str | None) -> bool:
     value = value.strip()
     if not value or len(value) > MAX_LEN:
         return False
+    # one line, no spaces or control characters, whatever the pattern says:
+    # a gate that names only the start must not accept "sk-ant-x\nrm -rf"
+    if re.search(r"[\s\x00-\x1f\x7f]", value):
+        return False
     if re.match(r"https?://", value, re.IGNORECASE):
         return False                        # a copied link is never the key
     if pattern:
@@ -226,3 +242,23 @@ def wait_for_key(pattern: str | None, taken: set[str], get, clear,
             clear()
             return current
     return None
+
+
+def clear_verified(get, clear, wait: float = 3.0, poll: float = 0.1,
+                   now=time.monotonic, sleep=time.sleep) -> bool:
+    """Empty the clipboard and make sure it is: clear, read it back, and try
+    again for up to `wait` seconds. False when it still holds something."""
+    deadline = now() + wait
+    while True:
+        try:
+            clear()
+        except Exception:
+            pass
+        try:
+            if not (get() or "").strip():
+                return True
+        except Exception:
+            pass
+        if now() >= deadline:
+            return False
+        sleep(poll)

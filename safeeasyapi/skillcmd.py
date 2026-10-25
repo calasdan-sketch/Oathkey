@@ -38,6 +38,16 @@ def _links_in(path: str, stop: str) -> str | None:
 def cmd_skill(args, out=None, ask=input, home: str | None = None, cwd: str | None = None,
               interactive=None) -> int:
     out = out or sys.stdout
+    client = getattr(args, "for_client", "claude")
+    if client != "claude":
+        from . import agentsetup
+        project = os.path.abspath(cwd or os.getcwd())
+        targets = ("cursor", "codex", "gemini") if client == "all" else (client,)
+        codes = [agentsetup.install_rules(c, project, skill_text(), out) for c in targets]
+        if client == "all":
+            args = type("A", (), {"project": args.project, "yes": args.yes, "for_client": "claude"})()
+            codes.append(cmd_skill(args, out, ask, home, cwd, interactive))
+        return max(codes)
     base = os.path.abspath(cwd or os.getcwd()) if args.project else os.path.abspath(
         home or os.path.expanduser("~"))
     claude = os.path.join(base, ".claude")
