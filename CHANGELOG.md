@@ -11,7 +11,8 @@ Fixes for what the test matrix (Linux, macOS, Windows; Python 3.10-3.14) found.
   running. Exit status is 130 as documented.
 - MCP: JSON nested more than 200 levels deep is a Parse error (-32700) on every
   Python version; before, Python 3.14 could parse it and the reply was
-  Invalid params (-32602).
+  Invalid params (-32602). A reply nested deeper than that is likewise an
+  Internal error on every Python (macOS 3.14 could write it).
 - Hook: a `safeeasyapi` program in the current folder is never used as the hook
   command, also when the folder has another spelling (macOS `/var` and
   `/private/var`, links, Windows case and short names).

@@ -494,7 +494,12 @@ def serve(catalog: dict[str, dict] | None = None,
                 response = _error(rid, INTERNAL_ERROR, agent_mod.guard_text(str(e), catalog))
         if response is not None:
             try:
-                data = (json.dumps(response) + "\n").encode("utf-8")
+                text = json.dumps(response)
+                if _too_deep(text):
+                    # the same limit going out as coming in, whatever depth
+                    # this Python's json.dumps happens to survive
+                    raise ValueError("reply nested too deep")
+                data = (text + "\n").encode("utf-8")
             except (ValueError, RecursionError):
                 # The request's `id` is echoed back and may be any JSON
                 # value - one nested too deep to write again. Answer without

@@ -93,14 +93,26 @@ class TestAReplyThatCannotBeWritten(unittest.TestCase):
         return replies
 
     def test_a_reply_nested_too_deep_to_write(self):
+        # 5000 levels: json.dumps may or may not manage that (it depends on
+        # the Python version and platform); the answer must not depend on it
         deep = []
-        for _ in range(100000):
+        for _ in range(5000):
             deep = [deep]
         replies = self.serve_with_reply(
             {"jsonrpc": "2.0", "id": deep, "result": {}})
         self.assertEqual(len(replies), 1)
         self.assertEqual(replies[0]["error"]["code"], mcp_mod.INTERNAL_ERROR)
         self.assertIsNone(replies[0]["id"])
+
+    def test_a_reply_nested_too_deep_even_when_dumps_copes(self):
+        real = json.dumps
+        with mock.patch.object(mcp_mod.json, "dumps", real):
+            deep = []
+            for _ in range(mcp_mod.MAX_JSON_DEPTH + 5):
+                deep = [deep]
+            replies = self.serve_with_reply(
+                {"jsonrpc": "2.0", "id": deep, "result": {}})
+        self.assertEqual(replies[0]["error"]["code"], mcp_mod.INTERNAL_ERROR)
 
     def test_a_reply_that_refers_to_itself(self):
         loop = []
