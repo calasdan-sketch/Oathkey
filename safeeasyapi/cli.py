@@ -15,6 +15,7 @@ from . import keychain as keychain_mod
 from . import mcp as mcp_mod
 from . import publicapis as pa_mod
 from . import recipes as recipes_mod
+from . import safeprompt
 from . import store as store_mod
 
 
@@ -408,7 +409,7 @@ def _stdin_is_terminal() -> bool:
 
 def keychain_store(recipe: dict, env_file: str, out=None,
                    backend: str | None = None, keychain=keychain_mod,
-                   ask=input, interactive=_stdin_is_terminal):
+                   ask=None, interactive=_stdin_is_terminal):
     """store_fn for `--store keychain`: the OS keychain. When the keychain is
     missing or refuses, the key goes to the plain-text .env file ONLY if the
     person says yes at a [y/N] question; with no terminal to ask, or on
@@ -426,12 +427,13 @@ def keychain_store(recipe: dict, env_file: str, out=None,
                     f"may go in the plain-text file {env_file} instead. "
                     f"Nothing was saved.")
             out.write(f"  {why}.\n")
-            try:
-                answer = ask(f"  Save it in the plain-text file {env_file} "
-                             f"instead? [y/N]: ")
-            except (EOFError, KeyboardInterrupt):
-                answer = ""
-            agreed.append((answer or "").strip().lower() in ("y", "yes"))
+            # read without echo: a key pasted here must not be shown, and
+            # is never taken for a yes
+            agreed.append(bool(safeprompt.ask(
+                f"  Save it in the plain-text file {env_file} instead? [y/N]: ",
+                out, enter_means=False, reader=ask,
+                if_key="That looked like a key. Do not paste it here. "
+                       "Type y or n.")))
         if not agreed[0]:
             raise connect_mod.SaveDeclined(f"{why}. You chose not to use "
                                            f"{env_file}, so nothing was saved.")

@@ -19,6 +19,7 @@ import webbrowser
 from . import clipboard as clipboard_mod
 from . import doctor as doctor_mod
 from . import procs
+from . import safeprompt
 from . import store as store_mod
 from . import validate as validate_mod
 from .recipes import DEFAULT_FIELD, fields as recipe_fields, printable
@@ -401,15 +402,23 @@ def _ask_one(field: dict, single: bool, prompt, out, clip, taken: set,
             _safe_clear(clear)
             out.write("\ncancelled.\n")
             return None
-        if value and confirm is not None and not field.get("accept"):
+        if value and not field.get("accept"):
             # no pattern to recognise the key by: say what was taken (never
             # its characters) and let the person stop a wrong copy
-            out.write(f"  took {clipboard_mod.describe(value)} - clipboard emptied.\n")
-            try:
-                answer = confirm("  Is that the key? Press Enter for yes, or type n: ")
-            except (EOFError, KeyboardInterrupt):
+            out.write(f"  The key was taken from your clipboard "
+                      f"({clipboard_mod.describe(value)}; hidden) - clipboard emptied.\n"
+                      f"  Do NOT paste anything - nothing you type here is shown.\n")
+            # read without echo, whatever the person pastes; a key pasted
+            # here is refused, not used and not kept
+            yes = safeprompt.ask(
+                "  Press Enter to save it, or n to cancel: ", out, enter_means=True,
+                reader=confirm,
+                if_key="That looked like a key. Do not paste it here. Nothing was "
+                       "saved. Press Enter to accept the key you already copied, "
+                       "or n to cancel.")
+            if yes is None:
                 return None
-            if (answer or "").strip().lower().startswith("n"):
+            if not yes:
                 out.write("  ok, not using it.\n")
                 value = None
             else:
@@ -420,7 +429,7 @@ def _ask_one(field: dict, single: bool, prompt, out, clip, taken: set,
         out.write("  nothing key-shaped was copied - type or paste it instead:\n")
     text = "  Paste your API key (hidden): " if single else f"  Paste the {label} (hidden): "
     try:
-        return prompt(text).strip()
+        return safeprompt.strip_paste_marks(prompt(text)).strip()
     except (EOFError, KeyboardInterrupt):
         return None
     finally:
@@ -472,10 +481,10 @@ def connect(
     recipe: dict,
     env_file: str = ".env",
     browser_open=webbrowser.open,
-    prompt=getpass.getpass,
+    prompt=safeprompt.read_hidden,
     out=None,
     validate_fn=validate_mod.validate_key,
-    confirm_in=input,
+    confirm_in=None,
     store_fn=None,
     clipboard=None,
     via_cli: bool = False,
@@ -491,6 +500,10 @@ def connect(
     clipboard / cli_token_fn exist for tests and the CLI.
     """
     out = out or sys.stdout
+    # the question after a key was taken is read without echo (safeprompt);
+    # an injected confirm_in answers both kinds of question, for tests
+    key_confirm = confirm_in
+    confirm_in = confirm_in or input
     fields = recipe_fields(recipe)
     single = len(fields) == 1 and fields[0]["name"] == DEFAULT_FIELD
     if store_fn is None:
@@ -533,7 +546,7 @@ def connect(
                 if value is None:
                     return 1
             else:
-                value = _ask_one(field, single, prompt, out, clipboard, taken, confirm_in)
+                value = _ask_one(field, single, prompt, out, clipboard, taken, key_confirm)
             if value is None:
                 cancelled = True
                 break

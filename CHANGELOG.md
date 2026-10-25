@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.6.3
+
+- **Security / UX.** The question after a key was taken from the clipboard
+  ("Is that the key?") echoed whatever was typed or pasted, and a person who
+  pasted the key there saw it on screen and had it accepted. Now:
+  - the question is read without echo (a password-style read; from a pipe it
+    shows nothing either), and the rest of a multi-line paste is discarded;
+  - only Enter, y and n answer it; anything long or key-shaped is refused with
+    "That looked like a key. Do not paste it here. Nothing was saved.", is not
+    kept, and the question is asked again (three tries, then cancelled);
+  - the wording says the key is already taken, hidden, and not to paste.
+  - the same reader is used for the y/N questions that can follow a key: the
+    plain-text `.env` fallback of `--store keychain`, `export`, and
+    `scan --validate`.
+  - the hidden paste prompt drops terminal paste markers and leftover lines.
+
 ## 0.6.2
 
 Fixes for what the test matrix (Linux, macOS, Windows; Python 3.10-3.14) found.
