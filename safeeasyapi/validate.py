@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import base64
 import datetime
+import email.utils
 import hashlib
 import hmac
 import http.client
@@ -54,7 +55,8 @@ import urllib.parse
 import urllib.request
 
 from . import __version__
-from .recipes import ALLOWED_METHODS, DEFAULT_FIELD, printable
+from . import redact as redact_mod
+from .recipes import ALLOWED_METHODS, DEFAULT_FIELD, STS_BODY, printable
 
 USER_AGENT = f"safeeasyapi/{__version__}"
 DEFAULT_PORTS = {"http": 80, "https": 443}
@@ -68,10 +70,73 @@ class ValidationError(Exception):
     pass
 
 
+MAX_VERDICT_BODY = 4096     # read this much of an error answer, only to look for a phrase
+
+
+class Result:
+    """What the vendor said about a key. Truthy when the key is good enough
+    to keep: status "valid" (it works) or "limited" (it is a real key that
+    lacks a permission, so a vendor check that needs that permission cannot
+    pass; `note` says which, in the recipe's own words). "invalid" is falsy.
+    It never holds the key or any part of the vendor's answer."""
+
+    __slots__ = ("status", "note")
+
+    def __init__(self, status: str, note: str | None = None):
+        self.status = status
+        self.note = note
+
+    def __bool__(self) -> bool:
+        return self.status != "invalid"
+
+    def __eq__(self, other) -> bool:
+        if isinstance(other, bool):
+            return bool(self) == other
+        return isinstance(other, Result) and (self.status, self.note) == (other.status, other.note)
+
+    def __hash__(self) -> int:
+        return hash((self.status, self.note))
+
+    def __repr__(self) -> str:
+        return f"Result({self.status!r})"
+
+
 NOT_PRINTABLE = ("a character that is not printable (a tab, a line break or "
                  "another invisible character)")
 NOT_LATIN_1 = ("a character outside Latin-1 (a curly quote or an emoji, say), "
                "which an HTTP header cannot carry")
+
+
+class ClockSkew(ValidationError):
+    """A signed request was refused and the server's clock disagrees with this
+    computer's by more than the signature allows: the key may be fine."""
+
+    def __init__(self, minutes: int, ahead: bool):
+        super().__init__(f"your computer's clock is about {minutes} minute(s) "
+                         f"{'ahead of' if ahead else 'behind'} the server's. Signed requests are "
+                         f"refused when the clock is off by more than 5 minutes. Fix the clock "
+                         f"(turn on automatic time) and try again - the key may be fine.")
+        self.minutes = minutes
+
+
+MAX_SKEW_SECONDS = 300
+
+
+def _utcnow() -> datetime.datetime:
+    return datetime.datetime.now(datetime.timezone.utc)
+
+
+def _skew(server_date: str | None) -> float | None:
+    """Local clock minus the server's, in seconds, or None."""
+    if not server_date:
+        return None
+    try:
+        theirs = email.utils.parsedate_to_datetime(server_date)
+    except (TypeError, ValueError):
+        return None
+    if theirs.tzinfo is None:
+        theirs = theirs.replace(tzinfo=datetime.timezone.utc)
+    return (_utcnow() - theirs).total_seconds()
 
 
 class UnsendableKey(ValidationError):
@@ -160,9 +225,25 @@ def _base_headers(spec: dict) -> dict[str, str]:
     return headers
 
 
+SIGV4_CONTENT_TYPE = "application/x-www-form-urlencoded; charset=utf-8"
+
+
+def _is_sts_post(spec: dict) -> bool:
+    """The one POST a validation may make besides an OAuth token call: AWS
+    documents STS GetCallerIdentity as a POST. It only reads who you are."""
+    auth = spec.get("auth", {})
+    return (str(spec.get("method", "")).upper() == "POST"
+            and auth.get("type") == "aws_sigv4" and auth.get("service") == "sts"
+            and spec.get("body") == STS_BODY)
+
+
+def _sts_body(spec: dict) -> bytes | None:
+    return STS_BODY.encode() if _is_sts_post(spec) else None
+
+
 def _check_method(spec: dict) -> str:
     method = str(spec.get("method", "GET")).upper()
-    if method not in ALLOWED_METHODS:
+    if method not in ALLOWED_METHODS and not _is_sts_post(spec):
         # The loader refuses such a recipe; this is for one that never went
         # through it. Nothing has been sent yet.
         raise ValidationError(
@@ -212,16 +293,22 @@ def _build_request(spec: dict, key, bearer_token: str | None = None) -> urllib.r
             raise ValidationError("internal: the OAuth2 token must be fetched first")
         headers["Authorization"] = f"Bearer {bearer_token}"
     elif atype == "aws_sigv4":
-        headers.update(_sigv4_headers(auth, creds, method, url))
+        headers.update(_sigv4_headers(auth, creds, method, url,
+                                      body=_sts_body(spec)))
     else:
         raise ValidationError(f"unknown auth type: {atype}")
-    return urllib.request.Request(url, headers=headers, method=method)
+    data = _sts_body(spec)
+    if data is not None:
+        headers["Content-Type"] = SIGV4_CONTENT_TYPE
+    return urllib.request.Request(url, headers=headers, method=method,
+                                  data=data)
 
 
 # ---- AWS Signature Version 4 (GET with a query string, empty body) ----------
 
 def _sigv4_headers(auth: dict, creds: dict[str, str], method: str, url: str,
-                   now: datetime.datetime | None = None) -> dict[str, str]:
+                   now: datetime.datetime | None = None,
+                   body: bytes | None = None) -> dict[str, str]:
     access = _value(creds, auth.get("access_key_field", "access_key_id"), "header")
     secret = _value(creds, auth.get("secret_key_field", "secret_access_key"), "secret")
     token_field = auth.get("session_token_field")
@@ -235,6 +322,8 @@ def _sigv4_headers(auth: dict, creds: dict[str, str], method: str, url: str,
     canonical_query = "&".join(f"{urllib.parse.quote(k, safe='-_.~')}={urllib.parse.quote(v, safe='-_.~')}"
                                for k, v in query)
     signed = {"host": host, "x-amz-date": amz_date}
+    if body is not None:
+        signed["content-type"] = SIGV4_CONTENT_TYPE
     if token:
         signed["x-amz-security-token"] = token
     names = sorted(signed)
@@ -242,7 +331,7 @@ def _sigv4_headers(auth: dict, creds: dict[str, str], method: str, url: str,
     path = urllib.parse.quote(parts.path or "/", safe="/-_.~")
     canonical = "\n".join([method, path, canonical_query,
                            "".join(f"{n}:{signed[n]}\n" for n in names), ";".join(names),
-                           hashlib.sha256(b"").hexdigest()])
+                           hashlib.sha256(body or b"").hexdigest()])
     scope = f"{day}/{region}/{service}/aws4_request"
     to_sign = "\n".join(["AWS4-HMAC-SHA256", amz_date, scope, hashlib.sha256(canonical.encode()).hexdigest()])
     k = ("AWS4" + secret).encode()
@@ -295,6 +384,7 @@ class _CredentialScrubbingRedirectHandler(urllib.request.HTTPRedirectHandler):
         self._follow = follow
         self.stripped_to: str | None = None
         self.blocked_to: str | None = None
+        self.server_date: str | None = None
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         if not self._follow:
@@ -321,10 +411,17 @@ def _send(req: urllib.request.Request, scrubber: _CredentialScrubbingRedirectHan
         try:
             with opener.open(req, timeout=timeout) as resp:
                 status = resp.status
+                scrubber.server_date = resp.headers.get("Date")
                 if read_limit:
                     body = resp.read(read_limit + 1)
         except urllib.error.HTTPError as e:
             status = e.code
+            scrubber.server_date = e.headers.get("Date") if e.headers else None
+            if read_limit:
+                try:
+                    body = e.read(read_limit + 1)
+                except (OSError, http.client.HTTPException):
+                    body = b""
             e.close()           # the error object owns the response; Python 3.14 warns when it is only garbage-collected
     except urllib.error.URLError as e:
         raise ValidationError(f"network error during validation: {e.reason}")
@@ -351,22 +448,45 @@ def _send(req: urllib.request.Request, scrubber: _CredentialScrubbingRedirectHan
             "the recipe's validate section") from None
     if scrubber.blocked_to is not None:
         raise ValidationError(
-            f"the endpoint redirected to {printable(scrubber.blocked_to)}; the "
+            f"the endpoint redirected to {printable(safe_url(scrubber.blocked_to))}; the "
             f"credentials were not sent there. Fix the recipe to point at the "
             f"final endpoint.")
     if scrubber.stripped_to is not None:
         raise ValidationError(
             "validation endpoint redirected to a different origin "
-            f"({printable(scrubber.stripped_to)}); the key was not sent there. "
+            f"({printable(safe_url(scrubber.stripped_to))}); the key was not sent there. "
             "Fix the recipe's validate.url to point at the final endpoint.")
     return status, body
 
 
-def _verdict(status: int, spec: dict, reject_default=REJECT_DEFAULT) -> bool:
+def safe_url(url) -> str:
+    """scheme://host/path only - never the query or fragment, where a key in
+    a redirect target would sit."""
+    try:
+        u = urllib.parse.urlsplit(str(url))
+        return f"{u.scheme}://{u.hostname or ''}{':' + str(u.port) if u.port else ''}{u.path}"
+    except ValueError:
+        return "(an address that could not be read)"
+
+
+def _verdict(status: int, spec: dict, reject_default=REJECT_DEFAULT,
+             body: bytes = b"") -> Result:
+    """Order matters: what the recipe expects, then its body rules (a vendor
+    that says the same 401 for "dead" and "valid but restricted"), then its
+    "limited" statuses (a 403 that means "real key, missing permission"),
+    then the statuses that mean "bad key". The vendor's text is only searched,
+    never kept or shown."""
     if status in set(spec.get("expect", [200])):
-        return True
+        return Result("valid")
+    text = body.decode("utf-8", "replace").lower() if body else ""
+    for rule in spec.get("body_rules") or []:
+        if rule["status"] == status and rule["body_contains"].lower() in text:
+            return Result(rule["result"], rule.get("meaning") or None)
+    for item in spec.get("limited") or []:
+        if item["status"] == status:
+            return Result("limited", item["meaning"])
     if status in set(spec.get("reject") or reject_default):
-        return False  # credentials rejected (validation failed, not a crash)
+        return Result("invalid")  # credentials rejected (validation failed, not a crash)
     raise ValidationError(f"validation endpoint error: HTTP {status}")
 
 
@@ -410,9 +530,23 @@ def _fetch_token(spec: dict, creds: dict[str, str], timeout: float) -> str | Non
     return token
 
 
-def validate_key(spec: dict, key, timeout: float = 10.0) -> bool:
-    """Return True if the API accepts the credentials (status in
-    spec['expect']). `key` is the single key or {field: value}.
+def validate_key(spec: dict, key, timeout: float = 10.0) -> Result:
+    """See _validate_key. Any error text is scrubbed of the key (and its
+    encodings) before it leaves, whatever produced it."""
+    try:
+        return _validate_key(spec, key, timeout)
+    except ValidationError as e:
+        values = list(_creds(key).values())
+        clean = redact_mod.Redactor(values).text(str(e)) if values else str(e)
+        if clean == str(e):
+            raise
+        raise ValidationError(clean) from None
+
+
+def _validate_key(spec: dict, key, timeout: float = 10.0) -> Result:
+    """Return a Result: truthy if the API accepts the credentials (status in
+    spec['expect']) or shows they are real but limited; falsy if rejected.
+    `key` is the single key or {field: value}.
 
     Raises ValidationError on network failure, or when the endpoint
     redirected off-origin (the credentials were NOT sent there). Never logs
@@ -424,14 +558,20 @@ def validate_key(spec: dict, key, timeout: float = 10.0) -> bool:
     if atype == "oauth2_client_credentials":
         token = _fetch_token(spec, creds, timeout)
         if token is None:
-            return False
+            return Result("invalid")
         if auth.get("token_only"):
-            return True    # the vendor issued a token: the id and secret are good
+            return Result("valid")    # the vendor issued a token: the id and secret are good
     try:
         req = _build_request(spec, creds, bearer_token=token)
         scrubber = _CredentialScrubbingRedirectHandler(_credential_headers(spec),
                                                        follow=atype != "query")
-        status, _ = _send(req, scrubber, timeout)
+        wants_body = bool(spec.get("body_rules"))
+        status, body = _send(req, scrubber, timeout,
+                             MAX_VERDICT_BODY if wants_body else 0)
     finally:
         token = None
-    return _verdict(status, spec)
+    if atype == "aws_sigv4" and status in (400, 401, 403):
+        skew = _skew(scrubber.server_date)
+        if skew is not None and abs(skew) > MAX_SKEW_SECONDS:
+            raise ClockSkew(int(abs(skew) // 60), skew > 0)
+    return _verdict(status, spec, body=body[:MAX_VERDICT_BODY])

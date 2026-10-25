@@ -8,9 +8,9 @@
   "steps": [
     "Click 'Create API Key'",
     "Name it after your project (e.g. 'my-website')",
-    "Leave permission at 'Sending access' unless you need 'Full access'",
-    "Choose the domain it may send from, or leave unrestricted while testing",
-    "Click 'Add' and copy the key — it is shown exactly once"
+    "Pick the permission: 'Sending access' is enough to send email; 'Full access' also manages domains and keys",
+    "Optionally limit it to one domain",
+    "Click 'Add' and copy the key - it is shown exactly once"
   ],
   "validate": {
     "auth": {
@@ -25,6 +25,17 @@
       401,
       403
     ],
-    "url": "https://api.resend.com/api-keys"
+    "url": "https://api.resend.com/api-keys",
+    "body_rules": [
+      {
+        "status": 401,
+        "body_contains": "restricted_api_key",
+        "result": "limited",
+        "meaning": "the key is valid but is 'Sending access' only, so it cannot list keys (the check needs that); it can send email"
+      }
+    ]
+  },
+  "least_privilege": {
+    "summary": "'Sending access', limited to one domain, is enough for an app that only sends email."
   }
 }

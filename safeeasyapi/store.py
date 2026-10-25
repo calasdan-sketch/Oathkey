@@ -46,6 +46,7 @@ Rules:
 from __future__ import annotations
 
 import collections
+import contextlib
 import dataclasses
 import errno
 import getpass
@@ -53,8 +54,11 @@ import os
 import re
 import stat
 import subprocess
+import sys
 import tempfile
+import time
 
+from . import procs
 from .recipes import ENV_VAR_RE
 
 OWNER_ONLY = 0o600
@@ -93,6 +97,8 @@ PROTECTION_WINDOWS_FAILED = ("could not restrict ACL - icacls failed; the file "
 
 LINK_REASON = ("it is a link to another file, so safeeasyapi will not edit it "
                "- delete the link, or point --env-file at the real file")
+DIRECTORY_REASON = ("it is a folder, not a file - rename or remove the folder, "
+                    "or pass --env-file with a file name")
 NOT_TEXT_REASON = ("it is not a plain UTF-8 text file (Windows PowerShell's > "
                    "saves UTF-16), so safeeasyapi will not edit it - save it "
                    "as UTF-8 first")
@@ -160,7 +166,8 @@ def _windows_owner_only(path: str) -> bool:
         return False
     try:
         proc = subprocess.run(
-            ["icacls", path, "/inheritance:r", "/grant:r", f"{user}:(F)"],
+            [procs.system32_tool("icacls.exe"), path, "/inheritance:r",
+             "/grant:r", f"{user}:(F)"],
             capture_output=True, timeout=15)
     except (OSError, subprocess.SubprocessError):
         return False
@@ -287,9 +294,20 @@ def _closing_quote(s: str) -> int:
 
 def _read_bytes(path: str) -> bytes:
     """The file's raw bytes; a missing file is empty."""
-    if not os.path.isfile(path):
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    try:
+        fd = os.open(path, flags)
+    except FileNotFoundError:
         return b""
-    with open(path, "rb") as f:
+    except OSError as e:
+        if getattr(e, "errno", None) == errno.ELOOP:
+            raise EnvFileRefused(path, LINK_REASON)
+        if os.path.isdir(path) or not os.path.exists(path):
+            return b""
+        raise
+    with os.fdopen(fd, "rb") as f:
+        if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
+            return b""
         return f.read()
 
 
@@ -407,6 +425,8 @@ def _load_for_edit(path: str) -> list[list[str]]:
     """The file's lines, ready to be edited - or EnvFileRefused when editing
     it would be unsafe. A missing file is no lines."""
     refuse_link(path)
+    if os.path.isdir(path):
+        raise EnvFileRefused(path, DIRECTORY_REASON)
     data = _read_bytes(path)
     if b"\x00" in data:
         # UTF-16/32 (or binary). Without this, decoding "works" and a UTF-8
@@ -449,6 +469,105 @@ def load_env(path: str) -> dict[str, str]:
     return values
 
 
+LOCK_SECONDS = 15.0
+
+
+class EnvFileBusy(OSError):
+    """Another safeeasyapi has had the file locked for too long."""
+
+    def __init__(self, path: str):
+        super().__init__(errno.EAGAIN, "another safeeasyapi is writing this file right now - "
+                                       "try again in a moment", path)
+
+
+def _windows() -> bool:
+    return sys.platform == "win32"
+
+
+def _lock_once(path: str, lock_path: str, deadline: float):
+    """Open and lock the lock file; return its fd, or None when the file was
+    swapped for a new one while waiting (the caller tries again)."""
+    flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
+    fd = os.open(lock_path, flags, 0o600)
+    try:
+        if _windows():
+            import msvcrt
+            if os.fstat(fd).st_size == 0:
+                os.write(fd, b"\0")
+            while True:
+                try:
+                    os.lseek(fd, 0, 0)
+                    msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+                    break
+                except OSError:
+                    if time.monotonic() > deadline:
+                        raise EnvFileBusy(path) from None
+                    time.sleep(0.05)
+        else:
+            import fcntl
+            while True:
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except OSError:
+                    if time.monotonic() > deadline:
+                        raise EnvFileBusy(path) from None
+                    time.sleep(0.02)
+        try:
+            same = os.path.samestat(os.fstat(fd), os.stat(lock_path))
+        except OSError:
+            same = False
+        if not same:        # the holder removed it as it left: lock the new one
+            os.close(fd)
+            return None
+        return fd
+    except BaseException:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        raise
+
+
+@contextlib.contextmanager
+def file_lock(path: str, timeout: float | None = None):
+    """Hold an exclusive lock for a read-modify-replace of `path`. Without
+    it two runs at once each read the old file and the last write wins,
+    silently dropping the other's key. The lock is on a small sibling file
+    (never on `path` itself: that is replaced by a rename); it is removed
+    when the last holder leaves."""
+    timeout = LOCK_SECONDS if timeout is None else timeout
+    directory = os.path.dirname(os.path.abspath(path)) or "."
+    os.makedirs(directory, exist_ok=True)
+    base = os.path.basename(path)
+    lock_path = os.path.join(directory, f"{base}.lock" if base.startswith(".") else f".{base}.lock")
+    deadline = time.monotonic() + timeout
+    fd = None
+    while fd is None:
+        fd = _lock_once(path, lock_path, deadline)
+    try:
+        yield
+    finally:
+        if not _windows():
+            try:
+                os.unlink(lock_path)        # while still locked: waiters re-check (see _lock_once)
+            except OSError:
+                pass
+        else:
+            try:
+                import msvcrt
+                os.lseek(fd, 0, 0)
+                msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+            except OSError:
+                pass
+        os.close(fd)
+        if _windows():
+            try:
+                os.unlink(lock_path)
+            except OSError:
+                pass
+
+
 def write_private(path: str, text: str) -> bool:
     """Atomically replace `path` with `text`, private from the start.
 
@@ -471,6 +590,10 @@ def write_private(path: str, text: str) -> bool:
     base = os.path.basename(path)
     fd, tmp = tempfile.mkstemp(prefix=f".{base}.", suffix=".tmp", dir=directory)
     try:
+        # Owner-only BEFORE the key goes in: on Windows mkstemp's mode does
+        # not restrict the ACL, and the file would hold the key with the
+        # ACL its folder gives it until the check after the rename.
+        _lock_down(tmp)
         with os.fdopen(fd, "wb") as f:
             f.write(text.encode(_ENCODING, _UNDECODABLE))
             f.flush()
@@ -484,6 +607,30 @@ def write_private(path: str, text: str) -> bool:
             pass
         raise
     return _lock_down(path)
+
+
+def env_not_git_ignored(path: str, find=procs.find_program,
+                        run=subprocess.run) -> bool:
+    """True only when git is installed, `path` is inside a git work tree and
+    git does NOT ignore it - the one case where `git add .` would commit the
+    key. Anything else (no git, not a repository, git failing) is False:
+    nothing to warn about, and never an error."""
+    git = find("git")
+    if not git:
+        return False
+    full = os.path.abspath(path)
+    try:
+        done = run([git, "-C", os.path.dirname(full) or ".", "check-ignore",
+                    "-q", "--", os.path.basename(full)],
+                   capture_output=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return done.returncode == 1         # 0 = ignored, 128 = not a repository
+
+
+GIT_WARNING = ("warning: {path} is inside a git repository and is NOT in "
+               ".gitignore - `git add .` would commit your key.\n"
+               "    Add a line `{name}` to .gitignore first.")
 
 
 @dataclasses.dataclass
@@ -517,34 +664,38 @@ def store_key_result(env_var: str, key: str, env_file: str = ".env") -> Stored:
     reason = unsafe_reason(key)
     if reason:
         raise UnsafeValue(reason, env_file)
-    existed = os.path.isfile(env_file)
-    entries = _load_for_edit(env_file)      # refuses a link / a non-text file
-    newline = _newline_style(entries)
-    spans = _occurrences(entries).get(env_var, [])
-    value = quote_value(key)
-    if spans:
-        # The LAST assignment is the one every reader ends up using, so it
-        # is the one that gets the key; earlier ones are not touched. If its
-        # old value ran over several lines, they all become this one line.
-        first, last = spans[-1]
-        prefix = _ASSIGN_RE.match(entries[first][0]).group(1)
-        # keeps `export` and the ending of the last line it took up
-        entries[first][0] = f"{prefix}{env_var}={value}"
-        entries[first][1] = entries[last][1]
-        del entries[first + 1:last + 1]
-        updated = True
-    else:
-        if entries and not entries[-1][1]:
-            entries[-1][1] = newline        # end the last line before ours
-        if entries and entries[-1][0].strip():
-            entries.append(["", newline])
-        entries.append([f"{env_var}={value}", ""])
-        updated = False
-    protected = write_private(env_file, _render(entries, newline))
-    # Scrub our own reference.
-    del value
-    return Stored(env_file, updated and existed, protected,
-                  max(len(spans) - 1, 0))
+    with file_lock(env_file):
+        existed = os.path.isfile(env_file)
+        entries = _load_for_edit(env_file)      # refuses a link / a non-text file
+        newline = _newline_style(entries)
+        spans = _occurrences(entries).get(env_var, [])
+        value = quote_value(key)
+        if spans:
+            # The LAST assignment is the one every reader ends up using, so it
+            # is the one that gets the key; earlier ones are not touched. If its
+            # old value ran over several lines, they all become this one line.
+            first, last = spans[-1]
+            prefix = _ASSIGN_RE.match(entries[first][0]).group(1)
+            # keeps `export` and the ending of the last line it took up
+            entries[first][0] = f"{prefix}{env_var}={value}"
+            entries[first][1] = entries[last][1]
+            del entries[first + 1:last + 1]
+            updated = True
+        else:
+            if entries and not entries[-1][1]:
+                entries[-1][1] = newline        # end the last line before ours
+            if entries and entries[-1][0].strip():
+                entries.append(["", newline])
+            entries.append([f"{env_var}={value}", ""])
+            updated = False
+        protected = write_private(env_file, _render(entries, newline))
+        if env_var not in _occurrences(_split_lines(_read_bytes(env_file).decode(_ENCODING, _UNDECODABLE))):
+            raise OSError(errno.EIO, "the key was not found in the file after writing it - "
+                                      "another program changed it; run me again", env_file)
+        # Scrub our own reference.
+        del value
+        return Stored(env_file, updated and existed, protected,
+                      max(len(spans) - 1, 0))
 
 
 def store_key(env_var: str, key: str, env_file: str = ".env") -> tuple[str, bool]:
@@ -563,20 +714,23 @@ def remove_key(env_var: str, env_file: str = ".env") -> int:
     the file is kept byte-for-byte (line endings included); the file stays
     private. A link or a non-text file is refused, as when saving
     (EnvFileRefused)."""
-    entries = _load_for_edit(env_file)
-    spans = _occurrences(entries).get(env_var)
-    if not spans:
+    if not os.path.lexists(env_file):
         return 0
-    newline = _newline_style(entries)
-    bom = spans[0][0] == 0 and entries[0][0].startswith("\ufeff")
-    for first, last in reversed(spans):
-        del entries[first:last + 1]
-    if bom and entries:
-        # The byte-order mark belongs to the file, not to the line we took
-        # out: the next line becomes the first and keeps it.
-        entries[0][0] = "\ufeff" + entries[0][0]
-    write_private(env_file, _render(entries, newline))
-    return len(spans)
+    with file_lock(env_file):
+        entries = _load_for_edit(env_file)
+        spans = _occurrences(entries).get(env_var)
+        if not spans:
+            return 0
+        newline = _newline_style(entries)
+        bom = spans[0][0] == 0 and entries[0][0].startswith("\ufeff")
+        for first, last in reversed(spans):
+            del entries[first:last + 1]
+        if bom and entries:
+            # The byte-order mark belongs to the file, not to the line we took
+            # out: the next line becomes the first and keeps it.
+            entries[0][0] = "\ufeff" + entries[0][0]
+        write_private(env_file, _render(entries, newline))
+        return len(spans)
 
 
 @dataclasses.dataclass

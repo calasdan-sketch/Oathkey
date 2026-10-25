@@ -67,8 +67,9 @@ def run_cli(*args, read=FAKE_KEY, call=None):
                               return_value=read) as read_mock, \
             mock.patch.object(keychain_mod.subprocess, "call",
                               **(call or {"return_value": 0})) as call_mock, \
-            redirect_stderr(err), redirect_stdout(io.StringIO()):
-        code = cli_mod.main(["run", "acme", "--", *args])
+            redirect_stderr(err), redirect_stdout(io.StringIO()), \
+            mock.patch.object(cli_mod, "_is_tty", return_value=True):
+        code = cli_mod.main(["run", "--no-redact", "acme", "--", *args])
     return code, err.getvalue(), read_mock, call_mock
 
 
@@ -313,6 +314,80 @@ def child_env(*, front=None):
         env["PATH"] = front + os.pathsep + env.get("PATH", "")
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     return env
+
+
+class TestCtrlCWhileTheReadersStart(unittest.TestCase):
+    """CI (Python 3.12 and 3.14): Ctrl-C landed while `run` was still starting
+    its output readers; the first reader was left running and Python died with
+    "could not acquire lock for <stdout> at interpreter shutdown" (SIGABRT, -6)
+    instead of 130. Every reader that started must be finished before the
+    interrupt leaves run_redacted, and the child must not be left behind."""
+
+    def fake_proc(self):
+        proc = mock.Mock()
+        proc.stdout = io.BytesIO(b"started\n")
+        proc.stderr = io.BytesIO(b"")
+        proc.poll.return_value = None
+        proc.wait.return_value = -2
+        return proc
+
+    def test_interrupt_while_starting_readers_joins_the_started_ones(self):
+        import threading
+        from safeeasyapi import runner
+        proc = self.fake_proc()
+        real_start = threading.Thread.start
+        starts = []
+
+        def start(thread):
+            starts.append(thread)
+            if len(starts) == 2:
+                raise KeyboardInterrupt
+            real_start(thread)
+
+        out, err = io.BytesIO(), io.BytesIO()
+        with mock.patch.object(threading.Thread, "start", start), \
+                self.assertRaises(KeyboardInterrupt):
+            runner.run_redacted(["x"], {}, ["secret"], popen=lambda *a, **k: proc,
+                                stdout=out, stderr=err)
+        self.assertEqual(len(starts), 2)
+        self.assertFalse(starts[0].is_alive(), "a reader was left running")
+        self.assertEqual(out.getvalue(), b"started\n")
+
+    @unittest.skipUnless(POSIX, "needs a POSIX SIGINT")
+    def test_a_real_ctrl_c_during_the_start_waits_until_the_readers_are_up(self):
+        import threading
+        from safeeasyapi import runner
+        before = signal.signal(signal.SIGINT, signal.default_int_handler)
+        self.addCleanup(signal.signal, signal.SIGINT, before)
+        proc = self.fake_proc()
+        real_start = threading.Thread.start
+        starts = []
+
+        def start(thread):
+            starts.append(thread)
+            if len(starts) == 2:
+                os.kill(os.getpid(), signal.SIGINT)     # lands mid-start
+            real_start(thread)
+
+        with mock.patch.object(threading.Thread, "start", start), \
+                self.assertRaises(KeyboardInterrupt):
+            runner.run_redacted(["x"], {}, [], popen=lambda *a, **k: proc,
+                                stdout=io.BytesIO(), stderr=io.BytesIO())
+        self.assertEqual(len(starts), 2, "both readers must have been started")
+        self.assertFalse(any(t.is_alive() for t in starts))
+        # and the handler is back the way it was
+        self.assertIs(signal.getsignal(signal.SIGINT), signal.default_int_handler)
+
+    def test_a_reader_that_cannot_start_does_not_leave_the_child_running(self):
+        import threading
+        from safeeasyapi import runner
+        proc = self.fake_proc()
+        with mock.patch.object(threading.Thread, "start",
+                               side_effect=RuntimeError("can't start new thread")), \
+                self.assertRaises(RuntimeError):
+            runner.run_redacted(["x"], {}, [], popen=lambda *a, **k: proc,
+                                stdout=io.BytesIO(), stderr=io.BytesIO())
+        proc.kill.assert_called_once()
 
 
 class TestRealProcesses(unittest.TestCase):

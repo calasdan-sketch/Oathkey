@@ -253,6 +253,14 @@ def store(service: str, env_var: str, key: str, backend: str | None = None,
     if backend is None:
         raise KeychainError("no OS keychain available on this system")
     _dispatch("store", backend, service, env_var, key, run, ctypes_mod)
+    # Trust nothing until it has been read back: a keychain that answers
+    # "ok" and keeps a different value (or nothing) would lose the key for
+    # good, because the caller has by now stopped holding on to it.
+    back = _dispatch("read", backend, service, env_var, None, run, ctypes_mod)
+    if back != key:
+        raise KeychainError("reading the entry back did not give the key "
+                            "that was stored")
+    del back
     return backend
 
 
@@ -336,25 +344,53 @@ def locate_program(name: str, env: dict | None = None, which=shutil.which,
     return name
 
 
-def run_with_key(recipe: dict, cmd: list[str], backend: str | None = None,
-                 env: dict | None = None, read_fn=None, call=None) -> int:
-    """Run `cmd` with the recipe's env var injected from the keychain.
-    The key goes straight into the child's environment, never to a
-    terminal. Returns the child's exit code - 128 plus the signal number for
-    a child a signal stopped, as a shell reports it; raises KeychainError
-    when no key is stored for the service, and CannotRun (126) when the
-    system will not start the command."""
+def gather(recipe: dict, backend: str | None = None, read_fn=None,
+           env_file: str | None = None, prefer: str = "keychain") -> dict[str, str]:
+    """{VAR: value} for every variable of the recipe, from the keychain or
+    from `env_file` (`prefer="env"` looks in the file first). Raises
+    KeychainError when a variable is stored nowhere. For handing to a child
+    process only - callers must never print the values."""
+    from . import runner
     from .recipes import env_vars
-    child_env = dict(os.environ if env is None else env)
+    found: dict[str, str] = {}
     for var in env_vars(recipe):
-        key = (read_fn or read)(recipe["service"], var, backend)
+        key = None
+        unavailable = None
+        order = ("env", "keychain") if prefer == "env" else ("keychain", "env")
+        for source in order:
+            if key is not None:
+                break
+            if source == "env" and env_file:
+                key = runner.env_file_value(env_file, var)
+            elif source == "keychain":
+                try:
+                    key = (read_fn or read)(recipe["service"], var, backend)
+                except KeychainUnavailable as e:
+                    unavailable = e
+        if key is None and unavailable is not None:
+            raise unavailable
         if key is None:
             raise KeychainError(f"no key stored for '{recipe['service']}'"
                                 + ("" if var == recipe["env_var"] else f" ({var})"))
-        child_env[var] = key
-        del key
+        found[var] = key
+    return found
+
+
+def execute(cmd: list[str], values: dict[str, str], env: dict | None = None,
+            call=None, redact: bool = False, popen=None) -> int:
+    """Start `cmd` with `values` added to a copy of the environment. With
+    `redact`, its output is scrubbed of the values (redact.py). Returns the
+    child's exit code (128 + n for a signal); CannotRun (126) when the
+    system will not start it."""
+    from . import runner
+    child_env = dict(os.environ if env is None else env)
+    child_env.update(values)
     try:
-        status = (call or subprocess.call)(cmd, env=child_env)
+        if redact and call is None:
+            status = runner.run_redacted(cmd, child_env, list(values.values()),
+                                         popen or subprocess.Popen)
+        else:
+            status = (call or subprocess.call)(cmd, env=child_env)
     except OSError as e:
         # The caller found the program (locate_program) but the system would
         # not start it: a script whose interpreter is missing, a file that
@@ -363,3 +399,16 @@ def run_with_key(recipe: dict, cmd: list[str], backend: str | None = None,
                              f"{printable(e.strerror or type(e).__name__)}"
                         ) from None
     return 128 - status if status < 0 else status
+
+
+def run_with_key(recipe: dict, cmd: list[str], backend: str | None = None,
+                 env: dict | None = None, read_fn=None, call=None,
+                 env_file: str | None = None, prefer: str = "keychain",
+                 redact: bool = False, popen=None) -> int:
+    """Run `cmd` with the recipe's env vars injected - from the keychain, or
+    from `env_file` when the keychain has none. The key goes straight into
+    the child's environment, never to a terminal. Returns the child's exit
+    code; raises KeychainError when no key is stored for the service, and
+    CannotRun (126) when the system will not start the command."""
+    values = gather(recipe, backend, read_fn, env_file, prefer)
+    return execute(cmd, values, env, call, redact, popen)

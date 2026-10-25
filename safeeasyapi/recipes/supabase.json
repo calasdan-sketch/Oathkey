@@ -6,11 +6,11 @@
   "scopes": [],
   "service": "supabase",
   "steps": [
-    "Sign in to the Supabase dashboard; this is Account → Access Tokens",
+    "Sign in to the Supabase dashboard; this is Account > Access Tokens",
     "Click 'Generate new token'",
-    "Name it and choose a scope/permissions instead of leaving full access",
-    "Click 'Generate token' and copy it (starts with 'sbp_') — it is shown exactly once",
-    "This is a personal token for the Management API (projects, settings) — not a project's anon/service_role key"
+    "Name it and give it only the permissions it needs",
+    "Click 'Generate token' and copy it - it is shown exactly once",
+    "This is a personal Management API token - not a project's publishable/secret or legacy anon/service_role key"
   ],
   "validate": {
     "auth": {
@@ -20,6 +20,15 @@
       200
     ],
     "method": "GET",
-    "url": "https://api.supabase.com/v1/projects"
+    "url": "https://api.supabase.com/v1/projects",
+    "limited": [
+      {
+        "status": 403,
+        "meaning": "the token is valid but lacks the projects-read permission the check needs; it will do what you gave it"
+      }
+    ]
+  },
+  "least_privilege": {
+    "summary": "Scope the token to the permissions you need instead of full access."
   }
 }

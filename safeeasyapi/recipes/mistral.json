@@ -20,5 +20,8 @@
     ],
     "method": "GET",
     "url": "https://api.mistral.ai/v1/models"
+  },
+  "least_privilege": {
+    "summary": "Set an expiration and the narrowest connector access offered."
   }
 }

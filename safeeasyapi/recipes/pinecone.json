@@ -23,5 +23,8 @@
     },
     "method": "GET",
     "url": "https://api.pinecone.io/indexes"
+  },
+  "least_privilege": {
+    "summary": "Create the key in the one project it is for."
   }
 }

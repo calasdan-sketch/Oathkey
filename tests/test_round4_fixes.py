@@ -592,7 +592,7 @@ class TestValidationShapes(unittest.TestCase):
 
 
 class TestShippedCatalog(unittest.TestCase):
-    EXPECTED = {"github", "stripe", "resend", "openrouter", "openai", "anthropic",
+    EXPECTED = {"paypal-sandbox", "github", "stripe", "resend", "openrouter", "openai", "anthropic",
                 "google-gemini", "groq", "mistral", "cohere", "huggingface",
                 "together", "elevenlabs", "deepgram", "assemblyai", "replicate",
                 "supabase", "vercel", "netlify", "cloudflare", "sendgrid", "mailgun",
@@ -615,7 +615,7 @@ class TestShippedCatalog(unittest.TestCase):
             for url in (r["key_url"], r["validate"]["url"], r.get("docs")):
                 self.assertTrue(url.startswith("https://"), (slug, url))
             self.assertTrue(r["display"] and r["steps"] and r["env_var"], slug)
-            self.assertEqual(r["validate"]["method"], "GET", slug)
+            self.assertEqual(r["validate"]["method"], "POST" if slug == "aws" else "GET", slug)
             for host in r["validate"].get("trusted_hosts", []):
                 self.assertEqual(host, connect_mod._host(r["validate"]["url"]), slug)
             # validation requests are buildable with every shape used, and
@@ -634,11 +634,10 @@ class TestShippedCatalog(unittest.TestCase):
                 sent = base64.b64decode(sent.split(" ", 1)[1]).decode()
             self.assertIn("k", sent, slug)
 
-    def test_recipe_files_are_pretty_printed_crlf_json(self):
+    def test_recipe_files_are_valid_json_without_escape_bytes(self):
         for name in os.listdir(recipes_mod.RECIPES_DIR):
             with open(os.path.join(recipes_mod.RECIPES_DIR, name), "rb") as f:
                 raw = f.read()
-            self.assertIn(b"\r\n", raw, name)
             self.assertNotIn(b"\x1b", raw, name)
             data = json.loads(raw.decode("utf-8"))
             self.assertEqual(data["service"] + ".json", name)

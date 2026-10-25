@@ -56,6 +56,27 @@ class TestTooDeepToParse(unittest.TestCase):
         self.check(b'{"jsonrpc":"2.0","id":1,"method":"ping","params":'
                    + b"[" * 100000 + b"]" * 100000 + b"}")
 
+    def test_it_does_not_depend_on_how_deep_this_python_can_parse(self):
+        # Python 3.14 parsed 100000 levels on some machines (a limit that
+        # follows the C stack): the answer is still "Parse error"
+        deep = (b'{"jsonrpc":"2.0","id":1,"method":"ping","params":'
+                + b"[" * 5000 + b"]" * 5000 + b"}")
+        real_loads = json.loads
+
+        def lenient(text, *a, **k):         # a parser that does not give up
+            return {"jsonrpc": "2.0", "id": 1, "method": "ping", "params": []} \
+                if len(text) > 5000 else real_loads(text, *a, **k)
+
+        with mock.patch.object(mcp_mod.json, "loads", lenient):
+            self.check(deep)
+
+    def test_ordinary_nesting_and_brackets_in_strings_are_fine(self):
+        self.assertFalse(mcp_mod._too_deep("[" * 150 + "]" * 150))
+        self.assertTrue(mcp_mod._too_deep("[" * 201 + "]" * 201))
+        self.assertFalse(mcp_mod._too_deep('{"a":"' + "[" * 1000 + '"}'))
+        self.assertFalse(mcp_mod._too_deep('{"a":"\\"' + "[" * 1000 + '"}'))
+        self.assertTrue(mcp_mod._too_deep('{"a":"x\\\\",' + '"b":' + "[" * 300 + "]" * 300 + "}"))
+
     def test_a_bomb_between_good_messages(self):
         replies = run_server([PING.encode(), b"[" * 100000, PING.encode()])
         self.assertEqual([r.get("id") for r in replies], [7, None, 7])
@@ -72,14 +93,26 @@ class TestAReplyThatCannotBeWritten(unittest.TestCase):
         return replies
 
     def test_a_reply_nested_too_deep_to_write(self):
+        # 5000 levels: json.dumps may or may not manage that (it depends on
+        # the Python version and platform); the answer must not depend on it
         deep = []
-        for _ in range(100000):
+        for _ in range(5000):
             deep = [deep]
         replies = self.serve_with_reply(
             {"jsonrpc": "2.0", "id": deep, "result": {}})
         self.assertEqual(len(replies), 1)
         self.assertEqual(replies[0]["error"]["code"], mcp_mod.INTERNAL_ERROR)
         self.assertIsNone(replies[0]["id"])
+
+    def test_a_reply_nested_too_deep_even_when_dumps_copes(self):
+        real = json.dumps
+        with mock.patch.object(mcp_mod.json, "dumps", real):
+            deep = []
+            for _ in range(mcp_mod.MAX_JSON_DEPTH + 5):
+                deep = [deep]
+            replies = self.serve_with_reply(
+                {"jsonrpc": "2.0", "id": deep, "result": {}})
+        self.assertEqual(replies[0]["error"]["code"], mcp_mod.INTERNAL_ERROR)
 
     def test_a_reply_that_refers_to_itself(self):
         loop = []

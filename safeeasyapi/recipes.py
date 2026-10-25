@@ -52,6 +52,28 @@ More auth shapes, each naming the fields it uses (default "key"):
 Every field must be used by the auth, so nothing is collected that the
 check does not prove. The token_url gets the only POST safeeasyapi makes.
 
+Two different jobs for a key's shape, kept apart on purpose:
+
+  "accept": "^sk_(test|live)_"   # the copy-and-go gate (--clipboard). It may
+                                 #   only use a shape the vendor DOCUMENTS,
+                                 #   and loosely, so a valid key is never
+                                 #   refused. Leave it out when unsure.
+  "detect": "gsk_[A-Za-z0-9_-]{16,}"      # `scan` only: a commonly used shape
+  "detect_confidence": "guess" | "known"  #   used as a HEURISTIC (default
+                                          #   "guess" when only "detect").
+  "pattern"                      # older recipes: one regex doing both jobs
+
+Verdicts beyond "works" / "rejected" (under "validate"):
+
+  "limited": [{"status": 403, "meaning": "valid, but lacks permission X"}]
+  "body_rules": [{"status": 401, "body_contains": "restricted_api_key",
+                  "result": "limited", "meaning": "..."}]    # valid|limited|invalid
+
+Other optional top-level fields:
+
+  "least_privilege": {"summary": "...", "url": "https://..."}  # what to pick
+  "unverified": ["validate.url"]   # parts the vendor docs do not confirm
+
 "cli_token" (BUILT-IN recipes only) gets the key from the vendor's own CLI
 after its browser sign-in, so nothing is copied at all:
   "cli_token": {"login": ["gh", "auth", "login", "--web"], "token": ["gh", "auth", "token"]}
@@ -255,20 +277,83 @@ def _invisible_problem(data) -> str | None:
 
 def fields(recipe: dict) -> list[dict]:
     """The values a recipe collects, in order: [{name, env_var, label,
-    pattern}]. A recipe without "fields" has one: "key", stored as its
-    env_var."""
+    accept, detect, detect_confidence, pattern}]. A recipe without "fields"
+    has one: "key", stored as its env_var.
+
+    accept: the copy-and-go gate (documented shapes only, loose).
+    detect: what `scan` looks for (a heuristic unless detect_confidence is
+    "known"). "pattern" is the older single field: it fills both."""
     listed = recipe.get("fields")
     if not listed:
         return [{"name": DEFAULT_FIELD, "env_var": recipe["env_var"],
-                 "label": "API key", "pattern": None}]
-    return [{"name": f["name"], "env_var": f["env_var"],
-             "label": f.get("label") or f["name"], "pattern": f.get("pattern")}
-            for f in listed]
+                 "label": "API key", "pattern": None, "accept": None,
+                 "detect": None, "detect_confidence": "known"}]
+    out = []
+    for f in listed:
+        accept = f.get("accept") or f.get("pattern")
+        detect = f.get("detect") or f.get("accept") or f.get("pattern")
+        if f.get("detect"):
+            confidence = f.get("detect_confidence", "guess")
+        else:
+            confidence = f.get("detect_confidence", "known")
+        out.append({"name": f["name"], "env_var": f["env_var"],
+                    "label": f.get("label") or f["name"],
+                    "pattern": accept, "accept": accept, "detect": detect,
+                    "detect_confidence": confidence})
+    return out
 
 
 def env_vars(recipe: dict) -> list[str]:
     """Every variable the recipe stores, in field order."""
     return [f["env_var"] for f in fields(recipe)]
+
+
+try:                                        # Python 3.11+
+    import re._parser as _sre_parse
+except ImportError:                          # pragma: no cover - 3.10
+    import sre_parse as _sre_parse
+
+MAX_REPEAT_COUNT = 1000
+
+
+def regex_risk(pattern: str) -> str | None:
+    """Why a regular expression could take very long on a crafted input
+    (catastrophic backtracking), or None. Python's `re` cannot be given a
+    time limit, so the shapes that blow up are refused up front: a repeat
+    inside a repeat ((a+)+, (a|aa)*, (.*a){9}), a back-reference, and a huge
+    repeat count. A plain gate such as ^sk-[A-Za-z0-9_-]{20,} is fine."""
+    try:
+        tree = _sre_parse.parse(pattern)
+    except Exception:
+        return "does not compile"
+
+    def walk(items, inside: bool) -> str | None:
+        for op, av in items:
+            name = str(op)
+            if name in ("MAX_REPEAT", "MIN_REPEAT", "POSSESSIVE_REPEAT"):
+                lo, hi, sub = av
+                if hi != _sre_parse.MAXREPEAT and hi > MAX_REPEAT_COUNT:
+                    return "has a repeat count that is too large"
+                many = hi == _sre_parse.MAXREPEAT or hi > 1
+                if inside and many:
+                    return "repeats something that is itself repeated"
+                found = walk(sub, inside or many)
+            elif name == "SUBPATTERN":
+                found = walk(av[-1], inside)
+            elif name == "BRANCH":
+                found = "has an either/or inside a repeat" if inside else next((r for r in (walk(b, inside) for b in av[1]) if r), None)
+            elif name in ("ASSERT", "ASSERT_NOT"):
+                found = walk(av[1], inside)
+            elif name == "ATOMIC_GROUP":
+                found = walk(av, inside)
+            elif name in ("GROUPREF", "GROUPREF_EXISTS"):
+                found = "uses a back-reference"
+            else:
+                found = None
+            if found:
+                return found
+        return None
+    return walk(tree, False)
 
 
 def _check_fields(data: dict) -> None:
@@ -293,15 +378,24 @@ def _check_fields(data: dict) -> None:
         label = f.get("label")
         if label is not None and not (isinstance(label, str) and label.strip()):
             raise RecipeError(f"field '{name}' label must be text")
-        pattern = f.get("pattern")
-        if pattern is not None:
+        for pkey in ("pattern", "accept", "detect"):
+            pattern = f.get(pkey)
+            if pattern is None:
+                continue
             if not isinstance(pattern, str) or not pattern or len(pattern) > MAX_PATTERN:
-                raise RecipeError(f"field '{name}' pattern must be a regular expression "
+                raise RecipeError(f"field '{name}' {pkey} must be a regular expression "
                                   f"of at most {MAX_PATTERN} characters")
             try:
                 re.compile(pattern)
             except re.error as e:
-                raise RecipeError(f"field '{name}' pattern does not compile: {e}") from None
+                raise RecipeError(f"field '{name}' {pkey} does not compile: {e}") from None
+            risk = regex_risk(pattern)
+            if risk:
+                raise RecipeError(f"field '{name}' {pkey} {risk}; write a simpler "
+                                  f"pattern (a prefix and a character class, like "
+                                  f"^sk-[A-Za-z0-9]{{20,}})")
+        if f.get("detect_confidence", "guess") not in ("known", "guess"):
+            raise RecipeError(f"field '{name}' detect_confidence must be 'known' or 'guess'")
     if data["env_var"] != listed[0]["env_var"]:
         raise RecipeError("env_var must be the first field's env_var")
 
@@ -393,6 +487,53 @@ def _check_cli_token(data: dict) -> None:
         raise RecipeError("cli_token works for single-key recipes only")
 
 
+RESULTS = ("valid", "limited", "invalid")
+STS_BODY = "Action=GetCallerIdentity&Version=2011-06-15"
+
+
+def _check_verdict_rules(v: dict) -> None:
+    """validate.limited and validate.body_rules."""
+    limited = v.get("limited")
+    if limited is not None:
+        if not isinstance(limited, list) or not all(
+                isinstance(x, dict) and isinstance(x.get("status"), int)
+                and 100 <= x["status"] <= 599
+                and isinstance(x.get("meaning"), str) and x["meaning"].strip()
+                for x in limited):
+            raise RecipeError("validate.limited must be a list of "
+                              "{status, meaning}")
+        for x in limited:
+            if x["status"] in v["expect"]:
+                raise RecipeError("validate.limited repeats an expected status")
+    rules = v.get("body_rules")
+    if rules is not None:
+        if not isinstance(rules, list) or not all(
+                isinstance(x, dict) and isinstance(x.get("status"), int)
+                and isinstance(x.get("body_contains"), str) and x["body_contains"]
+                and len(x["body_contains"]) <= 100
+                and x.get("result") in RESULTS
+                and isinstance(x.get("meaning", ""), str) for x in rules):
+            raise RecipeError("validate.body_rules must be a list of {status, "
+                              "body_contains, result valid|limited|invalid, meaning}")
+
+
+def _check_extras(data: dict) -> None:
+    lp = data.get("least_privilege")
+    if lp is not None:
+        if not (isinstance(lp, dict) and isinstance(lp.get("summary"), str)
+                and lp["summary"].strip()
+                and set(lp) <= {"summary", "url"}):
+            raise RecipeError("least_privilege must be {summary, url?}")
+        url = lp.get("url")
+        if url is not None and not (isinstance(url, str)
+                                    and url.startswith("https://")):
+            raise RecipeError("least_privilege.url must be an https:// link")
+    un = data.get("unverified")
+    if un is not None and not (isinstance(un, list) and all(
+            isinstance(x, str) and x for x in un)):
+        raise RecipeError("unverified must be a list of text")
+
+
 def validate_recipe(data: dict) -> dict:
     problem = _invisible_problem(data)
     if problem:
@@ -422,7 +563,12 @@ def validate_recipe(data: dict) -> dict:
         if field not in v:
             raise RecipeError(f"validate missing required field: {field}")
     method = v["method"]
-    if not isinstance(method, str) or method.upper() not in ALLOWED_METHODS:
+    if (isinstance(method, str) and method.upper() == "POST"
+            and v.get("auth", {}).get("type") == "aws_sigv4"
+            and v.get("auth", {}).get("service") == "sts"
+            and v.get("body") == STS_BODY):
+        pass            # AWS documents GetCallerIdentity as a POST; it reads only
+    elif not isinstance(method, str) or method.upper() not in ALLOWED_METHODS:
         raise RecipeError(
             f"validate.method must be GET or HEAD - a validation call only "
             f"reads - got {printable(method)!r}")
@@ -452,6 +598,8 @@ def validate_recipe(data: dict) -> dict:
     if hosts is not None and not (isinstance(hosts, list) and all(
             isinstance(h, str) and h for h in hosts)):
         raise RecipeError("validate.trusted_hosts must be a list of hostnames")
+    _check_verdict_rules(v)
+    _check_extras(data)
     _check_fields(data)
     _check_auth(auth, {f["name"] for f in fields(data)})
     _check_cli_token(data)
@@ -501,6 +649,9 @@ def _load_dir(directory: str, recipes: dict[str, dict],
         # validation host under another domain (trusted_hosts): they were
         # reviewed with the code. A user-dir recipe never gets that.
         data["_builtin"] = builtin
+        previous = recipes.get(data["service"])
+        data["_overrides_builtin"] = bool(previous and previous.get("_builtin")
+                                          and not builtin)
         recipes[data["service"]] = data
 
 

@@ -2,13 +2,22 @@
   "display": "Tavily",
   "docs": "https://docs.tavily.com/documentation/api-reference/endpoint/usage",
   "env_var": "TAVILY_API_KEY",
+  "fields": [
+    {
+      "env_var": "TAVILY_API_KEY",
+      "label": "API key",
+      "name": "key",
+      "detect": "tvly-[A-Za-z0-9_.-]{16,}",
+      "detect_confidence": "guess"
+    }
+  ],
   "key_url": "https://app.tavily.com/home",
   "scopes": [],
   "service": "tavily",
   "steps": [
     "Sign in to Tavily (app.tavily.com)",
     "Under 'API Keys' generate a new key and name it",
-    "Copy the key (starts with 'tvly-')"
+    "Copy the key"
   ],
   "validate": {
     "auth": {
@@ -19,5 +28,8 @@
     ],
     "method": "GET",
     "url": "https://api.tavily.com/usage"
+  },
+  "least_privilege": {
+    "summary": "Make a separate key for this one project, so you can revoke it without breaking anything else."
   }
 }

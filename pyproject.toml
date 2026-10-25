@@ -4,10 +4,11 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "safeeasyapi"
-version = "0.4.1"
+version = "0.6.2"
 description = "The safe tunnel for API keys: guided setup, validation, and .env storage."
 readme = "README.md"
 license = "MIT"
+authors = [{ name = "Calas Automations Inc." }]
 license-files = ["LICENSE"]
 requires-python = ">=3.10"
 keywords = ["api-key", "api-keys", "secrets", "dotenv", "env-file", "mcp", "cli"]
@@ -16,18 +17,23 @@ classifiers = [
     "Environment :: Console",
     "Intended Audience :: Developers",
     "Intended Audience :: End Users/Desktop",
-    "Operating System :: OS Independent",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Security",
 ]
 
 [project.urls]
 Homepage = "https://github.com/calasdan-sketch/safeeasyapi"
 Issues = "https://github.com/calasdan-sketch/safeeasyapi/issues"
+Source = "https://github.com/calasdan-sketch/safeeasyapi"
+Changelog = "https://github.com/calasdan-sketch/safeeasyapi/blob/main/CHANGELOG.md"
 
 [project.scripts]
 safeeasyapi = "safeeasyapi.cli:main"
@@ -36,4 +42,4 @@ safeeasyapi = "safeeasyapi.cli:main"
 packages = ["safeeasyapi"]
 
 [tool.setuptools.package-data]
-safeeasyapi = ["recipes/*.json"]
+safeeasyapi = ["recipes/*.json", "skill/*.md"]

@@ -407,7 +407,7 @@ class CopyAndGo(unittest.TestCase):
             code = connect_mod.connect(dict(rec, _builtin=False), browser_open=lambda u: None,
                                        prompt=lambda p: self.fail("prompted"), out=out,
                                        validate_fn=lambda s, c: c == CREDS, clipboard=(clip.get, clip.clear),
-                                       store_fn=lambda v, k: stored.setdefault(v, k) and "ok")
+                                       confirm_in=lambda p: "", store_fn=lambda v, k: stored.setdefault(v, k) and "ok")
         self.assertEqual(code, 0)
         self.assertEqual(stored, {"X_APP_ID": APP, "X_SECRET": SECRET})
         self.assertNotIn(APP, out.getvalue())

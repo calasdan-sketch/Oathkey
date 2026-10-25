@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import getpass
 import ipaddress
+import os
 import shutil
 import subprocess
 import sys
@@ -16,10 +17,13 @@ import urllib.parse
 import webbrowser
 
 from . import clipboard as clipboard_mod
+from . import doctor as doctor_mod
+from . import procs
 from . import store as store_mod
 from . import validate as validate_mod
 from .recipes import DEFAULT_FIELD, fields as recipe_fields, printable
 
+OVERRIDE_NOTE = "(your recipe, replaces the built-in)"
 MAX_ATTEMPTS = 3
 # Typed confirmation required when the validation URL is on a different
 # domain than the key page. Not case-sensitive, but it must be the whole
@@ -136,6 +140,15 @@ def _print_steps(recipe: dict, out=None) -> None:
     if recipe.get("scopes"):
         scopes = ", ".join(printable(s, words=True) for s in recipe["scopes"])
         out.write(f"\n  Select these scopes: {scopes}\n")
+    least = recipe.get("least_privilege")
+    if least:
+        out.write(f"\n  Least privilege: {printable(least['summary'], words=True)}\n")
+        if least.get("url"):
+            out.write(f"    ({printable(least['url'])})\n")
+    if recipe.get("unverified"):
+        what = ", ".join(printable(x) for x in recipe["unverified"])
+        out.write(f"\n  Not confirmed by the vendor's docs: {what} - "
+                  f"if something looks different on screen, trust the screen.\n")
     out.write(f"\n  Key page: {printable(recipe['key_url'])}\n\n")
     out.flush()
 
@@ -284,6 +297,20 @@ def _require_cross_domain_confirmation(recipe: dict, out,
     the user to type the confirmation word. Returns True when the flow may
     proceed."""
     v = recipe["validate"]
+    private = [_host(u) for u in destinations(recipe)
+               if doctor_mod.private_host_reason(u)]
+    if private and not recipe.get("_builtin"):
+        out.write(f"  \u26a0 This recipe sends your key to {printable(private[0])}, which is "
+                  f"a program on THIS computer or on a private network,\n"
+                  f"    not a public vendor. Only go on if you set that up yourself.\n")
+        try:
+            answer = confirm_in(f"  Type '{CONFIRM_WORD}' to continue: ")
+        except (EOFError, KeyboardInterrupt):
+            out.write("\ncancelled.\n")
+            return False
+        if (answer or "").strip().lower() != CONFIRM_WORD:
+            out.write("  cancelled \u2014 no key was asked for, nothing was sent.\n")
+            return False
     trusted = {_normalize_host(h) for h in v.get("trusted_hosts") or []}
     foreign = []
     for url in destinations(recipe):
@@ -324,6 +351,13 @@ def _require_cross_domain_confirmation(recipe: dict, out,
     return True
 
 
+class SaveDeclined(Exception):
+    """The key must not be saved where the person did not choose: raised by
+    a store function (for example the keychain one, when the keychain failed
+    and the person did not agree to a plain-text .env file). The text is a
+    plain sentence and never contains the key."""
+
+
 def store_in_env_file(env_file: str):
     """Default store: ENV_VAR=<key> in `env_file`, owner-only. Returns a
     callable (env_var, key) -> description for the success line."""
@@ -332,6 +366,9 @@ def store_in_env_file(env_file: str):
         verb = "updated" if stored.updated else "added"
         text = (f"{verb} {env_var} in {stored.path} "
                 f"({stored.protection} - never displayed, never logged)")
+        if store_mod.env_not_git_ignored(stored.path):
+            text += "\n    " + store_mod.GIT_WARNING.format(
+                path=stored.path, name=os.path.basename(stored.path))
         if stored.duplicates:
             # Said plainly, because the person may not know: of several
             # lines for one variable the last one is the one that counts.
@@ -343,22 +380,41 @@ def store_in_env_file(env_file: str):
     return _store
 
 
-def _ask_one(field: dict, single: bool, prompt, out, clip, taken: set) -> str | None:
+def _ask_one(field: dict, single: bool, prompt, out, clip, taken: set,
+             confirm=None) -> str | None:
     """One value: from the clipboard when copy-and-go is on, else the hidden
-    prompt. Returns None when the person cancelled. Never shows the value."""
+    prompt. Returns None when the person cancelled. Never shows the value.
+    Ctrl-C while waiting for a Copy cancels; it does not fall through to the
+    prompt. The clipboard is emptied after the prompt fallback too."""
     label = printable(field["label"], words=True)
     if clip is not None:
         get, clear = clip
         out.write(f"  Click Copy next to the {label} - I'll take it from the clipboard "
-                  f"and empty it\n    (waiting up to "
-                  f"{clipboard_mod.WAIT_SECONDS // 60} minutes; nothing is shown)\n")
+                  f"and EMPTY it.\n    The next single-word thing you copy is taken "
+                  f"as the key, so copy nothing else\n    (waiting up to "
+                  f"{clipboard_mod.WAIT_SECONDS // 60} minutes; nothing is shown; "
+                  f"Ctrl-C cancels)\n")
         out.flush()
         try:
-            value = clipboard_mod.wait_for_key(field.get("pattern"), taken, get, clear)
+            value = clipboard_mod.wait_for_key(field.get("accept"), taken, get, clear)
         except KeyboardInterrupt:
-            value = None
-            out.write("\n")
-        if value:
+            _safe_clear(clear)
+            out.write("\ncancelled.\n")
+            return None
+        if value and confirm is not None and not field.get("accept"):
+            # no pattern to recognise the key by: say what was taken (never
+            # its characters) and let the person stop a wrong copy
+            out.write(f"  took {clipboard_mod.describe(value)} - clipboard emptied.\n")
+            try:
+                answer = confirm("  Is that the key? Press Enter for yes, or type n: ")
+            except (EOFError, KeyboardInterrupt):
+                return None
+            if (answer or "").strip().lower().startswith("n"):
+                out.write("  ok, not using it.\n")
+                value = None
+            else:
+                return value
+        elif value:
             out.write(f"  got the {label} ({len(value)} characters) - clipboard emptied\n")
             return value
         out.write("  nothing key-shaped was copied - type or paste it instead:\n")
@@ -367,6 +423,16 @@ def _ask_one(field: dict, single: bool, prompt, out, clip, taken: set) -> str | 
         return prompt(text).strip()
     except (EOFError, KeyboardInterrupt):
         return None
+    finally:
+        if clip is not None:
+            _safe_clear(clip[1])
+
+
+def _safe_clear(clear) -> None:
+    try:
+        clear()
+    except Exception:
+        pass
 
 
 def _cli_token(recipe: dict, out, run=subprocess.run, call=subprocess.call,
@@ -375,18 +441,22 @@ def _cli_token(recipe: dict, out, run=subprocess.run, call=subprocess.call,
     recipes only, programs fixed in recipes.CLI_PROGRAMS). The token goes
     from the program's output to this variable and nowhere else."""
     cli = recipe["cli_token"]
-    if not which(cli["token"][0]):
+    # The program by its full path, found without looking in the current
+    # folder: a cloned repository must not be able to ship its own gh.exe.
+    exe = procs.find_program(cli["token"][0], which)
+    if not exe:
         out.write(f"  {printable(cli['token'][0])} is not installed - "
                   f"use the normal steps instead (drop --via-cli).\n")
         return None
+    token_cmd = [exe] + list(cli["token"][1:])
     if cli.get("login"):
         out.write("  Signing in with the vendor's own tool (it opens your browser)...\n")
         out.flush()
-        if call(cli["login"]) != 0:
+        if call([exe] + list(cli["login"][1:])) != 0:
             out.write("  sign-in did not finish.\n")
             return None
     try:
-        done = run(cli["token"], capture_output=True, timeout=60)
+        done = run(token_cmd, capture_output=True, timeout=60)
     except (OSError, subprocess.TimeoutExpired):
         out.write("  couldn't ask the vendor's tool for the key.\n")
         return None
@@ -434,6 +504,8 @@ def connect(
             out.write(f"\n  ✗ {env_file}: {e.strerror or e}.\n"
                       f"    Nothing was asked for and nothing was sent.\n")
             return 1
+    if recipe.get("_overrides_builtin"):
+        out.write(f"  {OVERRIDE_NOTE}\n")
     if via_cli and not (recipe.get("_builtin") and recipe.get("cli_token")):
         out.write("  --via-cli works only for built-in recipes that have a vendor CLI "
                   "(e.g. github).\n")
@@ -461,7 +533,7 @@ def connect(
                 if value is None:
                     return 1
             else:
-                value = _ask_one(field, single, prompt, out, clipboard, taken)
+                value = _ask_one(field, single, prompt, out, clipboard, taken, confirm_in)
             if value is None:
                 cancelled = True
                 break
@@ -510,11 +582,18 @@ def connect(
                       f"character?) and try again.\n")
             values = None
             continue
+        except validate_mod.ClockSkew as e:
+            values = None
+            out.write(f"  \u2717 {printable(e)}\n  Nothing was saved.\n")
+            return 1
         except validate_mod.ValidationError as e:
             values = None
             out.write(f"  couldn't reach the API: {printable(e)}\n")
             return 1
         if ok:
+            note = getattr(ok, "note", None)
+            if note:
+                out.write(f"  \u2713 the key is real, but: {printable(note, words=True)}\n")
             break
         left = MAX_ATTEMPTS - attempt
         what = "key" if single else "credentials"
@@ -533,6 +612,10 @@ def connect(
     try:
         for field in fields:
             saved.append(store_fn(field["env_var"], values[field["name"]]))
+    except SaveDeclined as e:
+        out.write(f"\n  \u2717 the key was validated but NOT saved: {e}\n"
+                  f"    {_partly(saved)}\n")
+        return 1
     except store_mod.UnsafeValue as e:
         # Only reachable when the key was headed elsewhere first (the
         # keychain falling back to the .env file): the paste loop stops an
@@ -543,12 +626,14 @@ def connect(
         return 1
     except OSError as e:
         # e.g. --env-file in a folder that is a file, or not writable.
-        # The error names the path, never the key. The key is NOT saved;
-        # the user still has it on the clipboard.
+        # The error names the path, never the key. The key is NOT saved, and
+        # it is not kept anywhere (copy-and-go emptied the clipboard): the
+        # person gets it again from the vendor page.
         out.write(f"\n  ✗ the key was validated but could NOT be saved: "
                   f"{e.strerror or e} ({e.filename or env_file})\n"
                   f"    {_partly(saved)} Fix the path (or pass "
-                  f"--env-file) and run me again.\n")
+                  f"--env-file) and run me again. The key is not kept anywhere - "
+                  f"copy it again from the vendor page.\n")
         return 1
     finally:
         # Scrub the values from this frame whatever happens.

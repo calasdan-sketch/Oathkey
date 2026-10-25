@@ -2,13 +2,13 @@
   "display": "ElevenLabs",
   "docs": "https://elevenlabs.io/docs/api-reference/authentication",
   "env_var": "ELEVENLABS_API_KEY",
-  "key_url": "https://elevenlabs.io/app/developers/api-keys",
+  "key_url": "https://elevenlabs.io/app/api/api-keys",
   "scopes": [],
   "service": "elevenlabs",
   "steps": [
     "Sign in to ElevenLabs",
     "Click 'Create API key'",
-    "Name it; optionally restrict its permissions and set 'Expire After'",
+    "Name it; restrict its permissions to what you need and set 'Expire After'",
     "Click 'Create' and copy the key — it is shown exactly once"
   ],
   "validate": {
@@ -20,6 +20,26 @@
       200
     ],
     "method": "GET",
-    "url": "https://api.elevenlabs.io/v1/user"
+    "url": "https://api.elevenlabs.io/v1/user",
+    "limited": [
+      {
+        "status": 403,
+        "meaning": "the key is valid but is not allowed to read your account (the check needs the user-read permission); that is fine for a locked-down key"
+      }
+    ],
+    "body_rules": [
+      {
+        "status": 401,
+        "body_contains": "missing_permissions",
+        "result": "limited",
+        "meaning": "the key is valid but lacks the permission the check needs (user read); it will work for what you gave it"
+      }
+    ]
+  },
+  "unverified": [
+    "validate (how a restricted key answers is not in the vendor docs)"
+  ],
+  "least_privilege": {
+    "summary": "Restrict the key to only the features you use (e.g. text-to-speech) and set an expiry."
   }
 }

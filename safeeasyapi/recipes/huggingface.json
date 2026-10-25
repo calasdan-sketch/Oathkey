@@ -2,14 +2,23 @@
   "display": "Hugging Face",
   "docs": "https://huggingface.co/docs/hub/security-tokens",
   "env_var": "HF_TOKEN",
+  "fields": [
+    {
+      "env_var": "HF_TOKEN",
+      "label": "API key",
+      "name": "key",
+      "detect": "hf_[A-Za-z0-9_.-]{16,}",
+      "detect_confidence": "guess"
+    }
+  ],
   "key_url": "https://huggingface.co/settings/tokens",
   "scopes": [],
   "service": "huggingface",
   "steps": [
     "Sign in; this is Settings → Access Tokens",
     "Click 'Create new token'",
-    "Pick a type: 'Read' is enough for downloading models, 'Fine-grained' lets you scope it",
-    "Name it, click 'Create token' and copy it (starts with 'hf_') — it is shown exactly once"
+    "Pick 'Fine-grained' and tick only what the app needs ('Read' is enough for downloading models)",
+    "Name it, click 'Create token' and copy it - it is shown exactly once"
   ],
   "validate": {
     "auth": {
@@ -20,5 +29,9 @@
     ],
     "method": "GET",
     "url": "https://huggingface.co/api/whoami-v2"
+  },
+  "least_privilege": {
+    "summary": "Use a fine-grained token, one per app.",
+    "url": "https://huggingface.co/settings/tokens"
   }
 }

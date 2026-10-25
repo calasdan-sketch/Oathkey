@@ -19,6 +19,12 @@
       200
     ],
     "method": "GET",
-    "url": "https://api.cohere.com/v2/models"
+    "url": "https://api.cohere.com/v1/models"
+  },
+  "unverified": [
+    "validate.url (the /v2 listing is not confirmed)"
+  ],
+  "least_privilege": {
+    "summary": "Use a trial key while building; make a separate production key only when you launch."
   }
 }

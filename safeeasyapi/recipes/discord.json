@@ -6,10 +6,10 @@
   "scopes": [],
   "service": "discord",
   "steps": [
-    "Sign in to the Developer Portal and open your application (or click 'New Application')",
-    "Open the 'Bot' page in the app's settings",
-    "Under 'Token' click 'Reset Token' and confirm",
-    "Copy the token — it is shown exactly once"
+    "Open the Discord Developer Portal and pick your application (or create one)",
+    "Find the 'Bot' page in the application's settings (menu names can change)",
+    "Reset the bot token and confirm - Discord shows it once",
+    "Copy the token"
   ],
   "validate": {
     "auth": {
@@ -21,5 +21,12 @@
     ],
     "method": "GET",
     "url": "https://discord.com/api/v10/users/@me"
+  },
+  "unverified": [
+    "the click path wording",
+    "the token shape"
+  ],
+  "least_privilege": {
+    "summary": "Give the bot only the permissions and intents it needs when you invite it to a server."
   }
 }

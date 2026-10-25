@@ -8,7 +8,8 @@
   "steps": [
     "Sign in with your Google account",
     "Click 'Create API key' (pick or create a Google Cloud project when asked)",
-    "Copy the key (starts with 'AIza')"
+    "Copy the key",
+    "Google advises restricting the key to the Gemini API only"
   ],
   "validate": {
     "auth": {
@@ -28,5 +29,8 @@
       "generativelanguage.googleapis.com"
     ],
     "url": "https://generativelanguage.googleapis.com/v1beta/models"
+  },
+  "least_privilege": {
+    "summary": "Restrict the key to the Gemini API (and, for a server, to your IP) in Google Cloud."
   }
 }

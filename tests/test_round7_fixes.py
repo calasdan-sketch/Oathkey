@@ -469,7 +469,7 @@ class TestForgetAskedTheSecretServiceFirst(unittest.TestCase):
     def test_a_hit_is_looked_up_and_then_cleared(self):
         tool = holding(FakeSecretTool())
         self.delete(tool)
-        self.assertEqual(tool.verbs(), ["store", "lookup", "clear"])
+        self.assertEqual(tool.verbs(), ["store", "lookup", "lookup", "clear"])
         self.assertEqual(tool.items, {})
 
     def test_nothing_stored_is_found_out_before_anything_is_cleared(self):
@@ -488,7 +488,7 @@ class TestForgetAskedTheSecretServiceFirst(unittest.TestCase):
             self.delete(tool)
         self.assertIn("secret-tool clear failed (exit 1)", str(cm.exception))
         self.assertNotIn(SECRET, str(cm.exception))
-        self.assertEqual(tool.verbs(), ["store", "lookup", "clear"])
+        self.assertEqual(tool.verbs(), ["store", "lookup", "lookup", "clear"])
 
     def test_the_key_is_never_on_a_command_line(self):
         tool = holding(FakeSecretTool())

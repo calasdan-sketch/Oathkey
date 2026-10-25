@@ -1,1 +1,44 @@
-{"display":"eBay","docs":"https://developer.ebay.com/api-docs/static/oauth-client-credentials-grant.html","env_var":"EBAY_APP_ID","fields":[{"env_var":"EBAY_APP_ID","label":"App ID (Client ID)","name":"app_id"},{"env_var":"EBAY_CERT_ID","label":"Cert ID (Client Secret)","name":"cert_id"}],"key_url":"https://developer.ebay.com/my/keys","scopes":[],"service":"ebay","steps":["Sign in to developer.ebay.com (join the free Developers Program if asked)","Open 'Application Keys' and create a keyset under Production (not Sandbox)","If asked about Marketplace Account Deletion notifications, choose the exemption 'I do not persist eBay data' (or give your endpoint) - the keys stay off until this is done","You need the Production 'App ID (Client ID)' and 'Cert ID (Client Secret)'"],"validate":{"auth":{"client_id_field":"app_id","client_secret_field":"cert_id","scope":"https://api.ebay.com/oauth/api_scope","token_url":"https://api.ebay.com/identity/v1/oauth2/token","type":"oauth2_client_credentials"},"expect":[200],"method":"GET","url":"https://api.ebay.com/buy/browse/v1/item_summary/search?q=test&limit=1"}}
+{
+  "display": "eBay",
+  "docs": "https://developer.ebay.com/api-docs/static/oauth-client-credentials-grant.html",
+  "env_var": "EBAY_APP_ID",
+  "fields": [
+    {
+      "env_var": "EBAY_APP_ID",
+      "label": "Client ID (App ID)",
+      "name": "app_id"
+    },
+    {
+      "env_var": "EBAY_CERT_ID",
+      "label": "Client secret (Cert ID)",
+      "name": "cert_id"
+    }
+  ],
+  "key_url": "https://developer.ebay.com/my/keys",
+  "scopes": [],
+  "service": "ebay",
+  "steps": [
+    "Sign in to developer.ebay.com (join the free Developers Program if asked)",
+    "Open 'Application Keys' and create a keyset under Production (not Sandbox)",
+    "If asked about Marketplace Account Deletion notifications, choose the exemption 'I do not persist eBay data' (or give your endpoint) - the keys stay off until this is done",
+    "You need the Production 'Client ID (App ID)' and 'Client secret (Cert ID)'"
+  ],
+  "validate": {
+    "auth": {
+      "client_id_field": "app_id",
+      "client_secret_field": "cert_id",
+      "scope": "https://api.ebay.com/oauth/api_scope",
+      "token_url": "https://api.ebay.com/identity/v1/oauth2/token",
+      "type": "oauth2_client_credentials",
+      "token_only": true
+    },
+    "expect": [
+      200
+    ],
+    "method": "GET",
+    "url": "https://api.ebay.com/identity/v1/oauth2/token"
+  },
+  "least_privilege": {
+    "summary": "The check only asks eBay for a short-lived token; it makes no search call, so it uses none of your daily quota."
+  }
+}

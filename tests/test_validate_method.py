@@ -82,6 +82,9 @@ class TestRecipesMayOnlyRead(unittest.TestCase):
         shipped = recipes_mod.load_recipes(recipes_mod.RECIPES_DIR)
         self.assertTrue(shipped)
         for slug, data in shipped.items():
+            if slug == "aws":       # STS GetCallerIdentity: documented as a POST, read-only
+                self.assertEqual(data["validate"]["method"], "POST")
+                continue
             self.assertIn(data["validate"]["method"].upper(), ("GET", "HEAD"), slug)
 
     def test_a_recipe_file_that_asks_for_delete_is_skipped_with_a_warning(self):

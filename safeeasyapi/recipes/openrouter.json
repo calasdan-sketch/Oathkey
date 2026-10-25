@@ -1,16 +1,25 @@
 {
   "display": "OpenRouter",
-  "docs": "https://openrouter.ai/docs/api-reference/authentication",
+  "docs": "https://openrouter.ai/docs/api_reference/authentication",
   "env_var": "OPENROUTER_API_KEY",
+  "fields": [
+    {
+      "env_var": "OPENROUTER_API_KEY",
+      "label": "API key",
+      "name": "key",
+      "detect": "sk-or-[A-Za-z0-9_.-]{16,}",
+      "detect_confidence": "guess"
+    }
+  ],
   "key_url": "https://openrouter.ai/keys",
   "scopes": [],
   "service": "openrouter",
   "steps": [
-    "Sign in with your Google account if you haven't already",
+    "Sign in to OpenRouter",
     "Click 'Create API Key'",
-    "Give it a name like 'youtube-agent'",
-    "Leave the credit limit empty (or set a small one for safety)",
-    "Click 'Create' and copy the key — it starts with 'sk-or-' and is shown exactly once"
+    "Give it a name for this project",
+    "Set a small credit limit (the docs recommend one on every key)",
+    "Click 'Create' and copy the key - it is shown exactly once"
   ],
   "validate": {
     "auth": {
@@ -20,6 +29,9 @@
       200
     ],
     "method": "GET",
-    "url": "https://openrouter.ai/api/v1/auth/key"
+    "url": "https://openrouter.ai/api/v1/key"
+  },
+  "least_privilege": {
+    "summary": "Always set a credit limit on the key."
   }
 }

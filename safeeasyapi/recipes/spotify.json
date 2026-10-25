@@ -1,1 +1,41 @@
-{"display":"Spotify Web API","docs":"https://developer.spotify.com/documentation/web-api/tutorials/client-credentials-flow","env_var":"SPOTIFY_CLIENT_ID","fields":[{"env_var":"SPOTIFY_CLIENT_ID","label":"Client ID","name":"client_id"},{"env_var":"SPOTIFY_CLIENT_SECRET","label":"Client secret","name":"client_secret"}],"key_url":"https://developer.spotify.com/dashboard","scopes":[],"service":"spotify","steps":["Sign in to the Spotify Developer Dashboard and create an app (or open yours)","Open the app's Settings","Copy the Client ID, then click 'View client secret' and copy it"],"validate":{"auth":{"token_url":"https://accounts.spotify.com/api/token","type":"oauth2_client_credentials"},"expect":[200],"method":"GET","url":"https://api.spotify.com/v1/search?q=a&type=artist&limit=1"}}
+{
+  "display": "Spotify Web API",
+  "docs": "https://developer.spotify.com/documentation/web-api/tutorials/client-credentials-flow",
+  "env_var": "SPOTIFY_CLIENT_ID",
+  "fields": [
+    {
+      "env_var": "SPOTIFY_CLIENT_ID",
+      "label": "Client ID",
+      "name": "client_id"
+    },
+    {
+      "env_var": "SPOTIFY_CLIENT_SECRET",
+      "label": "Client secret",
+      "name": "client_secret"
+    }
+  ],
+  "key_url": "https://developer.spotify.com/dashboard",
+  "scopes": [],
+  "service": "spotify",
+  "steps": [
+    "Sign in to the Spotify Developer Dashboard and create an app (or open yours)",
+    "Open the app's Settings",
+    "Copy the Client ID, then click 'View client secret' and copy it",
+    "An app in development mode needs its owner to have Spotify Premium, and Spotify removed some endpoints in February 2026"
+  ],
+  "validate": {
+    "auth": {
+      "token_url": "https://accounts.spotify.com/api/token",
+      "type": "oauth2_client_credentials",
+      "token_only": true
+    },
+    "expect": [
+      200
+    ],
+    "method": "GET",
+    "url": "https://accounts.spotify.com/api/token"
+  },
+  "least_privilege": {
+    "summary": "Client credentials only reach public catalogue data. Never ship the Client secret in a browser or phone app."
+  }
+}

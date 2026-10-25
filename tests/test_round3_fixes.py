@@ -199,9 +199,11 @@ class TestPrivateEnvWrite(unittest.TestCase):
             return types.SimpleNamespace(returncode=0)
 
         with mock.patch.object(store_mod.subprocess, "run", fake_run), \
-                mock.patch.dict(os.environ, {"USERNAME": "dan"}):
+                mock.patch.dict(os.environ, {"USERNAME": "dan",
+                                             "SystemRoot": "C:\\Windows"}):
+            icacls = "C:\\Windows\\System32\\icacls.exe"
             self.assertTrue(store_mod._windows_owner_only("C:\\x\\.env"))
-        self.assertEqual(calls, [["icacls", "C:\\x\\.env", "/inheritance:r",
+        self.assertEqual(calls, [[icacls, "C:\\x\\.env", "/inheritance:r",
                                   "/grant:r", "dan:(F)"]])
         with mock.patch.object(store_mod.subprocess, "run",
                                side_effect=OSError("no icacls")):
@@ -262,7 +264,7 @@ class TestInstallLayout(unittest.TestCase):
         self.assertTrue(proj["classifiers"])
         self.assertEqual(data["tool"]["setuptools"]["packages"], ["safeeasyapi"])
         self.assertEqual(data["tool"]["setuptools"]["package-data"],
-                         {"safeeasyapi": ["recipes/*.json"]})
+                         {"safeeasyapi": ["recipes/*.json", "skill/*.md"]})
         self.assertIn("setuptools>=77", data["build-system"]["requires"][0])
 
     def test_builtin_recipes_live_inside_the_package(self):
@@ -379,7 +381,7 @@ class TestKeychain(unittest.TestCase):
         self.assertEqual(keychain_mod.label(None), "no OS keychain")
 
     def test_macos_security_cli_gets_key_on_stdin_never_argv(self):
-        run = _FakeRun()
+        run = _FakeRun(stdout=(FAKE_KEY + "\n").encode())    # the read-back
         used = keychain_mod.store("acme", "ACME_API_KEY", FAKE_KEY,
                                   keychain_mod.MACOS, run=run)
         self.assertEqual(used, keychain_mod.MACOS)
@@ -406,7 +408,7 @@ class TestKeychain(unittest.TestCase):
         self.assertEqual(keychain_mod._security_quote('a"b\\c'), '"a\\"b\\\\c"')
 
     def test_linux_secret_tool_gets_key_on_stdin(self):
-        run = _FakeRun()
+        run = _FakeRun(stdout=FAKE_KEY.encode())               # the read-back
         keychain_mod.store("acme", "ACME_API_KEY", FAKE_KEY, keychain_mod.LINUX, run=run)
         argv, stdin = run.calls[0]
         self.assertEqual(argv[:2], ["secret-tool", "store"])
@@ -458,9 +460,10 @@ class TestKeychain(unittest.TestCase):
                                     keychain=types.SimpleNamespace(
                                         detect_backend=lambda: None,
                                         KeychainError=keychain_mod.KeychainError,
-                                        store=None, label=keychain_mod.label))
+                                        store=None, label=keychain_mod.label),
+                                    ask=lambda _p: "y", interactive=lambda: True)
         desc = fn("ACME_API_KEY", FAKE_KEY)
-        self.assertIn("no OS keychain available", out.getvalue())
+        self.assertIn("no OS keychain is available", out.getvalue())
         self.assertIn("added ACME_API_KEY", desc)
         with open(env, encoding="utf-8") as f:
             self.assertIn(f"ACME_API_KEY={FAKE_KEY}", f.read())
@@ -491,8 +494,9 @@ class TestKeychain(unittest.TestCase):
         tmp = _isolation.mktemp()
         env = os.path.join(tmp, ".env")
         out = io.StringIO()
-        desc = cli_mod.keychain_store(recipe(), env, out=out,
-                                      keychain=fake)("ACME_API_KEY", FAKE_KEY)
+        desc = cli_mod.keychain_store(recipe(), env, out=out, keychain=fake,
+                                      ask=lambda _p: "y",
+                                      interactive=lambda: True)("ACME_API_KEY", FAKE_KEY)
         self.assertIn("vault locked", out.getvalue())
         self.assertIn("added ACME_API_KEY", desc)
         self.assertTrue(os.path.exists(env))
@@ -541,8 +545,8 @@ class TestKeychain(unittest.TestCase):
                     mock.patch.object(keychain_mod.subprocess, "call",
                                       return_value=0) as call:
                 out = io.StringIO()
-                with redirect_stdout(out):
-                    self.assertEqual(cli_mod.main(["run", "acme", "--", *prog]), 0)
+                with redirect_stdout(out), mock.patch.object(cli_mod, "_is_tty", return_value=True):
+                    self.assertEqual(cli_mod.main(["run", "--no-redact", "acme", "--", *prog]), 0)
                 self.assertEqual(call.call_args.args[0], prog)
                 self.assertEqual(call.call_args.kwargs["env"]["ACME_API_KEY"], FAKE_KEY)
                 self.assertNotIn(FAKE_KEY, out.getvalue())

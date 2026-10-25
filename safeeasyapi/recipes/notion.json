@@ -2,7 +2,7 @@
   "display": "Notion",
   "docs": "https://developers.notion.com/guides/get-started/personal-access-tokens",
   "env_var": "NOTION_TOKEN",
-  "key_url": "https://www.notion.so/developers/tokens",
+  "key_url": "https://app.notion.com/developers/tokens",
   "scopes": [],
   "service": "notion",
   "steps": [
@@ -26,5 +26,8 @@
       "api.notion.com"
     ],
     "url": "https://api.notion.com/v1/users/me"
+  },
+  "least_privilege": {
+    "summary": "Pick the shortest expiration that suits you (7 days to 1 year) and only the capabilities you need."
   }
 }
