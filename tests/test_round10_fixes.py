@@ -345,6 +345,17 @@ class TestFalseNegativesAreClosed(NoNetwork):
                      "password = Optional[str]", "self.password = HTTPPasswordMgr"):
             self.assertEqual(scan_text(text + "\n"), [], text)
 
+    def test_a_password_finding_says_change_the_password_not_rotate_a_key(self):
+        for text in ("DATABASE_URL=postgres://app:Zq8vK2mXp9Lr@db.example.com/app", "DB_PASSWORD=Zq8vK2mXp9Lr"):
+            step = scan_text(text + "\n")[0].next_step
+            self.assertIn("Change this password", step)
+            self.assertNotIn("--validate", step)
+
+    def test_a_name_only_guess_is_worded_as_a_guess(self):
+        f = scan_text("AWS_SECRET_ACCESS_KEY=Xk39dLq82mZpR71vBn04TgYw5HcJe6UaS+/Zq\n")[0]
+        self.assertTrue(f.provider_name.startswith("Possibly "), f.provider_name)
+        self.assertFalse(f.can_validate)
+
     def test_a_bearer_token_with_no_name(self):
         found = scan_text(f'curl -H "Authorization: Bearer {GENERIC}" https://x.test\n')
         self.assertEqual([f.rule for f in found], ["bearer-token"])
@@ -433,6 +444,7 @@ class TestHookNeverRunsWhatItReads(Settings):
         # not ours, so: not installed
         self.assertIn("not installed", out.getvalue())
 
+    @unittest.skipIf(os.name == "nt", "the POSIX shell form")
     def test_even_a_marked_handler_is_never_run_by_status(self):
         marker = os.path.join(self.dir, "pwned2")
         self.put({"hooks": {"PreToolUse": [{"matcher": "Read", "hooks": [

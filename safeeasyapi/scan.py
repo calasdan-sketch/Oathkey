@@ -436,6 +436,9 @@ class Finding:
 
 def next_step_text(f: Finding) -> str:
     """Plain words: what to do about this one."""
+    if f.skip_reason.startswith("it is a password"):
+        return ("Change this password where it is set (the database or service "
+                "that uses it), then keep the new one out of files an AI agent reads.")
     if f.provider and f.key_url:
         base = (f"Rotate it at {printable(f.key_url)}, then run "
                 f"`safeeasyapi connect {f.provider}` to save the new one safely.")
@@ -450,7 +453,7 @@ def next_step_text(f: Finding) -> str:
         who = printable(f.provider_name, words=True) if f.provider else "the service"
         return (f"Rejected by {who}: it may be revoked, or it may not be a "
                 f"{who} key at all. Rotate it if you are unsure. " + base)
-    if f.status == "unchecked":
+    if f.status == "unchecked" and f.can_validate:
         base += " Add --validate to see whether it still works."
     return base
 
@@ -667,7 +670,7 @@ def _scan_line(raw: str, nxt: str, number: int, rel: str, rules: list[Rule],
                 if provider:
                     display = catalog[provider]["display"]
                     if not matches_format:
-                        display = f"{display}? (by its name {printable(name)})"
+                        display = f"Possibly {display} (named {printable(name)})"
                 else:
                     display = f"Unrecognised key ({printable(name)})"
                 add("named-assignment", "name-and-randomness", provider, display,
