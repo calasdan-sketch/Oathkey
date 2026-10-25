@@ -137,7 +137,8 @@ class TestConnectKeepsTheKey(unittest.TestCase):
         shown = io.StringIO()
         with keychain_whose_tool(hung):
             store_fn = cli_mod.keychain_store(
-                recipe(), env, out=shown, backend=keychain_mod.LINUX)
+                recipe(), env, out=shown, backend=keychain_mod.LINUX,
+                ask=lambda _p: "y", interactive=lambda: True)
             code = connect_mod.connect(
                 recipe(), env_file=env, browser_open=lambda _u: None,
                 prompt=lambda _t: FAKE_KEY, out=shown,
@@ -145,7 +146,7 @@ class TestConnectKeepsTheKey(unittest.TestCase):
         self.assertEqual(code, 0)
         text = shown.getvalue()
         self.assertIn("did not answer", text)
-        self.assertIn("storing in the .env file instead", text)
+        self.assertIn("could not keep the key", text)
         self.assertNotIn(FAKE_KEY, text)
         self.assertEqual(store_mod.load_env(env)["ACME_API_KEY"], FAKE_KEY)
 
@@ -155,7 +156,8 @@ class TestConnectKeepsTheKey(unittest.TestCase):
         shown = io.StringIO()
         with keychain_whose_tool(not_runnable, keychain_mod.MACOS):
             store_fn = cli_mod.keychain_store(
-                recipe(), env, out=shown, backend=keychain_mod.MACOS)
+                recipe(), env, out=shown, backend=keychain_mod.MACOS,
+                ask=lambda _p: "y", interactive=lambda: True)
             code = connect_mod.connect(
                 recipe(), env_file=env, browser_open=lambda _u: None,
                 prompt=lambda _t: FAKE_KEY, out=shown,
@@ -218,7 +220,7 @@ class TestReadmeSaysSo(unittest.TestCase):
                   encoding="utf-8") as f:
             flat = " ".join(f.read().split())
         for phrase in ("does not answer within 30 seconds",
-                       "falls back to the `.env` file"):
+                       "before putting the key in the plain-text `.env` file"):
             self.assertTrue(phrase in flat, f"the README does not say: {phrase!r}")
 
 

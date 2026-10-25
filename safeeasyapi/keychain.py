@@ -253,6 +253,14 @@ def store(service: str, env_var: str, key: str, backend: str | None = None,
     if backend is None:
         raise KeychainError("no OS keychain available on this system")
     _dispatch("store", backend, service, env_var, key, run, ctypes_mod)
+    # Trust nothing until it has been read back: a keychain that answers
+    # "ok" and keeps a different value (or nothing) would lose the key for
+    # good, because the caller has by now stopped holding on to it.
+    back = _dispatch("read", backend, service, env_var, None, run, ctypes_mod)
+    if back != key:
+        raise KeychainError("reading the entry back did not give the key "
+                            "that was stored")
+    del back
     return backend
 
 

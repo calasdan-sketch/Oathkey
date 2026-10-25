@@ -122,6 +122,8 @@ def looks_like(value: str, pattern: str | None) -> bool:
     value = value.strip()
     if not value or len(value) > MAX_LEN:
         return False
+    if re.match(r"https?://", value, re.IGNORECASE):
+        return False                        # a copied link is never the key
     if pattern:
         return re.fullmatch(pattern, value) is not None
     return KEY_SHAPE.match(value) is not None

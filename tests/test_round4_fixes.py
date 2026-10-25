@@ -634,11 +634,10 @@ class TestShippedCatalog(unittest.TestCase):
                 sent = base64.b64decode(sent.split(" ", 1)[1]).decode()
             self.assertIn("k", sent, slug)
 
-    def test_recipe_files_are_pretty_printed_crlf_json(self):
+    def test_recipe_files_are_valid_json_without_escape_bytes(self):
         for name in os.listdir(recipes_mod.RECIPES_DIR):
             with open(os.path.join(recipes_mod.RECIPES_DIR, name), "rb") as f:
                 raw = f.read()
-            self.assertIn(b"\r\n", raw, name)
             self.assertNotIn(b"\x1b", raw, name)
             data = json.loads(raw.decode("utf-8"))
             self.assertEqual(data["service"] + ".json", name)

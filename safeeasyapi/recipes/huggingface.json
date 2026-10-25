@@ -2,6 +2,14 @@
   "display": "Hugging Face",
   "docs": "https://huggingface.co/docs/hub/security-tokens",
   "env_var": "HF_TOKEN",
+  "fields": [
+    {
+      "env_var": "HF_TOKEN",
+      "label": "API key",
+      "name": "key",
+      "pattern": "hf_[A-Za-z0-9_.-]{16,}"
+    }
+  ],
   "key_url": "https://huggingface.co/settings/tokens",
   "scopes": [],
   "service": "huggingface",

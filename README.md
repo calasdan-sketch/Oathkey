@@ -1,5 +1,21 @@
 # SafeEasyAPI (`safeeasyapi`)
 
+**Quickstart**
+
+```bash
+pipx install safeeasyapi          # Python 3.10+, no other dependencies
+safeeasyapi list                  # the services it knows (35 built in)
+safeeasyapi connect github        # opens the key page, shows the exact steps
+#   paste the key when asked (typing is hidden), or use --clipboard and
+#   click the vendor's Copy button; the key is tested with one API call
+#   and only then saved to .env (owner-only) - or to the OS keychain:
+safeeasyapi connect openai --store keychain
+safeeasyapi run openai -- python app.py     # keychain key goes to that command only
+safeeasyapi forget openai         # remove it from the keychain and .env
+```
+
+The key is never displayed, never logged, never in shell history.
+
 The safe tunnel for API keys. Connecting a website tool usually means 40
 minutes of hunting through dashboards, imprecise docs, and fumbling a
 secret into the right file. `safeeasyapi` turns it into one command:
@@ -19,9 +35,11 @@ never logged, never in shell history.
 Zero dependencies — Python 3.10+ stdlib only.
 
 ```bash
-pip install git+https://github.com/calasdan-sketch/safeeasyapi
+pipx install safeeasyapi        # or: pip install safeeasyapi
 safeeasyapi --version
 ```
+
+From source: `pip install git+https://github.com/calasdan-sketch/safeeasyapi`.
 
 That installs the `safeeasyapi` command (`py -m safeeasyapi` / `python -m
 safeeasyapi` works too). From a checkout: `pip install .`
@@ -321,7 +339,7 @@ uses what it ships with, and the key never goes through `argv`:
 | macOS   | login Keychain, via the `security` command                         | commands fed over stdin (`security -i`), generic password `safeeasyapi:<service>` / account `<ENV_VAR>` |
 | Windows | Credential Manager (Windows Vault), via `ctypes` → `advapi32` `CredWriteW`/`CredReadW`/`CredDeleteW` | generic credential `safeeasyapi:<service>`, persisted for the local machine, UTF-16-LE blob like `cmdkey` |
 | Linux   | Secret Service (GNOME Keyring / KWallet) via `secret-tool`, when installed | key on stdin; attributes `service=safeeasyapi account=<ENV_VAR> slug=<service>` |
-| anything else, or the tool is missing | — | falls back to the `.env` file and says so |
+| anything else, or the tool is missing | — | no keychain: asks `[y/N]` before using the `.env` file (nothing is saved without a yes, or with no terminal) |
 
 A keychain-stored key is consumed with `safeeasyapi run <service> --
 <command>`: the key is read back and placed in that one child process's
@@ -341,8 +359,9 @@ the way the shell does it (`PATHEXT`), so `npm` finds `npm.cmd`.
 
 A keychain tool that does not answer within 30 seconds, or cannot be
 started, is handled like any other keychain failure. `connect --store
-keychain` falls back to the `.env` file and says so, so a key that was
-just validated is never lost; `forget` still removes the `.env` line(s),
+keychain` asks `[y/N]` (default no) before putting the key in the plain-text
+`.env` file instead, and with no terminal to ask on saves nothing and exits 1;
+the stored entry is read back to make sure it is really there; `forget` still removes the `.env` line(s),
 then says the keychain entry may still be there and exits 1 (run it again
 when the keychain answers); `run` exits 1 with a message.
 
@@ -603,7 +622,7 @@ is UTF-8 bytes regardless of console code page, console output is
 reconfigured to replace unencodable characters instead of crashing, and
 every text file is opened as UTF-8.
 
-## Scope / limits (v0.4.1)
+## Scope / limits (v0.4.2)
 
 - Keychain storage is best effort and opt-in (`--store keychain`); the
   `.env` file is the default and the fallback. No Doppler / Vault
@@ -633,10 +652,7 @@ every text file is opened as UTF-8.
   (exit status 1) when no entry matches.
 - Windows: the refusal of device names (`nul`, `con`, `com1` ...) as recipe
   slugs is a plain list of names, tested on Linux, not on a Windows machine.
-- Windows: the owner-only ACL goes on the `.env` file right after it is
-  moved into place, not before, so for that moment it has the ACL its folder
-  gives it. This is read from the code and checked against a stand-in for
-  `icacls`, not on a Windows machine.
-- The repository's own text files are committed with Windows (CRLF) line
-  endings and there is no `.gitattributes`: keep them when you edit a file.
-  On Linux and macOS `git diff` flags them as trailing whitespace.
+- Windows: the owner-only ACL goes on the empty temporary file before the key
+  is written into it, and is checked again once the file is in place. This is
+  read from the code and checked against a stand-in for `icacls`, not on a
+  Windows machine.

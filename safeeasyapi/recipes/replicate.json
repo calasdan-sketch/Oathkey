@@ -2,6 +2,14 @@
   "display": "Replicate",
   "docs": "https://replicate.com/docs/reference/http",
   "env_var": "REPLICATE_API_TOKEN",
+  "fields": [
+    {
+      "env_var": "REPLICATE_API_TOKEN",
+      "label": "API key",
+      "name": "key",
+      "pattern": "r8_[A-Za-z0-9_.-]{16,}"
+    }
+  ],
   "key_url": "https://replicate.com/account/api-tokens",
   "scopes": [],
   "service": "replicate",

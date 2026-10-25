@@ -2,6 +2,14 @@
   "display": "Anthropic (Claude API)",
   "docs": "https://platform.claude.com/docs/en/get-api-key",
   "env_var": "ANTHROPIC_API_KEY",
+  "fields": [
+    {
+      "env_var": "ANTHROPIC_API_KEY",
+      "label": "API key",
+      "name": "key",
+      "pattern": "sk-ant-[A-Za-z0-9_.-]{16,}"
+    }
+  ],
   "key_url": "https://platform.claude.com/settings/keys",
   "scopes": [],
   "service": "anthropic",

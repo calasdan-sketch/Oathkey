@@ -2,6 +2,14 @@
   "display": "Tavily",
   "docs": "https://docs.tavily.com/documentation/api-reference/endpoint/usage",
   "env_var": "TAVILY_API_KEY",
+  "fields": [
+    {
+      "env_var": "TAVILY_API_KEY",
+      "label": "API key",
+      "name": "key",
+      "pattern": "tvly-[A-Za-z0-9_.-]{16,}"
+    }
+  ],
   "key_url": "https://app.tavily.com/home",
   "scopes": [],
   "service": "tavily",

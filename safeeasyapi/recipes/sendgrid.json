@@ -2,6 +2,14 @@
   "display": "SendGrid",
   "docs": "https://www.twilio.com/docs/sendgrid/ui/account-and-settings/api-keys",
   "env_var": "SENDGRID_API_KEY",
+  "fields": [
+    {
+      "env_var": "SENDGRID_API_KEY",
+      "label": "API key",
+      "name": "key",
+      "pattern": "SG\\.[A-Za-z0-9_.-]{16,}"
+    }
+  ],
   "key_url": "https://app.sendgrid.com/settings/api_keys",
   "scopes": [],
   "service": "sendgrid",

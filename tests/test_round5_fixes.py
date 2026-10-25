@@ -1234,12 +1234,15 @@ class TestPackagingMetadata(unittest.TestCase):
             "Environment :: Console",
             "Intended Audience :: Developers",
             "Intended Audience :: End Users/Desktop",
-            "Operating System :: OS Independent",
+            "Operating System :: Microsoft :: Windows",
+            "Operating System :: MacOS",
+            "Operating System :: POSIX :: Linux",
             "Programming Language :: Python :: 3",
             "Programming Language :: Python :: 3.10",
             "Programming Language :: Python :: 3.11",
             "Programming Language :: Python :: 3.12",
             "Programming Language :: Python :: 3.13",
+            "Programming Language :: Python :: 3.14",
             "Topic :: Security",
         }
         self.assertEqual(wanted - classifiers, set())
@@ -1250,7 +1253,10 @@ class TestPackagingMetadata(unittest.TestCase):
         self.assertTrue(all(isinstance(k, str) and k.strip()
                             for k in project["keywords"]))
         self.assertEqual(project["urls"],
-                         {"Homepage": REPO_URL, "Issues": REPO_URL + "/issues"})
+                         {"Homepage": REPO_URL, "Issues": REPO_URL + "/issues",
+                          "Source": REPO_URL,
+                          "Changelog": REPO_URL + "/blob/main/CHANGELOG.md"})
+        self.assertEqual(project["authors"], [{"name": "Calas Automations Inc."}])
 
 
 class TestOneVersion(unittest.TestCase):

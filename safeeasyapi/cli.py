@@ -55,8 +55,9 @@ def _build_parser() -> argparse.ArgumentParser:
                        help="env: owner-only .env file (default). keychain: "
                             "the OS keychain (macOS Keychain, Windows "
                             "Credential Manager, secret-tool on Linux), "
-                            "falling back to the .env file when none is "
-                            "available; use `safeeasyapi run` to consume it.")
+                            "asking before it falls back to the plain-text .env "
+                            "file when none works; use `safeeasyapi run` to "
+                            "consume it.")
         c.add_argument("--no-browser", action="store_true",
                        help="Don't auto-open the key page.")
         c.add_argument("--clipboard", action="store_true",
@@ -106,9 +107,11 @@ def _cmd_list(catalog: dict) -> int:
     for slug in sorted(catalog):
         r = catalog[slug]
         # a recipe is somebody else's text: nothing in it may drive the terminal
+        mine = f"  {connect_mod.OVERRIDE_NOTE}" if r.get("_overrides_builtin") else ""
         print(f"    {recipes_mod.printable(slug):14} "
               f"{recipes_mod.printable(r['display'], words=True):38} -> "
-              f"{', '.join(recipes_mod.printable(v) for v in recipes_mod.env_vars(r))}")
+              f"{', '.join(recipes_mod.printable(v) for v in recipes_mod.env_vars(r))}"
+              f"{mine}")
     print("\n  `safeeasyapi connect <service>` to set one up.\n")
     return 0
 
@@ -225,23 +228,52 @@ def _cmd_find(args) -> int:
     return 0
 
 
+def _stdin_is_terminal() -> bool:
+    try:
+        return bool(sys.stdin and sys.stdin.isatty())
+    except (OSError, ValueError):
+        return False
+
+
 def keychain_store(recipe: dict, env_file: str, out=None,
-                   backend: str | None = None, keychain=keychain_mod):
-    """store_fn for `--store keychain`: the OS keychain when the platform
-    has one, otherwise the owner-only .env file - and say which."""
+                   backend: str | None = None, keychain=keychain_mod,
+                   ask=input, interactive=_stdin_is_terminal):
+    """store_fn for `--store keychain`: the OS keychain. When the keychain is
+    missing or refuses, the key goes to the plain-text .env file ONLY if the
+    person says yes at a [y/N] question; with no terminal to ask, or on
+    anything but y/yes, nothing is saved (SaveDeclined) - a person who chose
+    the keychain must not find the key in a file they did not pick."""
     out = out or sys.stdout
     backend = backend or keychain.detect_backend()
+    agreed: list[bool] = []
+
+    def _fallback(env_var: str, key: str, why: str) -> str:
+        if not agreed:
+            if not interactive():
+                raise connect_mod.SaveDeclined(
+                    f"{why}, and there is no terminal to ask whether the key "
+                    f"may go in the plain-text file {env_file} instead. "
+                    f"Nothing was saved.")
+            out.write(f"  {why}.\n")
+            try:
+                answer = ask(f"  Save it in the plain-text file {env_file} "
+                             f"instead? [y/N]: ")
+            except (EOFError, KeyboardInterrupt):
+                answer = ""
+            agreed.append((answer or "").strip().lower() in ("y", "yes"))
+        if not agreed[0]:
+            raise connect_mod.SaveDeclined(f"{why}. You chose not to use "
+                                           f"{env_file}, so nothing was saved.")
+        return connect_mod.store_in_env_file(env_file)(env_var, key)
 
     def _store(env_var: str, key: str) -> str:
         if backend is None:
-            out.write("  (no OS keychain available on this system - "
-                      "storing in the .env file instead)\n")
-            return connect_mod.store_in_env_file(env_file)(env_var, key)
+            return _fallback(env_var, key, "no OS keychain is available on "
+                                           "this system")
         try:
             used = keychain.store(recipe["service"], env_var, key, backend)
         except keychain.KeychainError as e:
-            out.write(f"  ({e} - storing in the .env file instead)\n")
-            return connect_mod.store_in_env_file(env_file)(env_var, key)
+            return _fallback(env_var, key, f"the keychain could not keep the key ({e})")
         return (f"stored {env_var} in the {keychain.label(used)} "
                 f"(never displayed, never logged); use it with "
                 f"`safeeasyapi run {recipe['service']} -- <command>`")

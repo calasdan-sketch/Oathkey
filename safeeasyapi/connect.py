@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import getpass
 import ipaddress
+import os
 import shutil
 import subprocess
 import sys
@@ -16,10 +17,12 @@ import urllib.parse
 import webbrowser
 
 from . import clipboard as clipboard_mod
+from . import procs
 from . import store as store_mod
 from . import validate as validate_mod
 from .recipes import DEFAULT_FIELD, fields as recipe_fields, printable
 
+OVERRIDE_NOTE = "(your recipe, replaces the built-in)"
 MAX_ATTEMPTS = 3
 # Typed confirmation required when the validation URL is on a different
 # domain than the key page. Not case-sensitive, but it must be the whole
@@ -324,6 +327,13 @@ def _require_cross_domain_confirmation(recipe: dict, out,
     return True
 
 
+class SaveDeclined(Exception):
+    """The key must not be saved where the person did not choose: raised by
+    a store function (for example the keychain one, when the keychain failed
+    and the person did not agree to a plain-text .env file). The text is a
+    plain sentence and never contains the key."""
+
+
 def store_in_env_file(env_file: str):
     """Default store: ENV_VAR=<key> in `env_file`, owner-only. Returns a
     callable (env_var, key) -> description for the success line."""
@@ -332,6 +342,9 @@ def store_in_env_file(env_file: str):
         verb = "updated" if stored.updated else "added"
         text = (f"{verb} {env_var} in {stored.path} "
                 f"({stored.protection} - never displayed, never logged)")
+        if store_mod.env_not_git_ignored(stored.path):
+            text += "\n    " + store_mod.GIT_WARNING.format(
+                path=stored.path, name=os.path.basename(stored.path))
         if stored.duplicates:
             # Said plainly, because the person may not know: of several
             # lines for one variable the last one is the one that counts.
@@ -350,7 +363,8 @@ def _ask_one(field: dict, single: bool, prompt, out, clip, taken: set) -> str | 
     if clip is not None:
         get, clear = clip
         out.write(f"  Click Copy next to the {label} - I'll take it from the clipboard "
-                  f"and empty it\n    (waiting up to "
+                  f"and EMPTY it.\n    The next single-word thing you copy is taken "
+                  f"as the key, so copy nothing else\n    (waiting up to "
                   f"{clipboard_mod.WAIT_SECONDS // 60} minutes; nothing is shown)\n")
         out.flush()
         try:
@@ -375,18 +389,22 @@ def _cli_token(recipe: dict, out, run=subprocess.run, call=subprocess.call,
     recipes only, programs fixed in recipes.CLI_PROGRAMS). The token goes
     from the program's output to this variable and nowhere else."""
     cli = recipe["cli_token"]
-    if not which(cli["token"][0]):
+    # The program by its full path, found without looking in the current
+    # folder: a cloned repository must not be able to ship its own gh.exe.
+    exe = procs.find_program(cli["token"][0], which)
+    if not exe:
         out.write(f"  {printable(cli['token'][0])} is not installed - "
                   f"use the normal steps instead (drop --via-cli).\n")
         return None
+    token_cmd = [exe] + list(cli["token"][1:])
     if cli.get("login"):
         out.write("  Signing in with the vendor's own tool (it opens your browser)...\n")
         out.flush()
-        if call(cli["login"]) != 0:
+        if call([exe] + list(cli["login"][1:])) != 0:
             out.write("  sign-in did not finish.\n")
             return None
     try:
-        done = run(cli["token"], capture_output=True, timeout=60)
+        done = run(token_cmd, capture_output=True, timeout=60)
     except (OSError, subprocess.TimeoutExpired):
         out.write("  couldn't ask the vendor's tool for the key.\n")
         return None
@@ -434,6 +452,8 @@ def connect(
             out.write(f"\n  ✗ {env_file}: {e.strerror or e}.\n"
                       f"    Nothing was asked for and nothing was sent.\n")
             return 1
+    if recipe.get("_overrides_builtin"):
+        out.write(f"  {OVERRIDE_NOTE}\n")
     if via_cli and not (recipe.get("_builtin") and recipe.get("cli_token")):
         out.write("  --via-cli works only for built-in recipes that have a vendor CLI "
                   "(e.g. github).\n")
@@ -533,6 +553,10 @@ def connect(
     try:
         for field in fields:
             saved.append(store_fn(field["env_var"], values[field["name"]]))
+    except SaveDeclined as e:
+        out.write(f"\n  \u2717 the key was validated but NOT saved: {e}\n"
+                  f"    {_partly(saved)}\n")
+        return 1
     except store_mod.UnsafeValue as e:
         # Only reachable when the key was headed elsewhere first (the
         # keychain falling back to the .env file): the paste loop stops an

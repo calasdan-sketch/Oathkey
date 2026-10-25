@@ -55,6 +55,7 @@ import stat
 import subprocess
 import tempfile
 
+from . import procs
 from .recipes import ENV_VAR_RE
 
 OWNER_ONLY = 0o600
@@ -93,6 +94,8 @@ PROTECTION_WINDOWS_FAILED = ("could not restrict ACL - icacls failed; the file "
 
 LINK_REASON = ("it is a link to another file, so safeeasyapi will not edit it "
                "- delete the link, or point --env-file at the real file")
+DIRECTORY_REASON = ("it is a folder, not a file - rename or remove the folder, "
+                    "or pass --env-file with a file name")
 NOT_TEXT_REASON = ("it is not a plain UTF-8 text file (Windows PowerShell's > "
                    "saves UTF-16), so safeeasyapi will not edit it - save it "
                    "as UTF-8 first")
@@ -160,7 +163,8 @@ def _windows_owner_only(path: str) -> bool:
         return False
     try:
         proc = subprocess.run(
-            ["icacls", path, "/inheritance:r", "/grant:r", f"{user}:(F)"],
+            [procs.system32_tool("icacls.exe"), path, "/inheritance:r",
+             "/grant:r", f"{user}:(F)"],
             capture_output=True, timeout=15)
     except (OSError, subprocess.SubprocessError):
         return False
@@ -407,6 +411,8 @@ def _load_for_edit(path: str) -> list[list[str]]:
     """The file's lines, ready to be edited - or EnvFileRefused when editing
     it would be unsafe. A missing file is no lines."""
     refuse_link(path)
+    if os.path.isdir(path):
+        raise EnvFileRefused(path, DIRECTORY_REASON)
     data = _read_bytes(path)
     if b"\x00" in data:
         # UTF-16/32 (or binary). Without this, decoding "works" and a UTF-8
@@ -471,6 +477,10 @@ def write_private(path: str, text: str) -> bool:
     base = os.path.basename(path)
     fd, tmp = tempfile.mkstemp(prefix=f".{base}.", suffix=".tmp", dir=directory)
     try:
+        # Owner-only BEFORE the key goes in: on Windows mkstemp's mode does
+        # not restrict the ACL, and the file would hold the key with the
+        # ACL its folder gives it until the check after the rename.
+        _lock_down(tmp)
         with os.fdopen(fd, "wb") as f:
             f.write(text.encode(_ENCODING, _UNDECODABLE))
             f.flush()
@@ -484,6 +494,30 @@ def write_private(path: str, text: str) -> bool:
             pass
         raise
     return _lock_down(path)
+
+
+def env_not_git_ignored(path: str, find=procs.find_program,
+                        run=subprocess.run) -> bool:
+    """True only when git is installed, `path` is inside a git work tree and
+    git does NOT ignore it - the one case where `git add .` would commit the
+    key. Anything else (no git, not a repository, git failing) is False:
+    nothing to warn about, and never an error."""
+    git = find("git")
+    if not git:
+        return False
+    full = os.path.abspath(path)
+    try:
+        done = run([git, "-C", os.path.dirname(full) or ".", "check-ignore",
+                    "-q", "--", os.path.basename(full)],
+                   capture_output=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return done.returncode == 1         # 0 = ignored, 128 = not a repository
+
+
+GIT_WARNING = ("warning: {path} is inside a git repository and is NOT in "
+               ".gitignore - `git add .` would commit your key.\n"
+               "    Add a line `{name}` to .gitignore first.")
 
 
 @dataclasses.dataclass

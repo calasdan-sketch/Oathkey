@@ -2,6 +2,14 @@
   "display": "Groq",
   "docs": "https://console.groq.com/docs/api-reference",
   "env_var": "GROQ_API_KEY",
+  "fields": [
+    {
+      "env_var": "GROQ_API_KEY",
+      "label": "API key",
+      "name": "key",
+      "pattern": "gsk_[A-Za-z0-9_.-]{16,}"
+    }
+  ],
   "key_url": "https://console.groq.com/keys",
   "scopes": [],
   "service": "groq",

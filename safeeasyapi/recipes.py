@@ -501,6 +501,9 @@ def _load_dir(directory: str, recipes: dict[str, dict],
         # validation host under another domain (trusted_hosts): they were
         # reviewed with the code. A user-dir recipe never gets that.
         data["_builtin"] = builtin
+        previous = recipes.get(data["service"])
+        data["_overrides_builtin"] = bool(previous and previous.get("_builtin")
+                                          and not builtin)
         recipes[data["service"]] = data
 
 

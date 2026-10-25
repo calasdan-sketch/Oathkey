@@ -2,6 +2,14 @@
   "display": "OpenAI",
   "docs": "https://developers.openai.com/api/reference/resources/models/methods/list",
   "env_var": "OPENAI_API_KEY",
+  "fields": [
+    {
+      "env_var": "OPENAI_API_KEY",
+      "label": "API key",
+      "name": "key",
+      "pattern": "sk-[A-Za-z0-9_.-]{16,}"
+    }
+  ],
   "key_url": "https://platform.openai.com/api-keys",
   "scopes": [],
   "service": "openai",

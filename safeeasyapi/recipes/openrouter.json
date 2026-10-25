@@ -2,6 +2,14 @@
   "display": "OpenRouter",
   "docs": "https://openrouter.ai/docs/api-reference/authentication",
   "env_var": "OPENROUTER_API_KEY",
+  "fields": [
+    {
+      "env_var": "OPENROUTER_API_KEY",
+      "label": "API key",
+      "name": "key",
+      "pattern": "sk-or-[A-Za-z0-9_.-]{16,}"
+    }
+  ],
   "key_url": "https://openrouter.ai/keys",
   "scopes": [],
   "service": "openrouter",
