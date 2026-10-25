@@ -1,6 +1,6 @@
 name: release
 
-# Push a tag like v0.4.2 to publish that version to PyPI. One-time setup on
+# Push a tag like v0.5.0 to publish that version to PyPI. One-time setup on
 # pypi.org: add this repository and workflow (release.yml, environment "pypi")
 # as a trusted publisher of the safeeasyapi project. No token is stored here.
 on:

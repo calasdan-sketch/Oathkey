@@ -39,10 +39,56 @@ def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="safeeasyapi",
         description="Safe tunnel for API keys: guided, validated, "
-                    "securely stored. The key is never displayed or logged.")
+                    "securely stored. The key is never displayed or logged.",
+        epilog="Start here: `safeeasyapi scan` finds keys that leaked into "
+               "files an AI agent can read. `safeeasyapi connect <service>` "
+               "sets a key up safely.")
     p.add_argument("--version", action="version",
                    version=f"%(prog)s {__version__}")
     sub = p.add_subparsers(dest="cmd", required=True)
+
+    sc = sub.add_parser(
+        "scan", help="Find API keys that leaked into files an AI agent can read.",
+        description="Find API keys in the files an AI agent reads (.env files, "
+                    "CLAUDE.md, AGENTS.md, GEMINI.md, .cursorrules, the .claude "
+                    "folder) and say what to do about each. Works offline; a "
+                    "key is never shown in full. Exit status: 0 nothing found, "
+                    "1 keys found, 2 could not run.")
+    sc.add_argument("path", nargs="?", default=".",
+                    help="Folder to scan (default: this folder), or one file.")
+    sc.add_argument("--all", action="store_true",
+                    help="Scan every text file in the folder, not just the "
+                         "files an AI agent reads.")
+    fmt = sc.add_mutually_exclusive_group()
+    fmt.add_argument("--json", action="store_true", help="Print the result as JSON.")
+    fmt.add_argument("--sarif", action="store_true",
+                     help="Print the result as SARIF 2.1.0 (for code-scanning tools).")
+    sc.add_argument("--validate", action="store_true",
+                    help="Ask each key's own service whether it still works. "
+                         "This SENDS the keys over https to that service; the "
+                         "hosts are listed first and you are asked.")
+    sc.add_argument("--yes", action="store_true",
+                    help="With --validate: agree to send, without being asked.")
+    sc.add_argument("--fail-on", choices=["any", "live"], default="any",
+                    help="Exit 1 for any key found (default), or only for a "
+                         "key that still works (needs --validate).")
+
+    hk = sub.add_parser(
+        "hook", help="Stop Claude Code reading your .env files.",
+        description="Install a Claude Code hook that refuses Read, Grep and "
+                    "Bash calls that touch .env files.")
+    hsub = hk.add_subparsers(dest="hook_cmd", required=True)
+    for hname, htext in (("install", "Add the hook (your other hooks are kept)."),
+                         ("uninstall", "Remove the hook (your other hooks are kept)."),
+                         ("status", "Say whether the hook is installed and works.")):
+        h = hsub.add_parser(hname, help=htext)
+        h.add_argument("--project", action="store_true",
+                       help="Use this project's .claude/settings.json instead "
+                            "of ~/.claude/settings.json.")
+        h.add_argument("--settings", default=None, metavar="FILE",
+                       help="Use this settings file.")
+    hsub.add_parser("check", help="The hook itself: reads Claude Code's JSON "
+                                  "on stdin. Not for typing by hand.")
 
     for name, help_text in (("connect", "Connect a service (guided key setup)."),
                             ("rotate", "Replace the stored key for a service.")):
@@ -509,7 +555,14 @@ def _main(argv: list[str] | None = None) -> int:
     _harden_streams()
     parser = _build_parser()
     args = parser.parse_args(argv)
+    if args.cmd == "hook":
+        # before the recipes load: the hook's stdout must hold only its answer
+        from . import hook as hook_mod
+        return hook_mod.cmd_hook(args)
     catalog = recipes_mod.load_recipes()
+    if args.cmd == "scan":
+        from . import scan as scan_mod
+        return scan_mod.cmd_scan(args, catalog)
 
     if args.cmd == "list":
         return _cmd_list(catalog)

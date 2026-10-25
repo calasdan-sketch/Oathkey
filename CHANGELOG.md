@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.5.0
+
+- New: `safeeasyapi scan [PATH]` finds API keys that leaked into files an AI
+  agent can read (`.env*`, `CLAUDE.md`, `AGENTS.md`, `GEMINI.md`,
+  `.cursorrules`, the `.claude` folder, `.mcp.json`) and says, for each one,
+  where it is and what to do. Offline by default; a key is shown as at most
+  its first 4 and last 2 characters; stand-in values are ignored. It skips
+  `.git`, `node_modules`, binaries, files over 1 MB, pipes, devices and links
+  leading outside the folder.
+- `scan --validate` asks each key's own service whether it still works
+  (`live` / `dead` / `unknown`). It prints the host first and needs a `y` or
+  `--yes`; https only; a check on another domain still needs a typed `yes`.
+- `scan --json`, `--sarif` (SARIF 2.1.0), `--fail-on live|any`, `--all`.
+  Exit status 0 clean, 1 keys found, 2 could not run.
+- New: `safeeasyapi hook install | uninstall | status` adds a Claude Code
+  PreToolUse hook that refuses Read, Grep and Bash calls touching `.env`
+  files (templates like `.env.example` are allowed). It merges into
+  `~/.claude/settings.json` (or `--project`), never overwrites other hooks,
+  and is safe to run twice. `hook check` is the hook itself.
+- The built-in key formats are now also used to recognise a key anywhere in
+  a file, not only on the clipboard.
+
 ## 0.4.2
 
 - Safer on Windows: `icacls` is started from the Windows System32 folder and
