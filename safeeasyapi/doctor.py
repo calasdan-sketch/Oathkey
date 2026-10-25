@@ -25,11 +25,13 @@ Exit status: 0 nothing rotted, 1 at least one address ROT, 2 could not run.
 from __future__ import annotations
 
 import http.client
+import ipaddress
 import json
 import re
 import socket
 import ssl
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -49,10 +51,55 @@ class _NoFollow(urllib.request.HTTPRedirectHandler):
         return None
 
 
+def private_host_reason(url: str) -> str | None:
+    """Why `url` must not be visited (it names this computer or a private
+    network), or None. Looks only at the text of the address."""
+    try:
+        host = (urllib.parse.urlsplit(url).hostname or "").strip("[]").lower()
+    except ValueError:
+        return "an address that could not be read"
+    if not host:
+        return "no host name"
+    if host == "localhost" or host.endswith((".localhost", ".local", ".internal", ".lan", ".home.arpa")):
+        return "a local host name"
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return None
+    return _ip_reason(ip)
+
+
+def _ip_reason(ip) -> str | None:
+    if getattr(ip, "ipv4_mapped", None):
+        ip = ip.ipv4_mapped
+    if (ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved
+            or ip.is_multicast or ip.is_unspecified):
+        return "a private or local network address"
+    return None
+
+
+def resolves_private(host: str, resolver=socket.getaddrinfo) -> bool:
+    """True when the name points at a private address (checked before the
+    real request, so a public-looking name cannot lead the check inside)."""
+    try:
+        infos = resolver(host, None, type=socket.SOCK_STREAM)
+    except OSError:
+        return False
+    for info in infos:
+        try:
+            if _ip_reason(ipaddress.ip_address(info[4][0].split("%")[0])):
+                return True
+        except ValueError:
+            continue
+    return False
+
+
 def fetch(url: str, timeout: float = TIMEOUT) -> tuple[int | None, str | None, str | None]:
     """One request, no redirect followed, no credentials: (status, Location,
     problem). `problem` is a short sentence when nothing answered. HEAD
     first; GET when the server dislikes HEAD."""
+    if resolves_private(urllib.parse.urlsplit(url).hostname or ""):
+        return None, None, "name points at a private network address - not visited"
     opener = urllib.request.build_opener(_NoFollow)
     last_status = None
     for method in ("HEAD", "GET"):
@@ -91,6 +138,11 @@ def check_url(url: str, fetch_fn=None, timeout: float = TIMEOUT) -> dict:
     seen = {url}
     current = url
     for _ in range(MAX_HOPS + 1):
+        reason = private_host_reason(current)
+        if reason:
+            return {"url": url, "verdict": ROT if current == url else WARN,
+                    "detail": f"{'is' if current == url else 'redirects to'} {reason} - not visited",
+                    "final": current, "status": None, "hops": len(hops)}
         status, location, problem = fetch_fn(current, timeout)
         if problem:
             return {"url": url, "verdict": ROT, "detail": problem, "final": current,
@@ -161,17 +213,25 @@ def _without_query(url: str) -> str:
     return urllib.parse.urlunsplit(parts._replace(query="", fragment=""))
 
 
+SERVICE_BUDGET = 90.0       # seconds one service may take in all
+
+
 def run(catalog: dict, fetch_fn=None, only: list[str] | None = None,
-        timeout: float = TIMEOUT) -> list[dict]:
+        timeout: float = TIMEOUT, now=time.monotonic, budget: float = SERVICE_BUDGET) -> list[dict]:
     fetch_fn = fetch_fn or fetch
     rows = []
     seen: dict[str, dict] = {}
     for slug in sorted(catalog):
         if only and slug not in only:
             continue
+        started = now()
         for what, url in addresses(catalog[slug]):
             if url not in seen:
-                seen[url] = check_url(url, fetch_fn, timeout)
+                if now() - started > budget:
+                    seen[url] = {"url": url, "verdict": WARN, "final": url, "status": None, "hops": 0,
+                                 "detail": f"skipped - this service took more than {int(budget)}s"}
+                else:
+                    seen[url] = check_url(url, fetch_fn, timeout)
             row = dict(seen[url])
             row.update(service=slug, what=what)
             rows.append(row)

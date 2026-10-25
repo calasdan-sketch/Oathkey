@@ -29,9 +29,18 @@
       200
     ],
     "method": "GET",
-    "url": "https://api.openai.com/v1/models"
+    "url": "https://api.openai.com/v1/models",
+    "limited": [
+      {
+        "status": 403,
+        "meaning": "the key is accepted but may not be allowed to list models (a restricted key without that permission); it will do what you gave it. A 403 can also mean your country is not supported"
+      }
+    ]
   },
   "least_privilege": {
     "summary": "Choose 'Restricted' permissions for just the endpoints you use, on a project made for this app."
-  }
+  },
+  "unverified": [
+    "validate.limited (OpenAI's docs do not say what a restricted key without model access gets; a wrong key is a 401)"
+  ]
 }

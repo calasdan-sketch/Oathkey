@@ -78,15 +78,50 @@ REASON = (
     "the safeeasyapi tool `request_connect` (service name) - or `needs_keys` to "
     "see which keys the project lacks - and tell the person the command it "
     "gives (`safeeasyapi connect <service>`); never ask for the key in chat. "
-    "To run something with a key, use `safeeasyapi run <service> -- <command>`, "
-    "which hands the key to the command without showing it. If you only need "
-    "to know which variables exist, read .env.example instead.")
+    "If a command needs the key to run, ask the person to run it themselves "
+    "(`safeeasyapi run <service> -- <command>`) - do not run it for them. If "
+    "you only need to know which variables exist, read .env.example instead.")
 
 WRITE_REASON = (
     "Claude can't write to {what} - your keys stay out of the chat. "
     "Ask the safeeasyapi tool `request_connect` (or `needs_keys`) which key is "
     "missing and tell the person to run: safeeasyapi connect <service>  "
     "(or edit the file yourself).")
+
+
+STEAL_REASON = (
+    "safeeasyapi blocked this because it would {what}. Stored keys must stay "
+    "out of the chat. Do not try another way. Call the safeeasyapi tool "
+    "`request_connect` or `needs_keys` and ask the person to run the command "
+    "themselves.")
+
+# Ways a shell can pull a stored key out, or print it unredacted. Each is
+# (regex, what it does). They are matched against the whole command text.
+_SAFE = r"(?:^|[\s;&|`(\"'])"
+STEAL_RULES = (
+    (re.compile(r"safeeasyapi\b(?:(?!\s--\s)[^\n;&|])*\s--no-r\w*", re.I),
+     "run a command with the key and turn output hiding off"),
+    (re.compile(_SAFE + r"secret-tool\s+(?:lookup|search)\b", re.I), "read the Linux keyring"),
+    (re.compile(_SAFE + r"security\s+(?:find-\w+-password|dump-keychain|export)\b", re.I),
+     "read the macOS keychain"),
+    (re.compile(_SAFE + r"cmdkey(?:\.exe)?\b", re.I), "read Windows stored credentials"),
+    (re.compile(r"\b(?:Get-Secret|Get-SecretInfo|Get-StoredCredential|PasswordVault|CredRead|CredEnumerate|vaultcmd)\b", re.I),
+     "read Windows stored credentials"),
+    (re.compile(_SAFE + r"(?:kwallet-query|gnome-keyring-query|keyring\s+(?:get|--list)|pass\s+show)\b", re.I),
+     "read a password store"),
+    (re.compile(r"\b(?:import|from)\s+keyring\b|\bkeyring\.get_password\b", re.I), "read the keyring from code"),
+    (re.compile(r"/proc/[\w$*{}/-]*/environ", re.I), "read another program's environment"),
+    (re.compile(r"[/\\~]\.safeeasyapi(?![\w])", re.I), "read safeeasyapi's own store"),
+)
+
+
+def steals_key(text: str) -> str | None:
+    """What a shell command / path would do to a stored key, or None."""
+    flat = text.replace("\\", "/") if "safeeasyapi" in text else text
+    for rx, what in STEAL_RULES:
+        if rx.search(text) or (flat is not text and rx.search(flat)):
+            return what
+    return None
 
 
 # ------------------------------------------------------------------ the check
@@ -160,6 +195,18 @@ def decide(payload) -> str | None:
     return None
 
 
+def decide_steal(payload) -> str | None:
+    """None, or what a Bash / PowerShell / Monitor / Read / Grep call would
+    do to a stored key (see STEAL_RULES)."""
+    if not isinstance(payload, dict):
+        return None
+    for text in touched_text(payload):
+        what = steals_key(text)
+        if what:
+            return what
+    return None
+
+
 def writes_allowed(environ=None) -> bool:
     return (environ if environ is not None else os.environ).get(ALLOW_WRITE_VAR, "").strip() == "1"
 
@@ -205,9 +252,15 @@ def check(stdin_text: str) -> tuple[int, str]:
         if hits:
             what = recipes_mod.printable(hits[0])
             return 0, json.dumps(decision_json(REASON.format(what=f"'{what}'"))) + "\n"
+        what = steals_key(flat)
+        if what:
+            return 0, json.dumps(decision_json(STEAL_REASON.format(what=what))) + "\n"
         return 1, ""
     name = decide(payload)
     if name is None:
+        what = decide_steal(payload)
+        if what:
+            return 0, json.dumps(decision_json(STEAL_REASON.format(what=what))) + "\n"
         return 0, ""
     what = recipes_mod.printable(name)
     if payload.get("tool_name") in WRITE_TOOLS:

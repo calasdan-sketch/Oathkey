@@ -19,21 +19,37 @@ import os
 import re
 import time
 
+from . import clipboard as clipboard_mod
 from . import detect as detect_mod
 from . import manifest as manifest_mod
 from . import presence as presence_mod
 from . import recipes as recipes_mod
 from . import redact as redact_mod
+from . import scan as scan_mod
 from . import store as store_mod
 
 MAX_SERVICES = 100
 OPEN_COOLDOWN = 30.0         # seconds between two openings of one key page
 _LAST_OPEN: dict[str, float] = {}
+MAX_OPENS_PER_MINUTE = 3     # across all services: an agent cannot flood the browser
+_OPEN_TIMES: list[float] = []
 STATUSES = ("present", "missing", "unknown")
 AGENT_RULE = ("Do not ask the person to paste a key into chat, and do not read or "
               "write .env files or any file holding keys. Ask the person to run "
               "the command below in their own terminal; the key goes from the "
               "vendor page straight to the project without passing through you.")
+
+
+def _secret_like(name: str, value: str) -> bool:
+    """Only a value that is probably a secret is blanked from an answer: its
+    name says so, or it is a long key-shaped string. An ordinary setting
+    (NODE_ENV=production, a port, a URL) is left alone, or words in the
+    answer would turn into [REDACTED]."""
+    if scan_mod.NOT_SECRET_NAME_RE.search(name):
+        return False
+    if scan_mod.SECRET_NAME_RE.search(name) or scan_mod.PASSWORD_NAME_RE.search(name):
+        return True
+    return clipboard_mod.looks_like(value, None)
 
 
 def secrets_in_reach(catalog: dict, cwd: str | None = None, environ=None) -> list[str]:
@@ -52,21 +68,40 @@ def secrets_in_reach(catalog: dict, cwd: str | None = None, environ=None) -> lis
     try:
         store_mod.refuse_link(path)
         if os.path.isfile(path):
-            for value in list(store_mod.load_env(path).values())[:200]:
-                if len(value) >= redact_mod.MIN_LENGTH:
+            for name, value in list(store_mod.load_env(path).items())[:200]:
+                if len(value) >= redact_mod.MIN_LENGTH and _secret_like(name, value):
                     found.append(value)
     except (OSError, ValueError):
         pass
     return found
 
 
+def _scrub_json(value, scrub):
+    if isinstance(value, str):
+        return scrub(value)
+    if isinstance(value, list):
+        return [_scrub_json(v, scrub) for v in value]
+    if isinstance(value, dict):
+        return {k: _scrub_json(v, scrub) for k, v in value.items()}      # keys are kept as they are
+    return value
+
+
 def guard_text(text: str, catalog: dict, cwd: str | None = None, environ=None) -> str:
     """`text` with every reachable secret value (and its common re-writings)
-    replaced by [REDACTED]."""
+    replaced by [REDACTED]. When the text is JSON only the string VALUES are
+    scrubbed - never the member names - and it stays valid JSON."""
     values = secrets_in_reach(catalog, cwd, environ)
     if not values:
         return text
-    return redact_mod.Redactor(values).text(text)
+    red = redact_mod.Redactor(values)
+    try:
+        data = json.loads(text)
+    except (ValueError, RecursionError):
+        return red.text(text)
+    if not isinstance(data, (dict, list)):
+        return red.text(text)
+    indent = 2 if "\n" in text.strip() else None
+    return json.dumps(_scrub_json(data, red.text), indent=indent)
 
 
 def clean_slug(service) -> str | None:
@@ -112,7 +147,11 @@ def request_connect(service, catalog: dict, open_key_page: bool = False,
     store = "env"
     env_file = os.path.join(root, ".env")
     if manifest:
-        env_file = os.path.join(root, manifest.get("env_file") or ".env")
+        try:
+            env_file = manifest_mod.env_file_in(root, manifest)
+        except manifest_mod.ManifestError:
+            return {"error": "safeeasyapi.json has an env_file that is not allowed; "
+                             "ask the person to fix it", "isError": True}
         for item in manifest["services"]:
             if item["service"] == slug:
                 store = item.get("store", "env")
@@ -128,18 +167,24 @@ def request_connect(service, catalog: dict, open_key_page: bool = False,
         f"Ask the person to run, in their own terminal: safeeasyapi connect {slug}"
         f"{' --store keychain' if store == 'keychain' else ''}. It opens the key page, "
         f"takes the key safely and stores it as {recipe['env_var']}. "
-        f"Run `safeeasyapi run {slug} -- <your command>` to use it. " + AGENT_RULE)
+        f"Once it is stored, ask the person to start the program with `safeeasyapi run {slug} -- <command>`; "
+        f"do not run it with the key yourself, and do not print or transform the variable. " + AGENT_RULE)
     out["key_page"] = recipe["key_url"]
     if open_key_page:
         if opener is None:
             import webbrowser
             opener = webbrowser.open
         now = time.monotonic()
+        _OPEN_TIMES[:] = [t for t in _OPEN_TIMES if now - t < 60.0]
         if now - _LAST_OPEN.get(slug, -1e9) < OPEN_COOLDOWN:
             out["opened_key_page"] = False      # an agent cannot make tabs pile up
             out["note"] = "the key page was opened a moment ago"
+        elif len(_OPEN_TIMES) >= MAX_OPENS_PER_MINUTE:
+            out["opened_key_page"] = False
+            out["note"] = "too many key pages were opened in the last minute"
         else:
             _LAST_OPEN[slug] = now
+            _OPEN_TIMES.append(now)
             try:
                 opener(recipe["key_url"])
                 out["opened_key_page"] = True
@@ -157,11 +202,20 @@ def needs_keys(project, catalog: dict, cwd: str | None = None) -> dict:
     if project not in (None, ""):
         if not isinstance(project, str) or "\x00" in project:
             return {"error": "project must be a folder path", "isError": True}
-        root = os.path.abspath(project)
+        root = os.path.realpath(os.path.join(cwd or os.getcwd(), project))
+        here = os.path.realpath(cwd or os.getcwd())
+        top = manifest_mod._git_root(here) or here
+        if os.path.commonpath([top, root]) != top:
+            return {"error": "project must be the folder you are working in, or a folder "
+                             "inside it", "isError": True}
     if not os.path.isdir(root):
         return {"error": "that folder does not exist", "isError": True}
     manifest = _project_manifest(root)
-    env_file = os.path.join(root, (manifest or {}).get("env_file") or ".env")
+    try:
+        env_file = manifest_mod.env_file_in(root, manifest)
+    except manifest_mod.ManifestError:
+        return {"error": "safeeasyapi.json has an env_file that is not allowed; "
+                         "ask the person to fix it", "isError": True}
     wanted: dict[str, dict] = {}
     for item in (manifest or {}).get("services", []):
         recipe = catalog.get(item["service"])

@@ -308,6 +308,54 @@ def env_vars(recipe: dict) -> list[str]:
     return [f["env_var"] for f in fields(recipe)]
 
 
+try:                                        # Python 3.11+
+    import re._parser as _sre_parse
+except ImportError:                          # pragma: no cover - 3.10
+    import sre_parse as _sre_parse
+
+MAX_REPEAT_COUNT = 1000
+
+
+def regex_risk(pattern: str) -> str | None:
+    """Why a regular expression could take very long on a crafted input
+    (catastrophic backtracking), or None. Python's `re` cannot be given a
+    time limit, so the shapes that blow up are refused up front: a repeat
+    inside a repeat ((a+)+, (a|aa)*, (.*a){9}), a back-reference, and a huge
+    repeat count. A plain gate such as ^sk-[A-Za-z0-9_-]{20,} is fine."""
+    try:
+        tree = _sre_parse.parse(pattern)
+    except Exception:
+        return "does not compile"
+
+    def walk(items, inside: bool) -> str | None:
+        for op, av in items:
+            name = str(op)
+            if name in ("MAX_REPEAT", "MIN_REPEAT", "POSSESSIVE_REPEAT"):
+                lo, hi, sub = av
+                if hi != _sre_parse.MAXREPEAT and hi > MAX_REPEAT_COUNT:
+                    return "has a repeat count that is too large"
+                many = hi == _sre_parse.MAXREPEAT or hi > 1
+                if inside and many:
+                    return "repeats something that is itself repeated"
+                found = walk(sub, inside or many)
+            elif name == "SUBPATTERN":
+                found = walk(av[-1], inside)
+            elif name == "BRANCH":
+                found = "has an either/or inside a repeat" if inside else next((r for r in (walk(b, inside) for b in av[1]) if r), None)
+            elif name in ("ASSERT", "ASSERT_NOT"):
+                found = walk(av[1], inside)
+            elif name == "ATOMIC_GROUP":
+                found = walk(av, inside)
+            elif name in ("GROUPREF", "GROUPREF_EXISTS"):
+                found = "uses a back-reference"
+            else:
+                found = None
+            if found:
+                return found
+        return None
+    return walk(tree, False)
+
+
 def _check_fields(data: dict) -> None:
     listed = data.get("fields")
     if listed is None:
@@ -341,6 +389,11 @@ def _check_fields(data: dict) -> None:
                 re.compile(pattern)
             except re.error as e:
                 raise RecipeError(f"field '{name}' {pkey} does not compile: {e}") from None
+            risk = regex_risk(pattern)
+            if risk:
+                raise RecipeError(f"field '{name}' {pkey} {risk}; write a simpler "
+                                  f"pattern (a prefix and a character class, like "
+                                  f"^sk-[A-Za-z0-9]{{20,}})")
         if f.get("detect_confidence", "guess") not in ("known", "guess"):
             raise RecipeError(f"field '{name}' detect_confidence must be 'known' or 'guess'")
     if data["env_var"] != listed[0]["env_var"]:

@@ -150,7 +150,7 @@ class TestManifestFiles(unittest.TestCase):
             manifest.load(link)
 
     def test_find_walks_up(self):
-        d = proj({manifest.FILE_NAME: json.dumps(man("openai")), "a/b/x.txt": ""})
+        d = proj({manifest.FILE_NAME: json.dumps(man("openai")), "a/b/x.txt": "", ".git/HEAD": ""})
         self.assertEqual(manifest.find(os.path.join(d, "a", "b")), os.path.realpath(os.path.join(d, manifest.FILE_NAME)))
 
     def test_find_none(self):

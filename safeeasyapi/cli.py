@@ -46,6 +46,10 @@ def _build_parser() -> argparse.ArgumentParser:
                "sets a key up safely.")
     p.add_argument("--version", action="version",
                    version=f"%(prog)s {__version__}")
+    p.add_argument("--project-dir", default=None, metavar="DIR",
+                   help="Work as if started in DIR (where safeeasyapi.json and "
+                        ".env live). Without it, safeeasyapi.json is looked for "
+                        "here and up to the git project's top folder, no further.")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     sc = sub.add_parser(
@@ -120,9 +124,9 @@ def _build_parser() -> argparse.ArgumentParser:
                             ("rotate", "Replace the stored key for a service.")):
         c = sub.add_parser(name, help=help_text)
         c.add_argument("service", help="Service slug (see `safeeasyapi list`).")
-        c.add_argument("--env-file", default=".env",
+        c.add_argument("--env-file", default=None,
                        help="Where to store the key with --store env "
-                            "(default: .env).")
+                            "(default: the manifest's env_file, else .env).")
         c.add_argument("--store", choices=["env", "keychain"], default="env",
                        help="env: owner-only .env file (default). keychain: "
                             "the OS keychain (macOS Keychain, Windows "
@@ -160,8 +164,9 @@ def _build_parser() -> argparse.ArgumentParser:
     fg = sub.add_parser("forget", help="Remove a stored key: from the OS "
                                        "keychain and from the .env file.")
     fg.add_argument("service", help="Service slug.")
-    fg.add_argument("--env-file", default=".env",
-                    help="The .env file to remove the entry from (default: .env).")
+    fg.add_argument("--env-file", default=None,
+                    help="The .env file to remove the entry from (default: the "
+                         "manifest's env_file, else .env).")
 
     a = sub.add_parser("add", help="Capture a new service recipe interactively.")
     a.add_argument("--recipes-dir", default=None,
@@ -239,9 +244,18 @@ def _build_parser() -> argparse.ArgumentParser:
     ex.add_argument("--environment", default=None,
                     help="GitHub: a deployment environment; Vercel: development, "
                          "preview or production (default production).")
-    ex.add_argument("--env-file", default=".env", help="Where to find the key if it is not in the keychain.")
+    ex.add_argument("--env-file", default=None,
+                    help="Where to find the key if it is not in the keychain "
+                         "(default: the manifest's env_file, else .env).")
     ex.add_argument("--overwrite", action="store_true", help="Vercel: replace an existing variable.")
     ex.add_argument("--yes", action="store_true", help="Agree without being asked.")
+
+    sk = sub.add_parser("skill", help="Install the agent skill (rules for AI agents) for Claude Code.")
+    sksub = sk.add_subparsers(dest="skill_cmd", required=True)
+    ski = sksub.add_parser("install", help="Copy SKILL.md to ~/.claude/skills/safeeasyapi/ "
+                                           "(or ./.claude/skills/ with --project).")
+    ski.add_argument("--project", action="store_true", help="Install for this project only.")
+    ski.add_argument("--yes", action="store_true", help="Replace a different existing file without asking.")
 
     sub.add_parser("mcp", help="Run the MCP server on stdio (for Claude Code).")
 
@@ -538,6 +552,13 @@ def _cmd_forget(recipe: dict, env_file: str, out=None,
     return 1 if problems else 0
 
 
+def _is_tty(stream) -> bool:
+    try:
+        return bool(stream.isatty())
+    except (AttributeError, ValueError):
+        return False
+
+
 def _cmd_run(recipes_to_run: list, command: list[str], env_file: str = ".env",
              redact: bool = True, prefer: str = "keychain") -> int:
     cmd = list(command)
@@ -546,6 +567,12 @@ def _cmd_run(recipes_to_run: list, command: list[str], env_file: str = ".env",
     if not cmd:
         print("error: no command: safeeasyapi run <service> -- <command>",
               file=sys.stderr)
+        return 2
+    if not redact and not (_is_tty(sys.stdin) and _is_tty(sys.stdout)):
+        print("error: --no-redact only works when you are at a terminal (input and "
+              "output both a terminal).\n  Output hiding is the only thing between "
+              "a key and whatever is reading this output,\n  so it stays on when "
+              "the output goes to a pipe, a file or a program.", file=sys.stderr)
         return 2
     backend = keychain_mod.detect_backend()
     if backend is None and not os.path.isfile(env_file):
@@ -671,6 +698,12 @@ def _main(argv: list[str] | None = None) -> int:
     _harden_streams()
     parser = _build_parser()
     args = parser.parse_args(argv)
+    if args.project_dir:
+        try:
+            os.chdir(args.project_dir)
+        except OSError:
+            print("error: --project-dir is not a folder I can use.", file=sys.stderr)
+            return 2
     if args.cmd == "hook":
         # before the recipes load: the hook's stdout must hold only its answer
         from . import hook as hook_mod
@@ -682,6 +715,9 @@ def _main(argv: list[str] | None = None) -> int:
         catalog = (recipes_mod.load_recipes() if args.my_recipes
                    else recipes_mod.load_recipes(recipes_mod.RECIPES_DIR))
         return scan_mod.cmd_scan(args, catalog)
+    if args.cmd == "skill":
+        from . import skillcmd
+        return skillcmd.cmd_skill(args)
     if args.cmd == "doctor-recipes":
         from . import doctor as doctor_mod
         catalog = (recipes_mod.load_recipes() if args.my_recipes
@@ -712,6 +748,10 @@ def _main(argv: list[str] | None = None) -> int:
                                    clipboard=args.clipboard,
                                    allow_history=args.allow_clipboard_history)
         return projectcmds.cmd_setup(args, catalog, connect_one)
+    if args.cmd in ("connect", "rotate", "forget", "export") and getattr(args, "env_file", None) is None:
+        args.env_file = _project_env_file()
+        if args.env_file is None:
+            return 1
     if args.cmd == "export":
         from . import export as export_mod
         return export_mod.cmd_export(args, catalog)
@@ -728,7 +768,11 @@ def _main(argv: list[str] | None = None) -> int:
             print(f"error: {e}", file=sys.stderr)
             return 1
         chosen = [catalog[i["service"]] for i in manifest["services"] if i["service"] in catalog]
-        env_file = args.env_file or os.path.join(os.path.dirname(path), manifest.get("env_file") or ".env")
+        try:
+            env_file = args.env_file or manifest_mod.env_file_in(os.path.dirname(path), manifest)
+        except manifest_mod.ManifestError as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 1
         prefer = "env" if all(i.get("store", "env") == "env" for i in manifest["services"]) else "keychain"
         if not chosen:
             print("error: no known service in safeeasyapi.json.", file=sys.stderr)
@@ -751,13 +795,13 @@ def _main(argv: list[str] | None = None) -> int:
             if found:
                 try:
                     manifest = manifest_mod.load(found)
-                    env_file = env_file or os.path.join(os.path.dirname(found),
-                                                        manifest.get("env_file") or ".env")
+                    env_file = env_file or manifest_mod.env_file_in(os.path.dirname(found), manifest)
                     for item in manifest["services"]:
                         if item["service"] == args.service and item.get("store") == "env":
                             prefer = "env"
-                except manifest_mod.ManifestError:
-                    pass
+                except manifest_mod.ManifestError as e:
+                    print(f"error: {e}", file=sys.stderr)
+                    return 1
             return _cmd_run([recipe], args.command, env_file or ".env", args.redact, prefer)
         if args.cmd == "forget":
             # one pass per stored value: an App ID and its secret are both removed
@@ -806,6 +850,21 @@ def connect_service(recipe: dict, env_file: str = ".env", store: str = "env",
         from . import ledger as ledger_mod
         ledger_mod.record(_project_root(), recipe["service"], store, rotated=rotate)
     return code
+
+
+def _project_env_file() -> str | None:
+    """The .env file for this project: the manifest's env_file (checked), else
+    .env in the current folder. None, after saying why, when the manifest
+    cannot be used."""
+    from . import manifest as manifest_mod
+    found = manifest_mod.find()
+    if not found:
+        return ".env"
+    try:
+        return manifest_mod.env_file_in(os.path.dirname(found), manifest_mod.load(found))
+    except manifest_mod.ManifestError as e:
+        print(f"error: {recipes_mod.printable(e)}", file=sys.stderr)
+        return None
 
 
 def _project_root() -> str:

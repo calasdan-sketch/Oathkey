@@ -214,7 +214,7 @@ class TestClipboardRefusesLinks(unittest.TestCase):
         env = os.path.join(_isolation.mktemp(), ".env")
         feed = iter(["", FAKE_KEY])
         clip = (lambda: next(feed, FAKE_KEY), lambda: None)
-        code, text = run_connect(recipe(), env, clipboard=clip)
+        code, text = run_connect(recipe(), env, clipboard=clip, confirm_in=lambda p: "")
         self.assertEqual(code, 0)
         self.assertIn("EMPTY", text)
         self.assertNotIn(FAKE_KEY, text)

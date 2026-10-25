@@ -21,10 +21,11 @@ handle one. You ASK; the person's own terminal and browser do the rest.
    `safeeasyapi setup` for everything the project needs. They click the
    vendor's Copy button (or paste into a hidden prompt); the key is tested
    and stored. You are not involved.
-4. Run the person's program with `safeeasyapi run <service> -- <command>`, or
-   just use the environment variable by NAME (for example
-   `os.environ["OPENAI_API_KEY"]`). Use `safeeasyapi run --all -- <command>`
-   to give a program every key in `safeeasyapi.json`.
+4. Write code that uses the environment variable by NAME (for example
+   `os.environ["OPENAI_API_KEY"]`). To run it with the key, ask the person
+   to start it: `safeeasyapi run <service> -- <command>` (or `--all`). Do
+   not run it yourself with a stored key: a program started that way can
+   print or reshape the key, and safeeasyapi cannot stop that.
 5. Call `request_connect` again to confirm the status is `present`.
 
 ## Never

@@ -9,7 +9,8 @@ through this filter first.
 What it catches: the exact value; its base64 forms (standard and URL-safe,
 padded or not, at any of the three alignments it can take inside a longer
 base64 string); hex (lower and upper case); percent-encoding; JSON string
-escaping; and the value with its characters reversed is NOT caught.
+escaping; its upper-case and lower-case forms; and the value with its characters
+reversed is NOT caught.
 
 What it CANNOT catch (honest limits):
   - a value the program changes: hashed, encrypted, truncated, split over
@@ -40,6 +41,10 @@ def variants(value: str) -> set[bytes]:
         return set()
     raw = value.encode("utf-8", "surrogateescape")
     out = {raw}
+    # upper / lower case re-writings (a program that shouts or lower-cases)
+    for alt in (value.lower(), value.upper()):
+        if alt != value:
+            out.add(alt.encode("utf-8", "surrogateescape"))
     out.add(value.encode("utf-16-le", "surrogatepass")) if value.isascii() else None
     out.add(binascii.hexlify(raw))
     out.add(binascii.hexlify(raw).upper())

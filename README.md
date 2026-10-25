@@ -88,10 +88,7 @@ secret value: answers are built from names and status words only, and a
 second filter blanks any secret the server can reach (a variable in its
 environment, a value in the project's `.env`), also in base64, hex and
 URL-encoded form. A test plants canary keys everywhere and searches every
-tool answer and every JSON output for them. The Claude Code skill in
-`skills/safeeasyapi/SKILL.md` tells the agent the same rules; copy it to
-`~/.claude/skills/safeeasyapi/SKILL.md` (or your project's
-`.claude/skills/`).
+tool answer and every JSON output for them. The agent skill (the same rules, written for the agent) ships inside the package. Install it with `safeeasyapi skill install` (for you) or `safeeasyapi skill install --project` (this project only); it never overwrites a different file without asking.
 
 ### What it cannot do
 
@@ -114,13 +111,33 @@ tool answer and every JSON output for them. The Claude Code skill in
   detect a clipboard manager: if you run one, use the hidden prompt.
 - **It cannot stop the vendor's page, a browser extension or malware** that
   can read the page or your clipboard from seeing the key.
+- **An agent that can run `safeeasyapi run` can still get the key.** The key
+  lives in the child program's environment, readable by the same user, and a
+  program started by the agent can print it reversed, hashed, split or
+  encoded in a way redaction does not know. The hook refuses the obvious
+  routes (`run --no-redact`, `secret-tool`, `security find-generic-password`,
+  `cmdkey`, `Get-Secret`, `keyring`, `/proc/*/environ`, `~/.safeeasyapi`), and
+  `--no-redact` refuses to work unless you are at a terminal. None of that
+  is a wall. For a sensitive service, run agent sessions without permission
+  to use `safeeasyapi run` (a deny rule in Claude Code), and start the
+  program yourself in your own terminal: the agent writes the code, you run
+  it. The MCP instructions tell agents to ask you, not to run it themselves.
 - **Redaction is not a vault.** `run` scrubs the exact key and its common
-  re-writings (base64, hex, URL-encoded, JSON-escaped) from the program's
+  re-writings (base64, hex, URL-encoded, JSON-escaped, upper and lower case) from the program's
   output. It cannot catch a key the program hashes, truncates, reverses or
   splits across lines, one written to a file or sent over the network, or one
   shorter than 6 characters. With redaction on, the program's output is a
   pipe, not a terminal, so some programs lose colours or stop prompting: use
-  `--no-redact` for those.
+  `--no-redact` for those (it works only when input and output are both a
+  terminal; with a pipe it is refused).
+- **Copy-and-go empties the clipboard, and asks when it cannot be sure.** A
+  key-shaped value already on the clipboard when waiting starts is emptied,
+  so copying it again is noticed. For a service with no documented key shape,
+  it tells you what it took (length and kinds of characters, never the
+  characters) and asks you to confirm. Ctrl-C cancels; the clipboard is
+  emptied after the hidden-prompt fallback too.
+- **Two runs at once are safe.** Writes to `.env` take a short lock, so two
+  `connect` runs at the same time cannot drop each other's key.
 - **The `.env` file is plain text** (owner-only). The OS keychain is better.
 - **The hook is a guardrail, not a wall** (see below), and `scan` finds keys by
   their shape: a key with no recognisable shape can slip past it.
@@ -353,6 +370,8 @@ safeeasyapi run --all -- <command>      # ... every service in safeeasyapi.json
 safeeasyapi run <service> --no-redact -- <command>   # don't scrub the output (interactive programs)
 safeeasyapi run <service> --redact -- <command>      # scrub it (the default)
 safeeasyapi run <service> --env-file FILE -- <command>   # read keys from another .env
+safeeasyapi --project-dir DIR <command>   # work as if started in DIR (manifest and .env live there)
+safeeasyapi skill install [--project] [--yes]   # copy the agent skill to ~/.claude/skills (never overwrites unasked)
 safeeasyapi init [--write] [--add] [--force]   # write safeeasyapi.json from the project's variable names
 safeeasyapi setup [service ...] [--dry-run]    # connect every missing service in order (resumable)
 safeeasyapi setup --env-file FILE | --no-browser | --clipboard | --allow-clipboard-history
@@ -967,7 +986,7 @@ is UTF-8 bytes regardless of console code page, console output is
 reconfigured to replace unencodable characters instead of crashing, and
 every text file is opened as UTF-8.
 
-## Scope / limits (v0.6.0)
+## Scope / limits (v0.6.1)
 
 - `scan` finds keys by their shape. It misses a key with no recognisable
   prefix under a name that does not end in KEY, TOKEN, SECRET or PASSWORD, and

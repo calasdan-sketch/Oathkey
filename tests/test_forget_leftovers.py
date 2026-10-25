@@ -92,7 +92,7 @@ class TestAKilledWriteLeavesACopy(unittest.TestCase):
             [sys.executable, "-c", KILLED_WRITER, _isolation.REPO, env, KEY],
             env=child_env, capture_output=True, timeout=120)
         self.assertEqual(proc.returncode, -9, proc.stderr)
-        leftovers = [n for n in os.listdir(folder) if n != ".env"]
+        leftovers = [n for n in os.listdir(folder) if n not in (".env", ".env.lock")]
         self.assertEqual(len(leftovers), 1, leftovers)         # the setup is real
         self.assertIn(KEY, read(os.path.join(folder, leftovers[0])))
 

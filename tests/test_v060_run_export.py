@@ -7,6 +7,7 @@ import os
 import random
 import stat
 import subprocess
+import tempfile
 import sys
 import unittest
 import urllib.parse
@@ -294,14 +295,17 @@ class TestRunCli(unittest.TestCase):
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertEqual(p.stdout, "k=[REDACTED]\n")
 
-    def test_no_redact_shows_the_child_the_raw_output(self):
+    def test_no_redact_is_refused_when_output_is_a_pipe(self):
         d = proj(f"GROQ_API_KEY={KEY}\n")
         p = subprocess.run([sys.executable, "-c",
                             "import sys; from safeeasyapi.cli import main; sys.exit(main(sys.argv[1:]))",
                             "run", "--no-redact", "groq", "--", "sh", "-c", 'echo "k=${GROQ_API_KEY%%_*}"'],
                            cwd=d, capture_output=True, text=True,
                            env=dict(os.environ, PYTHONPATH=_isolation.REPO), timeout=60)
-        self.assertEqual(p.stdout, "k=sk\n")
+        # 0.6.1: with output going to a pipe, --no-redact is refused
+        self.assertEqual(p.returncode, 2)
+        self.assertNotIn(KEY, p.stdout + p.stderr)
+        self.assertEqual(p.stdout, "")
 
     def test_missing_key_message_names_both_places(self):
         d = proj("")
@@ -402,7 +406,7 @@ class TestExportArgv(unittest.TestCase):
 
 class A:
     def __init__(self, **kw):
-        self.__dict__.update(dict(service="groq", to="github", repo=None, environment=None,
+        self.__dict__.update(dict(service="groq", to="github", repo="acme/widgets", environment=None,
                                   env_file=None, overwrite=False, yes=True), **kw)
 
 
@@ -512,8 +516,17 @@ class TestExportFlow(unittest.TestCase):
 
     def test_vercel_target(self):
         calls = []
-        self.go(f"GROQ_API_KEY={KEY}\n", lambda argv, input=None, **k:
-                calls.append(argv) or subprocess.CompletedProcess(argv, 0, b"", b""), to="vercel", environment="preview")
+        d = tempfile.mkdtemp()
+        os.makedirs(os.path.join(d, ".vercel"))
+        with open(os.path.join(d, ".vercel", "project.json"), "w") as f:
+            f.write('{"projectName": "shop"}')
+        old = os.getcwd()
+        os.chdir(d)
+        try:
+            self.go(f"GROQ_API_KEY={KEY}\n", lambda argv, input=None, **k:
+                    calls.append(argv) or subprocess.CompletedProcess(argv, 0, b"", b""), to="vercel", environment="preview", repo=None)
+        finally:
+            os.chdir(old)
         self.assertEqual(calls[0][1:], ["env", "add", "GROQ_API_KEY", "preview", "--sensitive"])
 
     def test_unknown_service(self):

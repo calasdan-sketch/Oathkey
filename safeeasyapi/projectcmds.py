@@ -36,7 +36,7 @@ def wants_keychain(item: dict, root: str, index_path: str | None = None) -> bool
 def _env_file(manifest: dict, root: str, override: str | None) -> str:
     if override:
         return override
-    return os.path.join(root, manifest.get("env_file") or ".env")
+    return manifest_mod.env_file_in(root, manifest)
 
 
 # ------------------------------------------------------------------- init
@@ -111,7 +111,11 @@ def cmd_setup(args, catalog: dict, connect_fn, out=None,
     if manifest is None:
         return 1
     root = os.path.dirname(path)
-    env_file = _env_file(manifest, root, args.env_file)
+    try:
+        env_file = _env_file(manifest, root, args.env_file)
+    except manifest_mod.ManifestError as e:
+        out.write(f"  {printable(e)}\n")
+        return 1
     wanted = set(args.service or [])
     rows = []
     for item in manifest["services"]:
@@ -217,7 +221,11 @@ def cmd_status(args, catalog: dict, out=None, check_keychain=True,
     if manifest is None:
         return 1
     root = os.path.dirname(path)
-    env_file = _env_file(manifest, root, args.env_file)
+    try:
+        env_file = _env_file(manifest, root, args.env_file)
+    except manifest_mod.ManifestError as e:
+        out.write(f"  {printable(e)}\n")
+        return 1
     max_age = args.max_age or manifest.get("max_age_days", manifest_mod.DEFAULT_MAX_AGE_DAYS)
     rows = status_rows(manifest, root, catalog, env_file, max_age, check_keychain,
                        read, index_path, now)

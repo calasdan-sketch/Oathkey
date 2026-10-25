@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import base64
 import datetime
+import email.utils
 import hashlib
 import hmac
 import http.client
@@ -54,6 +55,7 @@ import urllib.parse
 import urllib.request
 
 from . import __version__
+from . import redact as redact_mod
 from .recipes import ALLOWED_METHODS, DEFAULT_FIELD, STS_BODY, printable
 
 USER_AGENT = f"safeeasyapi/{__version__}"
@@ -103,6 +105,38 @@ NOT_PRINTABLE = ("a character that is not printable (a tab, a line break or "
                  "another invisible character)")
 NOT_LATIN_1 = ("a character outside Latin-1 (a curly quote or an emoji, say), "
                "which an HTTP header cannot carry")
+
+
+class ClockSkew(ValidationError):
+    """A signed request was refused and the server's clock disagrees with this
+    computer's by more than the signature allows: the key may be fine."""
+
+    def __init__(self, minutes: int, ahead: bool):
+        super().__init__(f"your computer's clock is about {minutes} minute(s) "
+                         f"{'ahead of' if ahead else 'behind'} the server's. Signed requests are "
+                         f"refused when the clock is off by more than 5 minutes. Fix the clock "
+                         f"(turn on automatic time) and try again - the key may be fine.")
+        self.minutes = minutes
+
+
+MAX_SKEW_SECONDS = 300
+
+
+def _utcnow() -> datetime.datetime:
+    return datetime.datetime.now(datetime.timezone.utc)
+
+
+def _skew(server_date: str | None) -> float | None:
+    """Local clock minus the server's, in seconds, or None."""
+    if not server_date:
+        return None
+    try:
+        theirs = email.utils.parsedate_to_datetime(server_date)
+    except (TypeError, ValueError):
+        return None
+    if theirs.tzinfo is None:
+        theirs = theirs.replace(tzinfo=datetime.timezone.utc)
+    return (_utcnow() - theirs).total_seconds()
 
 
 class UnsendableKey(ValidationError):
@@ -350,6 +384,7 @@ class _CredentialScrubbingRedirectHandler(urllib.request.HTTPRedirectHandler):
         self._follow = follow
         self.stripped_to: str | None = None
         self.blocked_to: str | None = None
+        self.server_date: str | None = None
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         if not self._follow:
@@ -376,10 +411,12 @@ def _send(req: urllib.request.Request, scrubber: _CredentialScrubbingRedirectHan
         try:
             with opener.open(req, timeout=timeout) as resp:
                 status = resp.status
+                scrubber.server_date = resp.headers.get("Date")
                 if read_limit:
                     body = resp.read(read_limit + 1)
         except urllib.error.HTTPError as e:
             status = e.code
+            scrubber.server_date = e.headers.get("Date") if e.headers else None
             if read_limit:
                 try:
                     body = e.read(read_limit + 1)
@@ -411,15 +448,25 @@ def _send(req: urllib.request.Request, scrubber: _CredentialScrubbingRedirectHan
             "the recipe's validate section") from None
     if scrubber.blocked_to is not None:
         raise ValidationError(
-            f"the endpoint redirected to {printable(scrubber.blocked_to)}; the "
+            f"the endpoint redirected to {printable(safe_url(scrubber.blocked_to))}; the "
             f"credentials were not sent there. Fix the recipe to point at the "
             f"final endpoint.")
     if scrubber.stripped_to is not None:
         raise ValidationError(
             "validation endpoint redirected to a different origin "
-            f"({printable(scrubber.stripped_to)}); the key was not sent there. "
+            f"({printable(safe_url(scrubber.stripped_to))}); the key was not sent there. "
             "Fix the recipe's validate.url to point at the final endpoint.")
     return status, body
+
+
+def safe_url(url) -> str:
+    """scheme://host/path only - never the query or fragment, where a key in
+    a redirect target would sit."""
+    try:
+        u = urllib.parse.urlsplit(str(url))
+        return f"{u.scheme}://{u.hostname or ''}{':' + str(u.port) if u.port else ''}{u.path}"
+    except ValueError:
+        return "(an address that could not be read)"
 
 
 def _verdict(status: int, spec: dict, reject_default=REJECT_DEFAULT,
@@ -484,6 +531,19 @@ def _fetch_token(spec: dict, creds: dict[str, str], timeout: float) -> str | Non
 
 
 def validate_key(spec: dict, key, timeout: float = 10.0) -> Result:
+    """See _validate_key. Any error text is scrubbed of the key (and its
+    encodings) before it leaves, whatever produced it."""
+    try:
+        return _validate_key(spec, key, timeout)
+    except ValidationError as e:
+        values = list(_creds(key).values())
+        clean = redact_mod.Redactor(values).text(str(e)) if values else str(e)
+        if clean == str(e):
+            raise
+        raise ValidationError(clean) from None
+
+
+def _validate_key(spec: dict, key, timeout: float = 10.0) -> Result:
     """Return a Result: truthy if the API accepts the credentials (status in
     spec['expect']) or shows they are real but limited; falsy if rejected.
     `key` is the single key or {field: value}.
@@ -510,4 +570,8 @@ def validate_key(spec: dict, key, timeout: float = 10.0) -> Result:
                              MAX_VERDICT_BODY if wants_body else 0)
     finally:
         token = None
+    if atype == "aws_sigv4" and status in (400, 401, 403):
+        skew = _skew(scrubber.server_date)
+        if skew is not None and abs(skew) > MAX_SKEW_SECONDS:
+            raise ClockSkew(int(abs(skew) // 60), skew > 0)
     return _verdict(status, spec, body=body[:MAX_VERDICT_BODY])

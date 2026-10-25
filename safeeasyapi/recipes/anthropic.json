@@ -41,5 +41,8 @@
   },
   "least_privilege": {
     "summary": "Create the key inside the workspace for this project, with an expiration, so it can be revoked alone."
-  }
+  },
+  "unverified": [
+    "validate.auth (the models page now shows 'Authorization: Bearer' and a newer anthropic-version; the x-api-key header with 2023-06-01 comes from the API overview and was not re-confirmed)"
+  ]
 }

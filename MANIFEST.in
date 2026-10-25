@@ -3,6 +3,5 @@
 include CHANGELOG.md
 recursive-include tests *.py
 global-exclude __pycache__ *.py[cod]
-recursive-include skills *.md
 include CONTRIBUTING.md
 recursive-include .github *.yml *.md

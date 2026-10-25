@@ -8,7 +8,7 @@ is typed or pasted, and the value is never shown.
 It only looks while `safeeasyapi connect --clipboard` is waiting for a key,
 and only takes a value that:
   - matches the field's pattern, when the recipe gives one; otherwise
-  - looks like a key: one line, no spaces, 8 to 4096 visible characters,
+  - looks like a key: one line, no spaces, 16 to 4096 visible characters,
     and different from what was on the clipboard when it started waiting
     and from the values already taken for this connect.
 
@@ -29,7 +29,13 @@ import time
 POLL_SECONDS = 0.3
 WAIT_SECONDS = 180
 MAX_LEN = 4096
-KEY_SHAPE = re.compile(r"^[!-~]{8,4096}\Z")   # printable ASCII, no spaces
+KEY_SHAPE = re.compile(r"^[!-~]{16,4096}\Z")  # printable ASCII, no spaces, 16+ long
+NOT_A_KEY = (
+    re.compile(r"^[\w.-]+:\d{1,5}(/\S*)?\Z"),              # localhost:3000
+    re.compile(r"^[\w.+-]+@[\w-]+(\.[\w-]+)+\Z"),           # an e-mail address
+    re.compile(r"^(~|\.{0,2}/|[A-Za-z]:[\\/])\S*\Z"),        # a file path
+    re.compile(r"^[a-z]+(-[a-z]+){1,}\Z"),                     # plain-hyphenated words
+)
 
 
 class Unavailable(Exception):
@@ -171,7 +177,21 @@ def looks_like(value: str, pattern: str | None) -> bool:
         # "^sk-ant-" names only the documented beginning, and a valid key
         # that is longer than any example must still pass
         return re.match(pattern, value) is not None
-    return KEY_SHAPE.match(value) is not None
+    if KEY_SHAPE.match(value) is None:
+        return False
+    if any(rx.match(value) for rx in NOT_A_KEY):
+        return False
+    # a real key mixes character kinds; one plain word or number is not one
+    kinds = sum(bool(re.search(c, value)) for c in (r"[a-z]", r"[A-Z]", r"[0-9]", r"[^A-Za-z0-9]"))
+    return kinds >= 2 or len(value) >= 24
+
+
+def describe(value: str) -> str:
+    """What a taken value looks like, without any of its characters."""
+    kinds = [name for name, c in (("lower-case letters", r"[a-z]"), ("capitals", r"[A-Z]"),
+                                  ("digits", r"[0-9]"), ("symbols", r"[^A-Za-z0-9]"))
+             if re.search(c, value)]
+    return f"{len(value)} characters ({', '.join(kinds)})"
 
 
 def wait_for_key(pattern: str | None, taken: set[str], get, clear,
@@ -181,12 +201,19 @@ def wait_for_key(pattern: str | None, taken: set[str], get, clear,
 
     What is on the clipboard when waiting starts is taken only when the
     recipe's pattern recognises it (the person copied the key a moment
-    early); a generic-looking value from before is ignored as stale. The
-    clipboard is emptied as soon as a value is taken."""
+    early); a generic-looking value from before is stale: it is emptied
+    away (so copying the same key again counts as new). The clipboard is
+    emptied as soon as a value is taken."""
     start = (get() or "").strip()
     if pattern and start not in taken and looks_like(start, pattern):
         clear()
         return start
+    if start and looks_like(start, None):
+        # A key-shaped value that is NOT recognised as this service's key:
+        # it must not stay on the clipboard, and emptying the clipboard also
+        # means a second, identical Copy shows up as a change.
+        clear()
+        start = ""
     seen = start
     deadline = now() + wait
     while now() < deadline:

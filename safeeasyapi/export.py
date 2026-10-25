@@ -16,6 +16,8 @@ itself: you must have `gh` / `vercel` installed and signed in.
 
 from __future__ import annotations
 
+import json
+import os
 import re
 import subprocess
 import sys
@@ -67,6 +69,46 @@ def build_argv(target: str, exe: str, name: str, repo: str | None = None,
     raise ExportError("unknown target")
 
 
+GITHUB_REMOTE_RE = re.compile(
+    r"github\.com[:/]+(?P<repo>[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*?)(?:\.git)?/?\Z")
+
+
+def github_repo_here(cwd: str | None = None, git_run=subprocess.run, find=procs.find_program) -> str | None:
+    """OWNER/REPO from this folder's `origin` remote, or None."""
+    git = find("git")
+    if not git:
+        return None
+    try:
+        done = git_run([git, "-C", cwd or ".", "remote", "get-url", "origin"],
+                       capture_output=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if done.returncode != 0:
+        return None
+    m = GITHUB_REMOTE_RE.search(done.stdout.decode("utf-8", "replace").strip())
+    return m.group("repo") if m else None
+
+
+def vercel_project_here(cwd: str | None = None) -> str | None:
+    """The linked Vercel project (from .vercel/project.json): its name when the
+    file has one, else its id."""
+    path = os.path.join(cwd or ".", ".vercel", "project.json")
+    try:
+        if os.path.islink(path) or os.path.getsize(path) > 65536:
+            return None
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    for key in ("projectName", "name", "projectId"):
+        value = data.get(key)
+        if isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9_.-]{1,100}", value):
+            return value
+    return None
+
+
 def send(argv: list[str], value: str, run=subprocess.run) -> tuple[bool, str]:
     """Run the vendor tool with `value` on its standard input. Returns
     (ok, note); the note is the tool's complaint with the value scrubbed
@@ -99,11 +141,27 @@ def cmd_export(args, catalog: dict, ask=input, interactive=None, out=None,
         out.write(f"  {program} is not installed (or not on PATH). Install it and sign in "
                   f"({program} auth login), then run this again.\n")
         return 1
+    # Say WHICH repository / project the key is going to, from what this
+    # folder says - not from whatever the vendor's tool would pick.
+    repo = args.repo
+    project = None
+    if args.to == "github":
+        repo = repo or github_repo_here()
+        if not repo:
+            out.write("  I could not tell which GitHub repository this is (no github.com "
+                      "'origin' remote).\n  Say it: --repo OWNER/REPO\n")
+            return 1
+    else:
+        project = vercel_project_here()
+        if not project:
+            out.write("  This folder is not linked to a Vercel project (no .vercel/project.json).\n"
+                      "  Run `vercel link` here first, so I can tell you where the key will go.\n")
+            return 1
     try:
         values = keychain_mod.gather(
             recipe, backend if backend is not None else keychain_mod.detect_backend(),
             read_fn, args.env_file, "keychain")
-        argvs = {name: build_argv(args.to, exe, name, args.repo, args.environment,
+        argvs = {name: build_argv(args.to, exe, name, repo, args.environment,
                                   args.overwrite) for name in values}
     except ExportError as e:
         out.write(f"  {recipes_mod.printable(e)}\n")
@@ -113,7 +171,9 @@ def cmd_export(args, catalog: dict, ask=input, interactive=None, out=None,
                   f"{recipes_mod.printable(e)}. Run `safeeasyapi connect {args.service}` first.\n")
         return 1
     names = ", ".join(values)
-    target = LABELS[args.to] + (f" for {args.repo}" if args.repo else "")
+    where = (f"repository {repo}" if args.to == "github" else f"project {project}")
+    envname = args.environment or ("production" if args.to == "vercel" else None)
+    target = f"{LABELS[args.to]}, {where}" + (f", environment {envname}" if envname else "")
     out.write(f"  About to send {names} to {target}.\n"
               f"  The value goes to `{program}` through a pipe - never on a command line, "
               f"never on screen.\n")
@@ -125,7 +185,7 @@ def cmd_export(args, catalog: dict, ask=input, interactive=None, out=None,
             values.clear()
             return 1
         try:
-            answer = ask("  Send it? [y/N]: ")
+            answer = ask(f"  Send it to {where}? [y/N]: ")
         except (EOFError, KeyboardInterrupt):
             answer = ""
         if (answer or "").strip().lower() not in ("y", "yes"):

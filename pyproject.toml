@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "safeeasyapi"
-version = "0.6.0"
+version = "0.6.1"
 description = "The safe tunnel for API keys: guided setup, validation, and .env storage."
 readme = "README.md"
 license = "MIT"
@@ -42,4 +42,4 @@ safeeasyapi = "safeeasyapi.cli:main"
 packages = ["safeeasyapi"]
 
 [tool.setuptools.package-data]
-safeeasyapi = ["recipes/*.json"]
+safeeasyapi = ["recipes/*.json", "skill/*.md"]

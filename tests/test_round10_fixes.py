@@ -69,7 +69,8 @@ class TestNoPatternCanHangTheScan(unittest.TestCase):
                 "fields": [{"name": "key", "env_var": "EVIL_KEY", "pattern": "(a+)+b"}],
                 "validate": {"method": "GET", "url": "https://evil.test/me",
                              "auth": {"type": "bearer"}, "expect": [200]}}
-        recipes_mod.validate_recipe(evil)
+        with self.assertRaises(recipes_mod.RecipeError):      # 0.6.1: refused up front ...
+            recipes_mod.validate_recipe(evil)
         evil["_builtin"] = False
         catalog = dict(CATALOG, evil=evil)
         rules = scan_mod.build_rules(catalog)
@@ -228,12 +229,12 @@ class TestNameBasedGuessesAreNotSent(NoNetwork):
 
         def fake(spec, key, timeout=10.0):
             seen.append(spec)
-            return validate_mod._verdict(403, spec)
+            return validate_mod._verdict(404, spec)
         code, out, err, _ = self.go(f"OPENAI_API_KEY={OPENAI}\n", "--validate", "--yes",
                                     fake=fake)
         self.assertEqual(seen[0]["reject"], [401])
         self.assertIn("could not be checked", out)
-        self.assertIn("HTTP 403", out)
+        self.assertIn("HTTP 404", out)
         self.assertNotIn("rejected by the service", out)
 
     def test_a_401_is_worded_without_telling_you_to_delete(self):

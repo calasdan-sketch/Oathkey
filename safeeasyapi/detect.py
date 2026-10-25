@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import re
+import stat
 import time
 
 from . import hook as hook_mod
@@ -32,10 +33,19 @@ def _is_template(name: str) -> bool:
 
 
 def _read_limited(path: str) -> str | None:
+    """The file's text, or None for anything but a small plain file. It is
+    opened without waiting and without following a link, and checked after
+    opening, so a named pipe (or a device) called x.py cannot hang the walk."""
+    flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0)
     try:
-        if os.path.islink(path) or os.path.getsize(path) > MAX_FILE_BYTES:
-            return None
-        with open(path, "rb") as f:
+        fd = os.open(path, flags)
+    except OSError:
+        return None
+    try:
+        with os.fdopen(fd, "rb") as f:
+            info = os.fstat(f.fileno())
+            if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_FILE_BYTES:
+                return None
             data = f.read(MAX_FILE_BYTES)
     except OSError:
         return None

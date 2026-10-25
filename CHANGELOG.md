@@ -1,5 +1,47 @@
 # Changelog
 
+## 0.6.1
+
+Fixes from an independent review of 0.6.0.
+
+**Security**
+- A redirect from a query-auth check (OpenWeather, your own recipes) no longer
+  prints the address with the key in it: only scheme, host and path are shown,
+  and every validation error is scrubbed of the key and its encodings.
+- The hook also refuses `safeeasyapi run --no-redact`, keychain readers
+  (`secret-tool`, `security find-generic-password`, `cmdkey`, `Get-Secret`,
+  `keyring`), `/proc/*/environ` and `~/.safeeasyapi`. `run --no-redact` is
+  refused unless input and output are a terminal. Agent-facing text now says
+  "ask the person to run it". README states plainly what an agent that can
+  use `run` can still do.
+- `.env` writes take a lock (20 parallel writers used to leave 7 keys), the
+  read no longer follows a link swapped in after the check, and a result is
+  re-read after writing.
+- A manifest's `env_file` must be a `.env`-style name inside the project;
+  `safeeasyapi.json` is only looked for up to the git project's top folder
+  (or the folder itself); `--project-dir` names it explicitly. `connect`,
+  `rotate`, `forget` and `export` use the manifest's env file like `run`.
+- The MCP output guard blanks only secret-looking values (not ordinary
+  settings) and never member names. `needs_keys` stays inside the project;
+  `request_connect` opens at most 3 key pages a minute in all.
+- Recipe patterns that could run for ages on crafted input are refused.
+- `doctor-recipes` never visits private addresses (also not through a
+  redirect), and each service has a time budget. The weekly workflow pins its
+  actions by commit.
+- A recipe that sends the key to localhost or a private network asks you to
+  confirm first. `export` names the repository / Vercel project it will send
+  to, taken from the git remote / `.vercel`, and uses it explicitly.
+
+**Behaviour**
+- Copy-and-go: a stale key-shaped value is emptied, a second identical Copy is
+  noticed, Ctrl-C cancels, the clipboard is emptied after the prompt fallback,
+  host:port, paths, e-mail addresses and plain words are not taken as keys,
+  and a key with no documented shape is confirmed (length only).
+- AWS: a clock more than 5 minutes off is reported as that, not as a dead key.
+- OpenAI: a 403 is "real key with limits", not a dead one.
+- Redaction also catches upper and lower case forms.
+- `safeeasyapi skill install` copies the agent skill (now shipped in the wheel).
+
 ## 0.6.0
 
 One flow from the vendor's key page into your project, and the agent never

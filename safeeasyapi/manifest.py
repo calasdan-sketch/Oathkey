@@ -40,18 +40,87 @@ class ManifestError(ValueError):
     """The manifest cannot be used. The text names the problem, never a value."""
 
 
-def find(start: str | None = None) -> str | None:
-    """The nearest safeeasyapi.json at or above `start` (default: here)."""
-    here = os.path.realpath(start or os.getcwd())
+def _git_root(start: str) -> str | None:
+    """The nearest folder at or above `start` that has a .git."""
+    here = start
     for _ in range(64):
-        candidate = os.path.join(here, FILE_NAME)
-        if os.path.isfile(candidate):
-            return candidate
+        if os.path.lexists(os.path.join(here, ".git")):
+            return here
         parent = os.path.dirname(here)
         if parent == here:
             return None
         here = parent
     return None
+
+
+def _ours(path: str) -> bool:
+    """A manifest owned by somebody else is not trusted (POSIX)."""
+    try:
+        return not hasattr(os, "geteuid") or os.stat(path).st_uid == os.geteuid()
+    except OSError:
+        return False
+
+
+def find(start: str | None = None) -> str | None:
+    """The nearest safeeasyapi.json at or above `start` (default: here), but
+    never above the project: the search stops at the git work tree's root,
+    and with no git root only `start` itself is looked at. (A manifest left
+    in /tmp or a parent folder must not steer a project it does not belong
+    to.) Use --project-dir to name the folder yourself."""
+    here = os.path.realpath(start or os.getcwd())
+    top = _git_root(here) or here
+    for _ in range(64):
+        candidate = os.path.join(here, FILE_NAME)
+        if os.path.isfile(candidate) and _ours(candidate):
+            return candidate
+        if here == top:
+            return None
+        parent = os.path.dirname(here)
+        if parent == here:
+            return None
+        here = parent
+    return None
+
+
+_WINDOWS_RESERVED = re.compile(r"^(con|prn|aux|nul|com\d|lpt\d)(\.|$)", re.I)
+
+
+def env_file_problem(value) -> str | None:
+    """Why `value` cannot be a manifest's env_file, or None. It must be a
+    relative path inside the project whose last part is a .env-style name
+    (.env, .env.local, prod.env): never a source file, never the manifest,
+    never anything under .git."""
+    if not (isinstance(value, str) and value and "\x00" not in value and len(value) < 260):
+        return "env_file must be a relative path inside the project"
+    if "\\" in value or re.match(r"^[A-Za-z]:", value) or value.startswith(("/", "~")):
+        return "env_file must be a relative path with forward slashes, no drive letter"
+    parts = value.split("/")
+    if any(p in ("", ".", "..") for p in parts):
+        return "env_file must not contain empty, '.' or '..' parts"
+    if any(p.lower() == ".git" or _WINDOWS_RESERVED.match(p) for p in parts):
+        return "env_file must not point into .git or at a device name"
+    name = parts[-1].lower()
+    if not (name.startswith(".env") or name.endswith(".env")) or name in (".envrc",):
+        return "env_file must be a .env-style file name (.env, .env.local, prod.env)"
+    if name.endswith((".json", ".md", ".py", ".js", ".ts", ".yml", ".yaml", ".toml", ".sh")):
+        return "env_file must be a .env-style file name"
+    return None
+
+
+def env_file_in(root: str, data: dict | None) -> str:
+    """The .env file for the project at `root`: the manifest's env_file when
+    it has one, else .env. Raises ManifestError when the real location (after
+    following folder links) is outside the project."""
+    rel = (data or {}).get("env_file") or ".env"
+    problem = env_file_problem(rel)
+    if problem:
+        raise ManifestError(problem)
+    full = os.path.join(root, *rel.split("/"))
+    base = os.path.realpath(root)
+    real = os.path.join(os.path.realpath(os.path.dirname(full)), os.path.basename(full))
+    if os.path.commonpath([base, real]) != base:
+        raise ManifestError("env_file leads outside the project (through a linked folder)")
+    return full
 
 
 def validate(data) -> dict:
@@ -66,12 +135,10 @@ def validate(data) -> dict:
     age = data.get("max_age_days", DEFAULT_MAX_AGE_DAYS)
     if not isinstance(age, int) or isinstance(age, bool) or not 1 <= age <= 3650:
         raise ManifestError("max_age_days must be a whole number of days (1-3650)")
-    env_file = data.get("env_file")
-    if env_file is not None and not (isinstance(env_file, str) and env_file
-                                     and "\x00" not in env_file and len(env_file) < 260
-                                     and not os.path.isabs(env_file)
-                                     and ".." not in env_file.replace("\\", "/").split("/")):
-        raise ManifestError("env_file must be a relative path inside the project")
+    if data.get("env_file") is not None:
+        problem = env_file_problem(data["env_file"])
+        if problem:
+            raise ManifestError(problem)
     services = data.get("services")
     if not isinstance(services, list) or len(services) > MAX_SERVICES:
         raise ManifestError("services must be a list")

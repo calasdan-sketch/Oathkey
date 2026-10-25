@@ -264,7 +264,7 @@ class TestInstallLayout(unittest.TestCase):
         self.assertTrue(proj["classifiers"])
         self.assertEqual(data["tool"]["setuptools"]["packages"], ["safeeasyapi"])
         self.assertEqual(data["tool"]["setuptools"]["package-data"],
-                         {"safeeasyapi": ["recipes/*.json"]})
+                         {"safeeasyapi": ["recipes/*.json", "skill/*.md"]})
         self.assertIn("setuptools>=77", data["build-system"]["requires"][0])
 
     def test_builtin_recipes_live_inside_the_package(self):
@@ -545,7 +545,7 @@ class TestKeychain(unittest.TestCase):
                     mock.patch.object(keychain_mod.subprocess, "call",
                                       return_value=0) as call:
                 out = io.StringIO()
-                with redirect_stdout(out):
+                with redirect_stdout(out), mock.patch.object(cli_mod, "_is_tty", return_value=True):
                     self.assertEqual(cli_mod.main(["run", "--no-redact", "acme", "--", *prog]), 0)
                 self.assertEqual(call.call_args.args[0], prog)
                 self.assertEqual(call.call_args.kwargs["env"]["ACME_API_KEY"], FAKE_KEY)

@@ -106,9 +106,9 @@ class TestAcceptGateNeverRefusesAValidKey(unittest.TestCase):
         self.assertEqual(field("twilio", 0)["accept"], "^AC[0-9a-fA-F]{32}$")
 
     def test_a_real_looking_key_for_each_gate_less_service_passes_the_generic_shape(self):
-        for slug, key in (("openai", "sk-proj-abcdEFGH1234_-xyz"), ("groq", "gsk_abcdEFGH1234"),
+        for slug, key in (("openai", "sk-proj-abcdEFGH1234_-xyz"), ("groq", "gsk_abcdEFGH1234567890"),
                           ("sendgrid", "SG.abcdEFGH1234.xyz"), ("tavily", "tvly-dev-abcdEFGH"),
-                          ("huggingface", "hf_abcdEFGH1234"), ("openrouter", "sk-or-v1-abcdEFGH12")):
+                          ("huggingface", "hf_abcdEFGH1234567890"), ("openrouter", "sk-or-v1-abcdEFGH12")):
             self.assertTrue(clipboard_mod.looks_like(key, field(slug)["accept"]), slug)
             self.assertTrue(clipboard_mod.looks_like("a-completely-different-shape-9", field(slug)["accept"]), slug)
 
@@ -409,8 +409,8 @@ class TestConnectShowsTheNewFields(unittest.TestCase):
         self.assertIn("STRIPE_SECRET_KEY=sk_live_ABCDEFGHIJKLMN", open(env).read())
         self.assertNotIn("sk_live_ABCDEFGHIJKLMN", out.getvalue())
 
-    def test_the_version_is_060(self):
-        self.assertEqual(safeeasyapi.__version__, "0.6.0")
+    def test_the_version_is_061(self):
+        self.assertEqual(safeeasyapi.__version__, "0.6.1")
 
 
 if __name__ == "__main__":
