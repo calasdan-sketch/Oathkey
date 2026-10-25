@@ -574,7 +574,7 @@ class TestValidate(NoNetwork):
 
 class TestVersionAndHelp(unittest.TestCase):
     def test_version_is_0_5_1_everywhere(self):
-        self.assertEqual(__version__, "0.5.1")
+        self.assertEqual(__version__, "0.5.2")
         self.assertIn(__version__, run_cli("--version")[1])
 
     def test_help_leads_with_scan(self):

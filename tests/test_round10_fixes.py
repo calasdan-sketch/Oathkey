@@ -487,7 +487,7 @@ class TestHookNeverRunsWhatItReads(Settings):
 
 class TestTheMatcher(unittest.TestCase):
     def test_powershell_and_monitor_are_covered(self):
-        self.assertEqual(hook_mod.MATCHER, "Read|Grep|Bash|PowerShell|Monitor")
+        self.assertEqual(hook_mod.MATCHER, "Read|Grep|Bash|PowerShell|Monitor|Edit|Write|MultiEdit|NotebookEdit")
         self.assertTrue(hook_mod.check(call("PowerShell", command="Get-Content .env"))[1])
         self.assertTrue(hook_mod.check(call("PowerShell", command="gc C:\\app\\.env.local"))[1])
         self.assertTrue(hook_mod.check(call("Monitor", command="tail -f .env", timeout_ms=1000))[1])
@@ -495,9 +495,8 @@ class TestTheMatcher(unittest.TestCase):
         self.assertEqual(hook_mod.check(call("Monitor", command="tail -f app.log"))[1], "")
         self.assertEqual(hook_mod.check(call("PowerShell", command="ls", description="reads .env"))[1], "")
 
-    def test_tools_that_do_not_show_a_files_contents_are_left_alone(self):
-        for tool in ("Write", "Edit", "NotebookEdit", "Glob"):
-            self.assertEqual(hook_mod.check(call(tool, file_path="/a/.env", pattern=".env*"))[1], "")
+    def test_glob_lists_names_only_and_is_left_alone(self):
+        self.assertEqual(hook_mod.check(call("Glob", file_path="/a/.env", pattern=".env*"))[1], "")
 
 
 class TestOurOwnGroup(Settings):

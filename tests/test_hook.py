@@ -93,7 +93,7 @@ class TestDecision(unittest.TestCase):
         self.assertFalse(denied(call("Grep", pattern="KEY", path="/a/src")))
 
     def test_other_tools_are_not_our_business(self):
-        self.assertEqual(hook_mod.check(call("Write", file_path="/a/.env")), (0, ""))
+        self.assertEqual(hook_mod.check(call("Glob", file_path="/a/.env")), (0, ""))
 
     def test_bad_input_never_blocks(self):
         self.assertEqual(hook_mod.check("not json"), (1, ""))
@@ -160,7 +160,7 @@ class TestInstall(Settings):
         code, out, _ = self.hook("install")
         self.assertEqual(code, 0)
         group = self.get()["hooks"]["PreToolUse"][0]
-        self.assertEqual(group["matcher"], "Read|Grep|Bash|PowerShell|Monitor")
+        self.assertEqual(group["matcher"], hook_mod.MATCHER)
         handler = group["hooks"][0]
         self.assertEqual(handler["type"], "command")
         self.assertEqual(handler["command"], "/opt/bin/safeeasyapi hook check")

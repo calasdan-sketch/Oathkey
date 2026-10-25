@@ -160,14 +160,24 @@ safeeasyapi hook uninstall          # take it out again
 ```
 
 This adds a Claude Code "PreToolUse hook": a small check Claude Code runs
-before every Read, Grep, Bash, PowerShell and Monitor call. If the call
-touches a `.env` file (`.env`, `.env.local`, `prod.env`, `.envrc`) it says no
-and tells the agent why, in plain words. Templates (`.env.example`,
-`.env.sample`, `.env.template`) are allowed. `Edit`, `Write`, `NotebookEdit`
-and `Glob` are not matched on purpose: they do not hand the file's contents
-to the agent (Edit and NotebookEdit normally need a prior Read, which is blocked;
-Glob lists names), and refusing `Write` would stop the agent creating a `.env` for
-you.
+before every Read, Grep, Bash, PowerShell, Monitor, Edit, Write, MultiEdit
+and NotebookEdit call. If the call touches a `.env` file (`.env`,
+`.env.local`, `prod.env`, `.envrc`) it says no and tells the agent why, in
+plain words. Templates (`.env.example`, `.env.sample`, `.env.template`) are
+allowed, for reading and writing.
+
+Writing is refused too (since 0.5.2): a real key an agent types into `.env`
+has passed through the agent, which is what this tool exists to prevent, and a
+`Write` can overwrite your keys. The agent is told: "Claude can't write to
+.env - your keys stay out of the chat. Run: safeeasyapi connect <service> (or
+edit the file yourself)." If your `.env` holds nothing secret and you want the
+agent to edit it, start Claude Code with `SAFEEASYAPI_HOOK_ALLOW_WRITE=1` in
+its environment (only writes are allowed; reads stay refused). `Glob` is not
+matched: it lists names only.
+
+Upgrading from 0.5.0 or 0.5.1: run `safeeasyapi hook install` again. It
+updates our own entry's matcher in place and touches nothing else;
+`hook status` says "OUTDATED" until you do.
 
 Your other hooks and settings are kept. The hook always sits in a matcher
 group of its own: another group's matcher or handlers are never edited, and
@@ -815,7 +825,7 @@ is UTF-8 bytes regardless of console code page, console output is
 reconfigured to replace unencodable characters instead of crashing, and
 every text file is opened as UTF-8.
 
-## Scope / limits (v0.5.1)
+## Scope / limits (v0.5.2)
 
 - `scan` finds keys by their shape. It misses a key with no recognisable
   prefix under a name that does not end in KEY, TOKEN, SECRET or PASSWORD, and
@@ -828,7 +838,10 @@ every text file is opened as UTF-8.
 - `hook`: the settings shape, the exec form (`command` + `args`), `onFailure`
   and the answer format were checked against Claude Code's hooks
   documentation (code.claude.com/docs/en/hooks); the Read, Grep, Bash and
-  PowerShell tool-input field names are in that page too. The `Monitor` tool's
+  PowerShell tool-input field names are in that page too. The Edit, Write,
+  MultiEdit and NotebookEdit field names (`file_path`; `notebook_path` for
+  NotebookEdit) could not be confirmed there, so the hook reads `file_path`,
+  `notebook_path` and `path` for all four. The `Monitor` tool's
   input is not documented field by field, so the hook reads every text field
   of it except `description`. The documentation does not say which Claude Code
   version added `args` (hence `--shell-form`). The hook was exercised by

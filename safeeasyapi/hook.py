@@ -3,8 +3,9 @@
 Claude Code can run a small program before every tool call (a "PreToolUse
 hook") and that program can say no. `hook install` adds one to Claude Code's
 settings; `hook check` is that program. When the agent tries to Read, Grep,
-or run a Bash, PowerShell or Monitor command that touches a .env file, the
-answer is "deny" and the reason is handed back to the agent in plain words.
+or run a Bash, PowerShell or Monitor command that touches a .env file, or
+tries to Edit, Write, MultiEdit or NotebookEdit one, the answer is "deny" and
+the reason is handed back to the agent in plain words.
 
 This is a guardrail, not a sandbox. It catches the direct ways (cat .env,
 Read .env, grep KEY .env, source .env). A determined or confused program can
@@ -46,11 +47,15 @@ from . import recipes as recipes_mod
 #   Read, Grep      - the file tools (tool_input: file_path / path / glob)
 #   Bash, PowerShell - shell commands (tool_input.command)
 #   Monitor         - runs a command in the background and streams its output
-# Edit / Write / NotebookEdit / Glob are deliberately NOT matched: they do not
-# hand the file's contents to the agent (Edit and NotebookEdit need a prior
-# Read, which is blocked; Glob lists names only), and refusing Write would
-# stop the agent from creating a .env for you. See the README.
-MATCHER = "Read|Grep|Bash|PowerShell|Monitor"
+# Tools that would put a key INTO a file (0.5.2):
+#   Edit, Write, MultiEdit, NotebookEdit - refused for a real .env file, because
+#   a key typed by the agent has passed through the agent, and a Write can
+#   overwrite the person's keys. Templates (.env.example) stay writable, and
+#   SAFEEASYAPI_HOOK_ALLOW_WRITE=1 turns the write check off. Glob (names
+#   only) is not matched.
+MATCHER = "Read|Grep|Bash|PowerShell|Monitor|Edit|Write|MultiEdit|NotebookEdit"
+WRITE_TOOLS = frozenset({"Edit", "Write", "MultiEdit", "NotebookEdit"})
+ALLOW_WRITE_VAR = "SAFEEASYAPI_HOOK_ALLOW_WRITE"
 MARKER = "safeeasyapi hook"      # the statusMessage that marks our handler
 HOOK_TIMEOUT = 10            # seconds (Claude Code's own default is 600)
 MAX_STDIN = 64 * 1024 * 1024  # read this much of Claude Code's JSON, no less
@@ -74,6 +79,10 @@ REASON = (
     "`safeeasyapi run <service> -- <command>`, which hands the key to the "
     "command without showing it. If you only need to know which variables "
     "exist, read .env.example instead.")
+
+WRITE_REASON = (
+    "Claude can't write to {what} - your keys stay out of the chat. "
+    "Run: safeeasyapi connect <service>  (or edit the file yourself).")
 
 
 # ------------------------------------------------------------------ the check
@@ -114,6 +123,12 @@ def touched_text(payload: dict) -> list[str]:
     args = payload.get("tool_input")
     if not isinstance(args, dict):
         return []
+    if tool in WRITE_TOOLS:
+        # the one place for the write tools' field names: Edit, Write and
+        # MultiEdit use file_path; NotebookEdit uses notebook_path. All three
+        # names are read for every one of them so a rename cannot slip past.
+        return [v for k in ("file_path", "notebook_path", "path")
+                for v in _strings(args.get(k))]
     if tool == "Read":
         return _strings(args.get("file_path")) + _strings(args.get("path"))
     if tool == "Grep":
@@ -132,11 +147,17 @@ def decide(payload) -> str | None:
     """None to stay out of the way, or the name of the .env file refused."""
     if not isinstance(payload, dict):
         return None
+    if payload.get("tool_name") in WRITE_TOOLS and writes_allowed():
+        return None
     for text in touched_text(payload):
         hits = find_env_files(text)
         if hits:
             return hits[0]
     return None
+
+
+def writes_allowed(environ=None) -> bool:
+    return (environ if environ is not None else os.environ).get(ALLOW_WRITE_VAR, "").strip() == "1"
 
 
 def decision_json(reason: str) -> dict:
@@ -185,7 +206,11 @@ def check(stdin_text: str) -> tuple[int, str]:
     if name is None:
         return 0, ""
     what = recipes_mod.printable(name)
-    return 0, json.dumps(decision_json(REASON.format(what=f"'{what}'"))) + "\n"
+    if payload.get("tool_name") in WRITE_TOOLS:
+        reason = WRITE_REASON.format(what=f"'{what}'")
+    else:
+        reason = REASON.format(what=f"'{what}'")
+    return 0, json.dumps(decision_json(reason)) + "\n"
 
 
 def cmd_check(stdin=None, out=None, err=None) -> int:
@@ -555,7 +580,8 @@ def cmd_hook(args, out=None, err=None, run=subprocess.run) -> int:
                       f": the safeeasyapi hook in {shown}\n")
             out.write(_backup_note(backup, getattr(args, "project", False)))
             out.write("  From now on Claude Code asks it before every Read, Grep, Bash, "
-                      "PowerShell and Monitor call, and it refuses .env files.\n")
+                      "PowerShell, Monitor, Edit, Write, MultiEdit and NotebookEdit call, "
+                  "and it refuses .env files.\n")
             if getattr(args, "project", False):
                 out.write("  This is the project's settings file: commit it if you want the "
                           "team to have the hook. Your hook's backups are kept outside the "
@@ -614,7 +640,8 @@ def _status(args, out, run) -> int:
             tested = self_test(expected, run)
         notes = []
         if group.get("matcher") != MATCHER:
-            notes.append("it watches fewer tools than this version (run "
+            notes.append("OUTDATED: it does not watch Edit, Write, MultiEdit and "
+                         "NotebookEdit like this version does (run "
                          "`safeeasyapi hook install` to update it)")
         same = (handler.get("command") == expected["command"]
                 and handler.get("args") == expected.get("args"))

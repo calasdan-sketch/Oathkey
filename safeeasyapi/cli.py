@@ -86,7 +86,9 @@ def _build_parser() -> argparse.ArgumentParser:
     hk = sub.add_parser(
         "hook", help="Stop Claude Code reading your .env files.",
         description="Install a Claude Code hook that refuses Read, Grep, Bash, "
-                    "PowerShell and Monitor calls that touch .env files. It "
+                    "PowerShell and Monitor calls that touch .env files, and "
+                    "Edit, Write, MultiEdit and NotebookEdit calls that change "
+                    "one (set SAFEEASYAPI_HOOK_ALLOW_WRITE=1 to allow those). It "
                     "is a guardrail, not a wall: it does not stop split-up "
                     "file names, folder sweeps like `grep -r KEY .`, links, "
                     "MCP file tools or subagents (see the README).")

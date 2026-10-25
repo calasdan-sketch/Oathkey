@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.5.2
+
+- The hook now also covers `Edit`, `Write`, `MultiEdit` and `NotebookEdit`:
+  they are refused for a real `.env` file (a key the agent writes has passed
+  through the agent, and a `Write` can overwrite yours). Templates
+  (`.env.example` ...) stay writable. The agent is told "Claude can't write to
+  .env - your keys stay out of the chat. Run: safeeasyapi connect <service>
+  (or edit the file yourself)."
+- `SAFEEASYAPI_HOOK_ALLOW_WRITE=1` (in Claude Code's environment) allows
+  those writes; reads stay refused.
+- `hook install` upgrades an older install's matcher in place (only our own
+  entry); `hook status` says OUTDATED when the matcher is the old one.
+
 ## 0.5.1
 
 Fixes from a security review of 0.5.0.
