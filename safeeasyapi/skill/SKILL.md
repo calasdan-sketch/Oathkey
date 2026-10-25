@@ -1,32 +1,47 @@
 ---
 name: safeeasyapi
-description: Use when a project needs an API key or token (OpenAI, Stripe, GitHub, Resend ...). Ask the person to connect it with safeeasyapi; never read, write, request or print a key yourself.
+description: Use when a project needs an API key or token (OpenAI, Stripe, GitHub, Resend ...). Get it with safeeasyapi's capture_key tool (you click Copy in the browser; safeeasyapi takes the key); never read, write, request or print a key yourself.
 ---
 
 # API keys: ask, never touch
 
 A key you see ends up in your memory and the conversation log. So you never
-handle one. You ASK; the person's own terminal and browser do the rest.
+handle one. You drive the browser and click Copy; safeeasyapi takes the key from
+the clipboard, tests it and stores it.
 
 ## What to do
 
 1. Find out what is missing: call the `needs_keys` tool (optionally with the
    project folder). It returns service names, variable names and a status
    (`present`, `missing`, `unknown`). It never returns a value.
-2. For one service, call `request_connect` with the service name (set
-   `open_key_page` to true to open the vendor's key page in the person's own
-   browser). It returns `{service, env_var, status, instructions}`.
-3. Tell the person, in one sentence, to run the command in `instructions` in
-   their own terminal, usually `safeeasyapi connect <service>`, or
-   `safeeasyapi setup` for everything the project needs. They click the
-   vendor's Copy button (or paste into a hidden prompt); the key is tested
-   and stored. You are not involved.
-4. Write code that uses the environment variable by NAME (for example
+2. For one service, call `request_connect` with the service name. It returns
+   `{service, env_var, status, instructions, browser, rules}`.
+3. **Use `capture_key`** (`service`, `action: "start"`). If it answers
+   `consent_needed`, ask the person whether you may; if they agree they run
+   `safeeasyapi allow-agent <service>` in their own terminal (you cannot).
+   If it answers `refused` (Windows clipboard history) or `unavailable` (no
+   clipboard access, headless), tell the person what it says; only then ask
+   them to run `safeeasyapi connect <service>`.
+4. When it answers `waiting`, you drive the browser: open `browser.open`,
+   follow `browser.steps` with the smallest permissions, one project, a short
+   expiry, and click the vendor's **Copy** button. Nothing else. Then call
+   `capture_key` with `action: "status"` and `wait_seconds: 60`. It returns
+   `state: stored` (done), `failed` (the vendor rejected it: nothing was
+   saved; start again once), or `timeout`.
+5. Write code that uses the environment variable by NAME (for example
    `os.environ["OPENAI_API_KEY"]`). To run it with the key, ask the person
    to start it: `safeeasyapi run <service> -- <command>` (or `--all`). Do
-   not run it yourself with a stored key: a program started that way can
-   print or reshape the key, and safeeasyapi cannot stop that.
-5. Call `request_connect` again to confirm the status is `present`.
+   not run it yourself with a stored key.
+6. Call `request_connect` again to confirm the status is `present`.
+
+## In the browser
+
+- Never read, screenshot, zoom into or extract the text of the key field, and
+  do not use page-text or read-page tools on it. Click Copy only.
+- Never type or paste the key anywhere. You do not need it.
+- Login, 2FA, a CAPTCHA, or a password prompt (GitHub "sudo mode"): stop and
+  ask the person to do it in the browser. Never enter a password yourself.
+- Do not copy anything else while capture is waiting.
 
 ## Never
 

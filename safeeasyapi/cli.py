@@ -169,6 +169,16 @@ def _build_parser() -> argparse.ArgumentParser:
                     help="The .env file to remove the entry from (default: the "
                          "manifest's env_file, else .env).")
 
+    aa = sub.add_parser("allow-agent", help="Allow an AI agent to capture a service's key "
+                                            "from the clipboard (you type yes, once).")
+    aa.add_argument("service", nargs="?", help="Service slug (built-in services only).")
+    aa.add_argument("--revoke", action="store_true",
+                    help="Take the permission back (all services if none is named).")
+    aa.add_argument("--list", action="store_true", help="Show what is allowed in this project.")
+    aa.add_argument("--allow-clipboard-history", action="store_true",
+                    help="Also accept that Windows clipboard history (Win+V) keeps a copy "
+                         "of the key. Without it the agent is refused while history is on.")
+
     a = sub.add_parser("add", help="Capture a new service recipe interactively.")
     a.add_argument("--recipes-dir", default=None,
                    help="Write the recipe here instead of "
@@ -727,6 +737,9 @@ def _main(argv: list[str] | None = None) -> int:
         return doctor_mod.cmd_doctor(args, catalog)
     catalog = recipes_mod.load_recipes()
 
+    if args.cmd == "allow-agent":
+        from . import allowcmd
+        return allowcmd.cmd_allow_agent(args, catalog)
     if args.cmd == "list":
         return _cmd_list(catalog)
     if args.cmd == "find":

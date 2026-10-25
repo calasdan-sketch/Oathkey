@@ -120,7 +120,7 @@ class TestMCP(unittest.TestCase):
         r = mcp_mod.handle({"jsonrpc": "2.0", "id": 2,
                             "method": "tools/list"}, CATALOG)
         names = {t["name"] for t in r["result"]["tools"]}
-        self.assertEqual(names, {"list_services", "get_recipe", "find_public_apis", "get_public_api", "request_connect", "needs_keys"})
+        self.assertEqual(names, {"list_services", "get_recipe", "find_public_apis", "get_public_api", "request_connect", "needs_keys", "capture_key"})
 
     def test_list_services(self):
         r = mcp_mod.handle({"jsonrpc": "2.0", "id": 3, "method": "tools/call",
@@ -181,7 +181,7 @@ class TestMCP(unittest.TestCase):
             self.assertEqual(init["result"]["serverInfo"]["name"],
                              "safeeasyapi")
             tools = rpc("tools/list", rid=2)
-            self.assertEqual(len(tools["result"]["tools"]), 6)
+            self.assertEqual(len(tools["result"]["tools"]), 7)
             call = rpc("tools/call",
                        {"name": "list_services", "arguments": {}}, rid=3)
             services = json.loads(call["result"]["content"][0]["text"])

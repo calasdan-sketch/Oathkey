@@ -1,0 +1,94 @@
+"""`safeeasyapi allow-agent <service>`: the person's one-time yes to agent-driven capture.
+
+It only runs in a real terminal and asks for a typed "yes", so an agent that
+can run shell commands cannot grant itself the permission (the hook also
+refuses the command). The grant lives in the user's home folder
+(~/.safeeasyapi/agent-consent.json), not in the project: a file the project's
+own tools can edit could not be trusted to say the person agreed.
+"""
+
+from __future__ import annotations
+
+import os
+import sys
+
+from . import capture as capture_mod
+from . import recipes as recipes_mod
+
+
+def _terminal() -> bool:
+    try:
+        return bool(sys.stdin and sys.stdin.isatty() and sys.stdout and sys.stdout.isatty())
+    except (OSError, ValueError):
+        return False
+
+
+EXPLAIN = """
+  You are about to let an AI agent get a {display} key for THIS project
+  ({project}) without you copying or pasting anything.
+
+  What happens: the agent opens {display}'s key page in your browser and clicks
+  the Copy button. This program then takes the key off your clipboard, EMPTIES the
+  clipboard, tests the key with {display}, and stores it as {env_var}. The agent
+  is told only that it is stored - never the key.
+
+  What it cannot do: log in for you, answer 2FA, or type passwords - you do
+  that in the browser when asked. While it is waiting (up to 3 minutes) do not
+  copy anything else.
+"""
+
+HISTORY_NOTE = """
+  Windows clipboard history is ON on this computer. It keeps its own copy of
+  everything copied, including the key, and nothing can remove that copy.
+  Better: turn it off (Settings > System > Clipboard) and run this again.
+"""
+
+
+def cmd_allow_agent(args, catalog: dict, ask=input, terminal=_terminal, out=None,
+                    consent_file: str | None = None, cwd: str | None = None) -> int:
+    out = out or sys.stdout
+    root = capture_mod.project_root(cwd)
+    if args.list:
+        grants = capture_mod.grants_for(root, consent_file)
+        if not grants:
+            out.write("  No service is allowed for agent capture in this project.\n")
+        for g in grants:
+            extra = " (clipboard history accepted)" if g.get("clipboard_history_ok") else ""
+            out.write(f"  {recipes_mod.printable(g['service'])}{extra}\n")
+        return 0
+    if args.revoke:
+        n = capture_mod.revoke(root, args.service, consent_file)
+        out.write(f"  Removed {n} permission(s) for agent capture in this project.\n")
+        return 0
+    if not args.service:
+        out.write("error: name a service, for example: safeeasyapi allow-agent github\n")
+        return 2
+    recipe = catalog.get(args.service)
+    if recipe is None or recipe.get("_builtin") is not True:
+        out.write("error: agent capture works only with the built-in services "
+                  "(see `safeeasyapi list`).\n")
+        return 2
+    if not terminal():
+        out.write("error: this must be typed by a person in a terminal. An agent cannot "
+                  "give itself this permission.\n")
+        return 2
+    out.write(EXPLAIN.format(display=recipes_mod.printable(recipe["display"], words=True),
+                             project=recipes_mod.printable(root),
+                             env_var=recipe["env_var"]))
+    from . import clipboard as clipboard_mod
+    warning = clipboard_mod.history_warning()
+    if warning:
+        out.write(HISTORY_NOTE)
+        if not args.allow_clipboard_history:
+            out.write("  Without --allow-clipboard-history the agent will be refused "
+                      "while history is on.\n")
+    try:
+        answer = ask("  Type 'yes' to allow, anything else cancels: ")
+    except (EOFError, KeyboardInterrupt):
+        answer = ""
+    if (answer or "").strip().lower() != "yes":
+        out.write("  Nothing changed.\n")
+        return 1
+    capture_mod.grant(root, args.service, args.allow_clipboard_history, consent_file)
+    out.write(f"  Allowed. Undo any time: safeeasyapi allow-agent {args.service} --revoke\n")
+    return 0

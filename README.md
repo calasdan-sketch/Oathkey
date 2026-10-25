@@ -79,11 +79,16 @@ safeeasyapi export groq --to github      # copy a key into GitHub Actions secret
 safeeasyapi status            # which keys exist, where, how old; says when to rotate
 ```
 
-**AI agents.** Claude Code (or any MCP client) is told to *ask*, never to
-handle a key: the `request_connect` tool answers only
-`{service, env_var, status, instructions}`, and `needs_keys` lists which
-keys a project lacks. The instructions tell the person to run
-`safeeasyapi connect <service>` in their own terminal. No tool can return a
+**AI agents.** Claude Code (or any MCP client) never handles a key. The
+`capture_key` tool (0.7.0) lets the agent do the whole job: it drives the
+browser, makes the key and clicks the vendor's own Copy button; safeeasyapi
+takes the key from the clipboard, empties it, tests it and stores it, and the
+agent is told only `{state: "stored", env_vars, stored_in, key_length}`.
+`request_connect` answers `{service, env_var, status, instructions, browser,
+rules}`, and `needs_keys` lists which keys a project lacks. Only when
+`capture_key` is unavailable (no clipboard access, headless, or the person
+has not allowed it) is the person asked to run `safeeasyapi connect
+<service>` in their own terminal. No tool can return a
 secret value: answers are built from names and status words only, and a
 second filter blanks any secret the server can reach (a variable in its
 environment, a value in the project's `.env`), also in base64, hex and
@@ -377,6 +382,9 @@ safeeasyapi setup [service ...] [--dry-run]    # connect every missing service i
 safeeasyapi setup --env-file FILE | --no-browser | --clipboard | --allow-clipboard-history
 safeeasyapi status [--json] [--max-age DAYS] [--env-file FILE]   # where keys live, how old
 safeeasyapi export <service> --to github|vercel [--repo OWNER/REPO] [--environment NAME] [--overwrite] [--yes]
+safeeasyapi allow-agent <service>       # your one-time yes: an AI agent may capture this key (you type yes)
+safeeasyapi allow-agent <service> --allow-clipboard-history   # ... and accept Windows' clipboard history
+safeeasyapi allow-agent --list | --revoke [service]   # what is allowed in this project / take it back
 safeeasyapi doctor-recipes [service ...] [--json] [--timeout S] [--my-recipes]   # have recipe addresses rotted?
 safeeasyapi connect <service> --allow-clipboard-history   # keep copy-and-go even if Windows keeps a history
 safeeasyapi rotate <service>            # replace a stored key
@@ -875,10 +883,50 @@ Add to Claude Code (`claude mcp add`) or `~/.claude.json`:
 
 (`python` is the Windows launcher's name; on macOS/Linux use whatever
 runs your Python 3.) Tools: `list_services`, `get_recipe`,
-`find_public_apis`, `get_public_api`, `request_connect` and `needs_keys` (the agent
-handshake, above). The recipe tells the agent the
-exact steps and ends with: run `safeeasyapi connect <service>` in a
-terminal — never ask the user to paste the key into chat. The server
+`find_public_apis`, `get_public_api`, `request_connect`, `capture_key` and
+`needs_keys` (the agent handshake, above). The recipe tells the agent the
+exact steps and ends with: call `capture_key` (or, if that is unavailable,
+ask the person to run `safeeasyapi connect <service>`) — never ask the user
+to paste the key into chat.
+
+### Agent-driven capture (`capture_key`)
+
+The person says "connect GitHub". The agent calls `capture_key` (`action`:
+`start`, `status`, `cancel`), opens the key page with its own browser tools,
+chooses the smallest permissions and a short expiry, and clicks **Copy**. The
+MCP server — a program running as you, on your computer — sees a new
+key-shaped value on the clipboard, takes it, **empties the clipboard**, asks
+the vendor whether it works (the same check as `connect`, including "real but
+limited"), and stores it in `.env` or the OS keychain. The agent gets back
+only the state, the variable name, where it was stored and a length class. A
+key the vendor rejects is kept nowhere.
+
+Rules that make this safe enough to allow:
+
+- **You say yes once**, in your own terminal: `safeeasyapi allow-agent
+  github`. It needs a real terminal and a typed `yes`; the hook refuses the
+  command when an agent tries it, and the grant is kept in
+  `~/.safeeasyapi/agent-consent.json` (per project and service), not in the
+  project. `--revoke` takes it back. Without it `capture_key` only tells the
+  agent to ask you.
+- Built-in services only; one capture at a time; 10 to 180 seconds; six starts
+  an hour.
+- Only a value that *changes* the clipboard after arming and has the service's
+  key format is taken. What was on the clipboard before is wiped, never used.
+  A copy that is not that service's key is ignored and counted.
+- **Windows clipboard history (Win+V)** keeps its own copy that nothing can
+  remove. While it is on, `capture_key` refuses unless you granted with
+  `--allow-clipboard-history`; the answer says so, for the agent to tell you.
+- The agent's rules (also in the skill): never read, screenshot or extract the
+  key field; never type the key anywhere; only click Copy; never enter a
+  password, 2FA code or CAPTCHA.
+
+What still needs you: signing in, 2FA, CAPTCHAs and GitHub's "sudo mode"
+password prompt. The agent must stop and ask you to do those in the browser.
+The agent's browser tools run in a browser of its own or yours; if its screenshots
+or page-text tools are used on the key field, the key is seen by the agent —
+which is why the rules forbid it; safeeasyapi cannot stop a browser tool.
+Untested on real clipboards: see the testing notes in CHANGELOG 0.7.0. The server
 speaks JSON-RPC 2.0 properly: notifications (`notifications/cancelled`,
 `notifications/initialized`, anything without an `id`) are never
 answered, a non-object message gets `-32600 Invalid Request`, bad JSON
@@ -986,7 +1034,7 @@ is UTF-8 bytes regardless of console code page, console output is
 reconfigured to replace unencodable characters instead of crashing, and
 every text file is opened as UTF-8.
 
-## Scope / limits (v0.6.3)
+## Scope / limits (v0.7.0)
 
 - `scan` finds keys by their shape. It misses a key with no recognisable
   prefix under a name that does not end in KEY, TOKEN, SECRET or PASSWORD, and

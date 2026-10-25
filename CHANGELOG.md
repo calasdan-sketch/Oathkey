@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.7.0
+
+**Agent-driven key capture.** The person says "connect GitHub"; the agent opens
+the key page, makes the key and clicks the vendor's Copy button; safeeasyapi
+takes the key from the clipboard, empties it, tests it, stores it, and tells the
+agent only `stored`. Nobody opens a terminal, copies or pastes; the key is never
+in the chat or on screen.
+
+- New MCP tool `capture_key` (`start` / `status` / `cancel`), `safeeasyapi/capture.py`.
+  Background capture in the server process; one at a time; 10-180 s; six starts
+  an hour; built-in recipes only; only a *changed*, key-shaped (service-shaped
+  when the recipe has a format) clipboard value; the old clipboard is wiped; the
+  clipboard is emptied the moment a key is taken; a rejected or unstorable key is
+  kept nowhere; results hold state words, variable names, where stored and a
+  length class - never the key or a part of it.
+- New `safeeasyapi allow-agent <service>` (`--revoke`, `--list`,
+  `--allow-clipboard-history`): the person's one-time yes, typed in a terminal,
+  kept in `~/.safeeasyapi/agent-consent.json` (not in the project, where an
+  agent could edit it). The hook refuses an agent running it.
+- Windows clipboard history on: `capture_key` refuses unless the person accepted
+  it when granting; the answer says so.
+- `request_connect` now returns `browser` steps (from the recipe, least privilege,
+  short expiry) and `rules` (never read the key field, never type it, only click
+  Copy, never enter passwords/2FA/CAPTCHA - stop and ask the person). SKILL.md,
+  README and the hook messages now say: use `capture_key`; ask the person to run
+  `connect` only when capture is unavailable. `connect --clipboard` is unchanged.
+
+Not tested against a real Windows/macOS clipboard in CI: the tests use a fake
+clipboard and a fake vendor. See the README ("Agent-driven capture").
+
 ## 0.6.3
 
 - **Security / UX.** The question after a key was taken from the clipboard

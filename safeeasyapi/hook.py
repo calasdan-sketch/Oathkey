@@ -75,25 +75,27 @@ REASON = (
     "safeeasyapi blocked this because {what} is a .env file, which holds "
     "secret API keys. Anything you read goes into your memory and the "
     "conversation log. Do not try another way to read it. If you need a key, call "
-    "the safeeasyapi tool `request_connect` (service name) - or `needs_keys` to "
-    "see which keys the project lacks - and tell the person the command it "
-    "gives (`safeeasyapi connect <service>`); never ask for the key in chat. "
+    "the safeeasyapi tool `capture_key` (service name): you click the vendor's "
+    "Copy button in the browser and safeeasyapi takes the key from the clipboard "
+    "without showing it to you (`needs_keys` lists which keys are missing). Only "
+    "if capture_key is unavailable, tell the person to run `safeeasyapi connect "
+    "<service>`; never ask for the key in chat. "
     "If a command needs the key to run, ask the person to run it themselves "
     "(`safeeasyapi run <service> -- <command>`) - do not run it for them. If "
     "you only need to know which variables exist, read .env.example instead.")
 
 WRITE_REASON = (
     "Claude can't write to {what} - your keys stay out of the chat. "
-    "Ask the safeeasyapi tool `request_connect` (or `needs_keys`) which key is "
-    "missing and tell the person to run: safeeasyapi connect <service>  "
-    "(or edit the file yourself).")
+    "Call the safeeasyapi tool `capture_key` (or `needs_keys` to see which key is "
+    "missing) - or, if capture is unavailable, tell the person to run: "
+    "safeeasyapi connect <service>  (or edit the file yourself).")
 
 
 STEAL_REASON = (
     "safeeasyapi blocked this because it would {what}. Stored keys must stay "
     "out of the chat. Do not try another way. Call the safeeasyapi tool "
-    "`request_connect` or `needs_keys` and ask the person to run the command "
-    "themselves.")
+    "`capture_key` (or `needs_keys`); if capture is unavailable, ask the person "
+    "to run the command themselves.")
 
 # Ways a shell can pull a stored key out, or print it unredacted. Each is
 # (regex, what it does). They are matched against the whole command text.
@@ -112,6 +114,8 @@ STEAL_RULES = (
     (re.compile(r"\b(?:import|from)\s+keyring\b|\bkeyring\.get_password\b", re.I), "read the keyring from code"),
     (re.compile(r"/proc/[\w$*{}/-]*/environ", re.I), "read another program's environment"),
     (re.compile(r"[/\\~]\.safeeasyapi(?![\w])", re.I), "read safeeasyapi's own store"),
+    (re.compile(r"safeeasyapi(?:\.exe)?\b(?:(?!\s--\s)[^\n;&|])*\sallow-agent\b|-m\s+safeeasyapi\b[^\n;&|]*\sallow-agent\b", re.I),
+     "give itself permission to capture keys (only the person may)"),
 )
 
 
