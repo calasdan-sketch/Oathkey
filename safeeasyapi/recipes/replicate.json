@@ -7,7 +7,9 @@
       "env_var": "REPLICATE_API_TOKEN",
       "label": "API key",
       "name": "key",
-      "pattern": "r8_[A-Za-z0-9_.-]{16,}"
+      "accept": "^r8_.{37}$",
+      "detect": "r8_[A-Za-z0-9]{37}",
+      "detect_confidence": "known"
     }
   ],
   "key_url": "https://replicate.com/account/api-tokens",
@@ -27,5 +29,8 @@
     ],
     "method": "GET",
     "url": "https://api.replicate.com/v1/account"
+  },
+  "least_privilege": {
+    "summary": "Make a separate key for this one project, so you can revoke it without breaking anything else."
   }
 }

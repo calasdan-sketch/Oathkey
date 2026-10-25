@@ -1,1 +1,27 @@
-{"display":"OpenWeather","docs":"https://openweathermap.org/appid","env_var":"OPENWEATHER_API_KEY","key_url":"https://home.openweathermap.org/api_keys","scopes":[],"service":"openweather","steps":["Sign in to openweathermap.org and open 'My API keys'","Copy a key (or generate one) - a brand-new key can take up to 2 hours to start working"],"validate":{"auth":{"param":"appid","type":"query"},"expect":[200],"method":"GET","url":"https://api.openweathermap.org/data/2.5/weather?q=London"}}
+{
+  "display": "OpenWeather",
+  "docs": "https://openweathermap.org/appid",
+  "env_var": "OPENWEATHER_API_KEY",
+  "key_url": "https://home.openweathermap.org/api_keys",
+  "scopes": [],
+  "service": "openweather",
+  "steps": [
+    "Sign in to openweathermap.org and open 'My API keys'",
+    "Copy a key (or generate one). A brand-new key can take up to 2 hours to start working - until then the check will say it is wrong",
+    "The check makes one weather request, which counts against your quota"
+  ],
+  "validate": {
+    "auth": {
+      "param": "appid",
+      "type": "query"
+    },
+    "expect": [
+      200
+    ],
+    "method": "GET",
+    "url": "https://api.openweathermap.org/data/2.5/weather?q=London"
+  },
+  "least_privilege": {
+    "summary": "Make a separate key for this one project, so you can revoke it without breaking anything else."
+  }
+}

@@ -21,5 +21,8 @@
     ],
     "method": "GET",
     "url": "https://api.deepgram.com/v1/projects"
+  },
+  "least_privilege": {
+    "summary": "Give the key the 'Member' role, not a higher one, and set an expiration."
   }
 }

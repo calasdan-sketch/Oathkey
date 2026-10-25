@@ -7,8 +7,8 @@
   "service": "postmark",
   "steps": [
     "Sign in to Postmark and open the server your app sends from",
-    "Open the server's 'API Tokens' tab",
-    "Copy the Server API token (or create a new one there)"
+    "Open that server's 'API Tokens' tab",
+    "Copy the Server API token. It must be a SERVER token - an Account token will not pass this check"
   ],
   "validate": {
     "auth": {
@@ -23,5 +23,8 @@
     },
     "method": "GET",
     "url": "https://api.postmarkapp.com/server"
+  },
+  "least_privilege": {
+    "summary": "Use the Server token of just the server your app sends from."
   }
 }

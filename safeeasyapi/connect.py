@@ -139,6 +139,15 @@ def _print_steps(recipe: dict, out=None) -> None:
     if recipe.get("scopes"):
         scopes = ", ".join(printable(s, words=True) for s in recipe["scopes"])
         out.write(f"\n  Select these scopes: {scopes}\n")
+    least = recipe.get("least_privilege")
+    if least:
+        out.write(f"\n  Least privilege: {printable(least['summary'], words=True)}\n")
+        if least.get("url"):
+            out.write(f"    ({printable(least['url'])})\n")
+    if recipe.get("unverified"):
+        what = ", ".join(printable(x) for x in recipe["unverified"])
+        out.write(f"\n  Not confirmed by the vendor's docs: {what} - "
+                  f"if something looks different on screen, trust the screen.\n")
     out.write(f"\n  Key page: {printable(recipe['key_url'])}\n\n")
     out.flush()
 
@@ -368,7 +377,7 @@ def _ask_one(field: dict, single: bool, prompt, out, clip, taken: set) -> str | 
                   f"{clipboard_mod.WAIT_SECONDS // 60} minutes; nothing is shown)\n")
         out.flush()
         try:
-            value = clipboard_mod.wait_for_key(field.get("pattern"), taken, get, clear)
+            value = clipboard_mod.wait_for_key(field.get("accept"), taken, get, clear)
         except KeyboardInterrupt:
             value = None
             out.write("\n")
@@ -535,6 +544,9 @@ def connect(
             out.write(f"  couldn't reach the API: {printable(e)}\n")
             return 1
         if ok:
+            note = getattr(ok, "note", None)
+            if note:
+                out.write(f"  \u2713 the key is real, but: {printable(note, words=True)}\n")
             break
         left = MAX_ATTEMPTS - attempt
         what = "key" if single else "credentials"

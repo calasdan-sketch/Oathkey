@@ -242,7 +242,8 @@ KNOWN_PREFIXES = (
     (None, "Shopify token", r"shp(?:at|ca|pa|ss)_[a-f0-9]{32}", "known", False),
     ("discord", "Discord bot token",
      r"[MNO][A-Za-z0-9_-]{23,25}\.[A-Za-z0-9_-]{6}\.[A-Za-z0-9_-]{27,}", "known", True),
-    ("supabase", "Supabase access token", r"sbp_[a-f0-9]{40}", "known", True),
+    ("supabase", "Supabase access token", r"sbp_[a-f0-9]{40}", "guess", True),
+    (None, "Supabase secret API key", r"sb_secret_[A-Za-z0-9_-]{20,}", "guess", False),
     ("notion", "Notion token", r"ntn_[A-Za-z0-9]{30,}", "guess", True),
     ("netlify", "Netlify token", r"nfp_[A-Za-z0-9]{30,}", "guess", True),
     ("pinecone", "Pinecone key", r"pcsk_[A-Za-z0-9_]{40,}", "guess", True),
@@ -299,13 +300,13 @@ def build_rules(catalog: dict) -> list[Rule]:
         if not trusted and not user_patterns_usable():
             continue
         for field in recipes_mod.fields(recipe):
-            pattern = field.get("pattern")
+            pattern = field.get("detect")
             if not pattern or (slug, field["name"]) in IDENTIFIER_FIELDS:
                 continue
             rx = _wrap(pattern)
             if rx is not None:
                 rules.append(Rule(slug, recipe["display"], rx, "recipe-pattern",
-                                  "known", True, _literal_prefix(pattern),
+                                  field.get("detect_confidence", "known"), True, _literal_prefix(pattern),
                                   check_body=",}" in pattern,
                                   literal=_required_literal(pattern),
                                   trusted=trusted))
@@ -394,7 +395,7 @@ def provider_for_name(name: str, catalog: dict, words: dict[str, str]) -> str | 
 def _matches_recipe(recipe: dict, value: str) -> bool:
     """Does `value` have the key format this recipe says its key has?"""
     for field in recipes_mod.fields(recipe):
-        pattern = field.get("pattern")
+        pattern = field.get("detect")
         if not pattern or (recipe.get("service"), field["name"]) in IDENTIFIER_FIELDS:
             continue
         try:

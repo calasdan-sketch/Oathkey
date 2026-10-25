@@ -592,7 +592,7 @@ class TestValidationShapes(unittest.TestCase):
 
 
 class TestShippedCatalog(unittest.TestCase):
-    EXPECTED = {"github", "stripe", "resend", "openrouter", "openai", "anthropic",
+    EXPECTED = {"paypal-sandbox", "github", "stripe", "resend", "openrouter", "openai", "anthropic",
                 "google-gemini", "groq", "mistral", "cohere", "huggingface",
                 "together", "elevenlabs", "deepgram", "assemblyai", "replicate",
                 "supabase", "vercel", "netlify", "cloudflare", "sendgrid", "mailgun",

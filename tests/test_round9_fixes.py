@@ -227,10 +227,13 @@ class TestClipboardRefusesLinks(unittest.TestCase):
                    "tavily": "tvly-abcdefghijklmnop1234", "openrouter": "sk-or-v1-abcdefghijklmnop12"}
         for slug, sample in samples.items():
             field = recipes_mod.fields(cat[slug])[0]
-            self.assertTrue(field["pattern"], slug)
-            self.assertTrue(clipboard_mod.looks_like(sample, field["pattern"]), slug)
-            self.assertFalse(clipboard_mod.looks_like("https://example.com/" + sample, field["pattern"]), slug)
-            self.assertFalse(clipboard_mod.looks_like("justaword", field["pattern"]), slug)
+            # scan's heuristic (detect) exists for all of these; the copy-and-go
+            # gate (accept) only for the documented shapes (see test_recipe_split)
+            self.assertTrue(field["detect"], slug)
+            gate = field["accept"]       # None = generic key shape
+            self.assertTrue(clipboard_mod.looks_like(sample, gate), slug)
+            self.assertFalse(clipboard_mod.looks_like("https://example.com/" + sample, gate), slug)
+            self.assertFalse(clipboard_mod.looks_like("justaword", gate), slug)
 
 
 class TestFolderNamedEnv(unittest.TestCase):

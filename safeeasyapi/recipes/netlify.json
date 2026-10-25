@@ -9,7 +9,8 @@
     "Sign in to Netlify; this is User settings → Applications → Personal access tokens",
     "Click 'New access token'",
     "Enter a descriptive name and choose an expiration",
-    "Click 'Generate token', copy it and click 'Done' — it is shown exactly once"
+    "Click 'Generate token', copy it and click 'Done' — it is shown exactly once",
+    "A personal token cannot reach teams that require SAML sign-in until you authorise it for them"
   ],
   "validate": {
     "auth": {
@@ -20,5 +21,8 @@
     ],
     "method": "GET",
     "url": "https://api.netlify.com/api/v1/user"
+  },
+  "least_privilege": {
+    "summary": "Set a short expiration; a personal token has your whole account's reach, so do not share it."
   }
 }

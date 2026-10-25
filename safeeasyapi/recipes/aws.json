@@ -1,1 +1,49 @@
-{"display":"AWS (access key)","docs":"https://docs.aws.amazon.com/IAM/latest/UserGuide/id_credentials_access-keys.html","env_var":"AWS_ACCESS_KEY_ID","fields":[{"env_var":"AWS_ACCESS_KEY_ID","label":"Access key ID","name":"access_key_id","pattern":"^(AKIA|ASIA)[A-Z0-9]{16}$"},{"env_var":"AWS_SECRET_ACCESS_KEY","label":"Secret access key","name":"secret_access_key"}],"key_url":"https://console.aws.amazon.com/iam/home#/security_credentials","scopes":[],"service":"aws","steps":["Prefer an IAM user with only the permissions your app needs, not the root account","IAM > Users > your user > Security credentials > Create access key","Copy the Access key ID and the Secret access key - the secret is shown once"],"validate":{"auth":{"region":"us-east-1","service":"sts","type":"aws_sigv4"},"expect":[200],"method":"GET","trusted_hosts":["sts.amazonaws.com"],"url":"https://sts.amazonaws.com/?Action=GetCallerIdentity&Version=2011-06-15"}}
+{
+  "display": "AWS (access key)",
+  "docs": "https://docs.aws.amazon.com/IAM/latest/UserGuide/id_credentials_access-keys.html",
+  "env_var": "AWS_ACCESS_KEY_ID",
+  "fields": [
+    {
+      "env_var": "AWS_ACCESS_KEY_ID",
+      "label": "Access key ID",
+      "name": "access_key_id",
+      "accept": "^AKIA[A-Z0-9]{12,}$",
+      "detect": "(AKIA|ASIA)[A-Z0-9]{16}",
+      "detect_confidence": "guess"
+    },
+    {
+      "env_var": "AWS_SECRET_ACCESS_KEY",
+      "label": "Secret access key",
+      "name": "secret_access_key"
+    }
+  ],
+  "key_url": "https://console.aws.amazon.com/iam/home#/security_credentials",
+  "scopes": [],
+  "service": "aws",
+  "steps": [
+    "Prefer an IAM user with only the permissions your app needs, not the root account",
+    "IAM > Users > your user > Security credentials > Create access key",
+    "Pick the use case 'Other' and click Next (the console suggests alternatives to long-term keys; use them if they fit)",
+    "Copy the Access key ID and the Secret access key - the secret is shown once",
+    "Temporary keys (ASIA...) also need a session token, which this recipe does not collect"
+  ],
+  "validate": {
+    "auth": {
+      "region": "us-east-1",
+      "service": "sts",
+      "type": "aws_sigv4"
+    },
+    "expect": [
+      200
+    ],
+    "method": "POST",
+    "trusted_hosts": [
+      "sts.amazonaws.com"
+    ],
+    "url": "https://sts.amazonaws.com/",
+    "body": "Action=GetCallerIdentity&Version=2011-06-15"
+  },
+  "least_privilege": {
+    "summary": "Give the IAM user only the actions your app needs. This check (GetCallerIdentity) needs no permission at all."
+  }
+}

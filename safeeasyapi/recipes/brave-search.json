@@ -6,7 +6,7 @@
   "scopes": [],
   "service": "brave-search",
   "steps": [
-    "Sign in to the Brave Search API dashboard (a free plan exists; it needs a card on file)",
+    "Sign in to the Brave Search API dashboard and activate a plan on the Plans page (a card is required)",
     "Open 'API Keys' and click 'Add API key'",
     "Pick the subscription it belongs to, name it and copy the key",
     "Note: validation runs one tiny search (q=ping), which counts as 1 request on your plan"
@@ -29,5 +29,8 @@
       422
     ],
     "url": "https://api.search.brave.com/res/v1/web/search?q=ping"
+  },
+  "least_privilege": {
+    "summary": "Make a separate key for this one project, so you can revoke it without breaking anything else."
   }
 }

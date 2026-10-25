@@ -6,10 +6,9 @@
   "scopes": [],
   "service": "mailgun",
   "steps": [
-    "Sign in to Mailgun; this is Profile menu → API Security",
-    "Under 'Mailgun API keys' click 'Add new key'",
-    "Give it a description and a role, click 'Create Key' and copy it — it is shown exactly once",
-    "EU account? Your API host is api.eu.mailgun.net — save your own recipe with that validation URL (`safeeasyapi add`)"
+    "Sign in to Mailgun and open Dashboard > Account Settings > API Keys (menu names can change)",
+    "Use your main account API key - the check lists your domains, which a domain 'sending key' cannot do (a valid sending key would look wrong)",
+    "Copy the key"
   ],
   "validate": {
     "auth": {
@@ -24,5 +23,12 @@
       "api.mailgun.net"
     ],
     "url": "https://api.mailgun.net/v4/domains"
+  },
+  "unverified": [
+    "key_url path",
+    "the EU host api.eu.mailgun.net (EU accounts: save your own recipe with `safeeasyapi add`)"
+  ],
+  "least_privilege": {
+    "summary": "For sending only, a domain sending key is safer - but it cannot pass this check. Keep the main key out of apps that only send."
   }
 }

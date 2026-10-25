@@ -1,1 +1,43 @@
-{"display":"PayPal (live REST app)","docs":"https://developer.paypal.com/api/rest/authentication/","env_var":"PAYPAL_CLIENT_ID","fields":[{"env_var":"PAYPAL_CLIENT_ID","label":"Client ID","name":"client_id"},{"env_var":"PAYPAL_CLIENT_SECRET","label":"Secret","name":"client_secret"}],"key_url":"https://developer.paypal.com/dashboard/applications/live","scopes":[],"service":"paypal","steps":["Sign in to developer.paypal.com and switch the toggle to Live (Sandbox keys won't validate here)","Open Apps & Credentials and create an app (or open yours)","Copy the Client ID, then click Show under Secret and copy it"],"validate":{"auth":{"token_only":true,"token_url":"https://api-m.paypal.com/v1/oauth2/token","type":"oauth2_client_credentials"},"expect":[200],"method":"GET","url":"https://api-m.paypal.com/v1/oauth2/token"}}
+{
+  "display": "PayPal (live REST app)",
+  "docs": "https://developer.paypal.com/api/rest/authentication/",
+  "env_var": "PAYPAL_CLIENT_ID",
+  "fields": [
+    {
+      "env_var": "PAYPAL_CLIENT_ID",
+      "label": "Client ID",
+      "name": "client_id"
+    },
+    {
+      "env_var": "PAYPAL_CLIENT_SECRET",
+      "label": "Secret",
+      "name": "client_secret"
+    }
+  ],
+  "key_url": "https://developer.paypal.com/dashboard/applications/live",
+  "scopes": [],
+  "service": "paypal",
+  "steps": [
+    "Sign in to developer.paypal.com and switch the toggle to Live (use the 'paypal-sandbox' recipe for Sandbox keys)",
+    "Open Apps & Credentials and create an app (or open yours)",
+    "Copy the Client ID, then click Show under Secret and copy it"
+  ],
+  "validate": {
+    "auth": {
+      "token_only": true,
+      "token_url": "https://api-m.paypal.com/v1/oauth2/token",
+      "type": "oauth2_client_credentials"
+    },
+    "expect": [
+      200
+    ],
+    "method": "GET",
+    "url": "https://api-m.paypal.com/v1/oauth2/token"
+  },
+  "unverified": [
+    "validate.auth.token_url (PayPal's docs show the sandbox host; the live host is the usual one but is not shown there)"
+  ],
+  "least_privilege": {
+    "summary": "Create a separate live app for this project with only the features it needs."
+  }
+}

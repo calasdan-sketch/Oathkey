@@ -7,7 +7,8 @@
       "env_var": "GROQ_API_KEY",
       "label": "API key",
       "name": "key",
-      "pattern": "gsk_[A-Za-z0-9_.-]{16,}"
+      "detect": "gsk_[A-Za-z0-9_.-]{16,}",
+      "detect_confidence": "guess"
     }
   ],
   "key_url": "https://console.groq.com/keys",
@@ -17,7 +18,7 @@
     "Sign in to GroqCloud (console.groq.com)",
     "Click 'Create API Key'",
     "Name it and click 'Submit'",
-    "Copy the key (starts with 'gsk_') — it is shown exactly once"
+    "Copy the key - it is shown exactly once"
   ],
   "validate": {
     "auth": {
@@ -28,5 +29,8 @@
     ],
     "method": "GET",
     "url": "https://api.groq.com/openai/v1/models"
+  },
+  "least_privilege": {
+    "summary": "Make a separate key for this one project, so you can revoke it without breaking anything else."
   }
 }

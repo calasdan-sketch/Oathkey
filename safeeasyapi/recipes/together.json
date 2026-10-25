@@ -6,7 +6,7 @@
   "scopes": [],
   "service": "together",
   "steps": [
-    "Sign in to Together AI; this is your project's API keys page",
+    "Sign in to Together AI and open your project's API keys page (keys belong to a project)",
     "Click the button to create a new key and name it",
     "Copy the key — it is shown exactly once"
   ],
@@ -19,5 +19,11 @@
     ],
     "method": "GET",
     "url": "https://api.together.ai/v1/models"
+  },
+  "unverified": [
+    "validate.url (the vendor's API spec does not list a models endpoint we could find)"
+  ],
+  "least_privilege": {
+    "summary": "Keys are tied to a project; use a project made for this app."
   }
 }

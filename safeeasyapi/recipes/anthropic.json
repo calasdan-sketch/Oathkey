@@ -7,7 +7,9 @@
       "env_var": "ANTHROPIC_API_KEY",
       "label": "API key",
       "name": "key",
-      "pattern": "sk-ant-[A-Za-z0-9_.-]{16,}"
+      "accept": "^sk-ant-",
+      "detect": "sk-ant-[A-Za-z0-9_.-]{16,}",
+      "detect_confidence": "guess"
     }
   ],
   "key_url": "https://platform.claude.com/settings/keys",
@@ -17,7 +19,8 @@
     "Sign in to the Claude Console (platform.claude.com)",
     "Click 'Create key'",
     "Name the key, choose an expiration and set 'Linked account' to yourself",
-    "Copy the key (starts with 'sk-ant-') — it is shown exactly once"
+    "Copy the key (Anthropic keys normally begin with 'sk-ant-') - it is shown exactly once",
+    "If the check answers 400, the key may need to be tied to a workspace in the Console; the key is not necessarily bad"
   ],
   "validate": {
     "auth": {
@@ -35,5 +38,8 @@
       "api.anthropic.com"
     ],
     "url": "https://api.anthropic.com/v1/models"
+  },
+  "least_privilege": {
+    "summary": "Create the key inside the workspace for this project, with an expiration, so it can be revoked alone."
   }
 }

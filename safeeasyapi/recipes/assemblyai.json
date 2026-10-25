@@ -21,5 +21,8 @@
     ],
     "method": "GET",
     "url": "https://api.assemblyai.com/v2/transcript"
+  },
+  "least_privilege": {
+    "summary": "Make a separate key for this one project, so you can revoke it without breaking anything else."
   }
 }
