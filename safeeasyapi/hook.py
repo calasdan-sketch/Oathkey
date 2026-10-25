@@ -2,23 +2,34 @@
 
 Claude Code can run a small program before every tool call (a "PreToolUse
 hook") and that program can say no. `hook install` adds one to Claude Code's
-settings; `hook check` is that program. When the agent tries to Read, Grep
-or run a Bash command that touches a .env file, the answer is "deny" and the
-reason is handed back to the agent in plain words.
+settings; `hook check` is that program. When the agent tries to Read, Grep,
+or run a Bash, PowerShell or Monitor command that touches a .env file, the
+answer is "deny" and the reason is handed back to the agent in plain words.
 
 This is a guardrail, not a sandbox. It catches the direct ways (cat .env,
 Read .env, grep KEY .env, source .env). A determined or confused program can
-still build a file name out of pieces; keep keys out of the files too
-(`safeeasyapi connect <service> --store keychain`).
+still build a file name out of pieces, sweep a folder (`grep -r KEY .`) or go
+through a tool this hook is not attached to; keep keys out of the files too
+(`safeeasyapi connect <service> --store keychain`). The README lists what it
+does NOT stop.
+
+Two safety rules for the code below:
+* Nothing read from a settings file is ever executed. `hook status` runs only
+  the command THIS install would generate, never one it found in a file (a
+  cloned repository's .claude/settings.json is not trusted).
+* Our own entry is recognised by a marker or by an exact command, never by
+  "it looks like ours", and `install` always writes into a group of its own.
 
 The hook format lives in decision_json() and the settings shape in
-hook_entry(): the two places to change if Claude Code changes either.
-Checked against https://code.claude.com/docs/en/hooks (see the README for what
-could not be confirmed).
+hook_handler() / hook_entry(): the places to change if Claude Code changes
+either. Checked against https://code.claude.com/docs/en/hooks (see the
+README for what could not be confirmed).
 """
 
 from __future__ import annotations
 
+import datetime
+import hashlib
 import json
 import os
 import re
@@ -31,9 +42,19 @@ import tempfile
 
 from . import recipes as recipes_mod
 
-MATCHER = "Read|Grep|Bash"
+# Tools that can show a file's contents or run a command that does:
+#   Read, Grep      - the file tools (tool_input: file_path / path / glob)
+#   Bash, PowerShell - shell commands (tool_input.command)
+#   Monitor         - runs a command in the background and streams its output
+# Edit / Write / NotebookEdit / Glob are deliberately NOT matched: they do not
+# hand the file's contents to the agent (Edit and NotebookEdit need a prior
+# Read, which is blocked; Glob lists names only), and refusing Write would
+# stop the agent from creating a .env for you. See the README.
+MATCHER = "Read|Grep|Bash|PowerShell|Monitor"
+MARKER = "safeeasyapi hook"      # the statusMessage that marks our handler
 HOOK_TIMEOUT = 10            # seconds (Claude Code's own default is 600)
-MAX_STDIN = 1024 * 1024
+MAX_STDIN = 64 * 1024 * 1024  # read this much of Claude Code's JSON, no less
+BACKUPS_TO_KEEP = 20
 TEMPLATE_SUFFIXES = frozenset({"example", "sample", "template", "dist",
                                "defaults", "default", "tpl", "schema"})
 _ON_WINDOWS = os.name == "nt"
@@ -86,9 +107,9 @@ def _strings(value) -> list[str]:
 
 
 def touched_text(payload: dict) -> list[str]:
-    """The strings of a tool call that name files. One small function so the
-    tool field names are in one place (Read: file_path; Grep: path, glob;
-    Bash: command)."""
+    """The strings of a tool call that name files or run commands. One small
+    function so the tool field names are in one place (Read: file_path, path;
+    Grep: path, glob; Bash and PowerShell: command; Monitor: command)."""
     tool = payload.get("tool_name")
     args = payload.get("tool_input")
     if not isinstance(args, dict):
@@ -97,8 +118,13 @@ def touched_text(payload: dict) -> list[str]:
         return _strings(args.get("file_path")) + _strings(args.get("path"))
     if tool == "Grep":
         return _strings(args.get("path")) + _strings(args.get("glob"))
-    if tool == "Bash":
+    if tool in ("Bash", "PowerShell"):
         return _strings(args.get("command"))
+    if tool == "Monitor":
+        # the Monitor input is not documented field by field: look at every
+        # text it carries (a command, or a WebSocket address) except the note
+        return [v for k, v in args.items()
+                if isinstance(v, str) and k != "description"]
     return []
 
 
@@ -123,14 +149,37 @@ def decision_json(reason: str) -> dict:
     }}
 
 
+
+
+def _read_all(stdin) -> str:
+    """Everything Claude Code sent (up to MAX_STDIN), as text. Bytes that are
+    not UTF-8 are replaced, never an error."""
+    source = getattr(stdin, "buffer", None) or stdin
+    data = source.read(MAX_STDIN)
+    if isinstance(data, bytes):
+        return data.decode("utf-8", "replace")
+    return data
+
+
 def check(stdin_text: str) -> tuple[int, str]:
     """The hook program: (exit status, stdout text). Only ever answers "deny";
     for everything else it says nothing, so Claude Code's normal permission
-    rules still apply (an "allow" here would skip them). Bad input is a
-    non-blocking error (status 1): a broken hook must not stop all work."""
+    rules still apply (an "allow" here would skip them).
+
+    Input that is not the JSON Claude Code sends (too big to parse, cut off,
+    nested too deeply) is NOT waved through: the raw text is searched for a
+    .env file name and, if one is there, the call is refused. Only when that
+    finds nothing is it a non-blocking error (status 1): a broken hook must
+    not stop all work unless you installed it with --fail-closed."""
     try:
         payload = json.loads(stdin_text)
-    except ValueError:
+    except (ValueError, RecursionError):
+        # undo JSON's escapes so that "cat\t.env" or "...\\.env" still shows its name
+        flat = re.sub(r'\\[nrtbf"]', " ", stdin_text.replace("\\\\", "/"))
+        hits = find_env_files(flat)
+        if hits:
+            what = recipes_mod.printable(hits[0])
+            return 0, json.dumps(decision_json(REASON.format(what=f"'{what}'"))) + "\n"
         return 1, ""
     name = decide(payload)
     if name is None:
@@ -144,7 +193,7 @@ def cmd_check(stdin=None, out=None, err=None) -> int:
     out = out or sys.stdout
     err = err or sys.stderr
     try:
-        text = stdin.read(MAX_STDIN)
+        text = _read_all(stdin)
     except (OSError, ValueError):
         err.write("safeeasyapi hook check: could not read its input.\n")
         return 1
@@ -167,12 +216,6 @@ def project_settings_path(cwd: str | None = None) -> str:
     return os.path.join(cwd or os.getcwd(), ".claude", "settings.json")
 
 
-def _quote(arg: str) -> str:
-    if _ON_WINDOWS:
-        return '"' + arg.replace('"', '\\"') + '"' if re.search(r'[\s&()^%!]', arg) else arg
-    return shlex.quote(arg)
-
-
 def console_script() -> str | None:
     """Absolute path of this install's `safeeasyapi` program, or None."""
     name = "safeeasyapi.exe" if _ON_WINDOWS else "safeeasyapi"
@@ -182,7 +225,8 @@ def console_script() -> str | None:
     except (KeyError, OSError):
         pass
     found = shutil.which("safeeasyapi")
-    if found:
+    # never a program that sits in the current folder (Windows looks there first)
+    if found and os.path.dirname(os.path.abspath(found)) != os.getcwd():
         candidates.append(found)
     for path in candidates:
         path = os.path.abspath(path)
@@ -191,30 +235,91 @@ def console_script() -> str | None:
     return None
 
 
-def hook_command() -> str:
-    """The shell command Claude Code will run: the installed program by its
-    full path, so nothing is looked up on a search path an agent could change;
-    or, where there is no such program, this Python in isolated mode (-I:
-    ignores the current folder and PYTHON* variables)."""
+def hook_argv() -> list[str]:
+    """The program and arguments Claude Code will start: the installed program
+    by its full path, so nothing is looked up on a search path an agent could
+    change; or, where there is no such program, this Python in isolated mode
+    (-I: ignores the current folder and PYTHON* variables)."""
     script = console_script()
     if script:
-        return f"{_quote(script)} hook check"
-    return f"{_quote(os.path.abspath(sys.executable))} -I -m safeeasyapi hook check"
+        return [script, "hook", "check"]
+    return [os.path.abspath(sys.executable), "-I", "-m", "safeeasyapi", "hook", "check"]
 
 
-def hook_entry(command: str | None = None) -> dict:
+def _shell_quote(arg: str) -> str:
+    if _ON_WINDOWS:
+        # forward slashes: a backslash path is eaten by Git Bash
+        arg = arg.replace("\\", "/")
+        return '"' + arg + '"' if re.search(r"[\s&()^%!]", arg) else arg
+    return shlex.quote(arg)
+
+
+def hook_command() -> str:
+    """The command as ONE string, for Claude Code's shell form (`sh -c` on
+    macOS and Linux, Git Bash on Windows). Used on POSIX and, on Windows, only
+    with --shell-form (older Claude Code)."""
+    return " ".join(_shell_quote(a) for a in hook_argv())
+
+
+def hook_handler(shell_form: bool | None = None, fail_closed: bool = False) -> dict:
+    """The handler Claude Code stores: on Windows the documented exec form
+    (`command` is the program, `args` its arguments, no shell, so a backslash
+    or a space in the path cannot be mangled); elsewhere the shell string,
+    which every Claude Code version understands. `shell_form=True` forces the
+    string on Windows too, for a Claude Code that predates `args`."""
+    if shell_form is None:
+        shell_form = not _ON_WINDOWS
+    handler: dict = {"type": "command"}
+    if shell_form:
+        handler["command"] = hook_command()
+    else:
+        argv = hook_argv()
+        handler["command"], handler["args"] = argv[0], argv[1:]
+    handler["timeout"] = HOOK_TIMEOUT
+    handler["statusMessage"] = MARKER
+    if fail_closed:
+        handler["onFailure"] = "block"      # Claude Code 2.1.295 or later
+    return handler
+
+
+def hook_entry(handler: dict | None = None) -> dict:
     """One matcher group in settings.json -> hooks -> PreToolUse."""
-    return {"matcher": MATCHER, "hooks": [{
-        "type": "command",
-        "command": command or hook_command(),
-        "timeout": HOOK_TIMEOUT,
-    }]}
+    return {"matcher": MATCHER, "hooks": [handler or hook_handler()]}
+
+
+def _unquote(token: str) -> str:
+    if len(token) >= 2 and token[0] == token[-1] and token[0] in "\"'":
+        return token[1:-1]
+    return token
+
+
+def _is_our_command_string(cmd: str) -> bool:
+    """Exactly `<safeeasyapi program> hook check` or `<python> -I -m
+    safeeasyapi hook check` - what 0.5.0 wrote - and nothing else: no extra
+    words, no `&&`, no other program."""
+    try:
+        tokens = [_unquote(t) for t in shlex.split(cmd, posix=False)]
+    except ValueError:
+        return False
+    if tokens[-2:] != ["hook", "check"]:
+        return False
+    if len(tokens) == 3:
+        return re.split(r"[\\/]", tokens[0])[-1].lower() in ("safeeasyapi", "safeeasyapi.exe")
+    return len(tokens) == 6 and tokens[2:4] == ["-m", "safeeasyapi"] and tokens[1] == "-I"
 
 
 def is_ours(handler) -> bool:
-    cmd = handler.get("command") if isinstance(handler, dict) else None
-    return (isinstance(cmd, str) and cmd.rstrip().endswith("hook check")
-            and "safeeasyapi" in cmd)
+    """Is this handler the one safeeasyapi wrote? Yes if it carries our
+    marker, or if its command is exactly one that 0.5.0 wrote. A hook that
+    merely mentions safeeasyapi (`safeeasyapi scan`, `... hook check; evil`)
+    is not ours."""
+    if not isinstance(handler, dict):
+        return False
+    if handler.get("statusMessage") == MARKER:
+        return True
+    cmd = handler.get("command")
+    return (isinstance(cmd, str) and "args" not in handler
+            and _is_our_command_string(cmd))
 
 
 class SettingsError(Exception):
@@ -261,31 +366,50 @@ def _pretool_list(data: dict, create: bool) -> list | None:
     return groups
 
 
+def _inner(group):
+    inner = group.get("hooks") if isinstance(group, dict) else None
+    return inner if isinstance(inner, list) else None
+
+
 def _our_handlers(groups: list):
     for group in groups:
-        inner = group.get("hooks") if isinstance(group, dict) else None
-        if isinstance(inner, list):
-            for handler in inner:
-                if is_ours(handler):
-                    yield group, handler
+        for handler in _inner(group) or ():
+            if is_ours(handler):
+                yield group, handler
 
 
-def merge_install(data: dict, command: str) -> str:
-    """Add the hook to `data` in place without touching anyone else's.
-    Returns "added", "updated" or "unchanged"."""
+def _is_our_own_group(group) -> bool:
+    inner = _inner(group)
+    return bool(inner) and all(is_ours(h) for h in inner)
+
+
+def merge_install(data: dict, handler: dict | str) -> str:
+    """Put our hook into `data` in place without touching anyone else's.
+    It always lives in a matcher group of its own. A group that holds other
+    people's handlers is never edited, except that OUR handler is taken out
+    of it (an older install may have put it there). Returns "added",
+    "updated" or "unchanged"."""
+    if isinstance(handler, str):                    # a bare command string
+        handler = dict(hook_handler(shell_form=True), command=handler)
     groups = _pretool_list(data, create=True)
-    mine = list(_our_handlers(groups))
-    if not mine:
-        groups.append(hook_entry(command))
-        return "added"
+    desired = hook_entry(handler)
     changed = False
-    for group, handler in mine:
-        if handler.get("command") != command or handler.get("timeout") != HOOK_TIMEOUT:
-            handler["command"], handler["timeout"] = command, HOOK_TIMEOUT
+    for group in list(groups):                      # our handler in a shared group
+        inner = _inner(group)
+        if inner and not _is_our_own_group(group) and any(is_ours(h) for h in inner):
+            group["hooks"] = [h for h in inner if not is_ours(h)]
             changed = True
-        if group.get("matcher") != MATCHER:
-            group["matcher"] = MATCHER
-            changed = True
+    own = [g for g in groups if _is_our_own_group(g)]
+    if not own:
+        groups.append(desired)
+        return "added"
+    first = own[0]
+    for extra in own[1:]:
+        groups.remove(extra)
+        changed = True
+    if first.get("matcher") != desired["matcher"] or first.get("hooks") != desired["hooks"]:
+        first["matcher"], first["hooks"] = desired["matcher"], desired["hooks"]
+        changed = True
     return "updated" if changed else "unchanged"
 
 
@@ -297,8 +421,8 @@ def merge_uninstall(data: dict) -> int:
         return 0
     removed = 0
     for group in list(groups):
-        inner = group.get("hooks") if isinstance(group, dict) else None
-        if not isinstance(inner, list):
+        inner = _inner(group)
+        if inner is None:
             continue
         keep = [h for h in inner if not is_ours(h)]
         if len(keep) != len(inner):
@@ -314,14 +438,42 @@ def merge_uninstall(data: dict) -> int:
     return removed
 
 
-def save_settings(path: str, data: dict, had_file: bool) -> None:
-    """Write atomically; keep one copy of the old file next to it."""
-    folder = os.path.dirname(os.path.abspath(path))
+def backup_dir() -> str:
+    """Where copies of changed settings files go: under the user's home, never
+    inside a project (a project's .claude/ folder is often committed)."""
+    return os.path.join(os.path.expanduser("~"), ".safeeasyapi", "backups")
+
+
+def _backup(target: str) -> str:
+    folder = backup_dir()
+    os.makedirs(folder, mode=0o700, exist_ok=True)
+    tag = hashlib.sha256(target.encode("utf-8", "replace")).hexdigest()[:8]
+    stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%S%f")
+    dest = os.path.join(folder, f"{tag}-{os.path.basename(target)}-{stamp}.bak")
+    shutil.copy2(target, dest)
+    try:
+        os.chmod(dest, 0o600)
+    except OSError:
+        pass
+    old = sorted(n for n in os.listdir(folder)
+                 if n.startswith(tag + "-") and n.endswith(".bak"))
+    for name in old[:-BACKUPS_TO_KEEP]:
+        try:
+            os.unlink(os.path.join(folder, name))
+        except OSError:
+            pass
+    return dest
+
+
+def save_settings(path: str, data: dict, had_file: bool) -> str | None:
+    """Write atomically. A symbolic link is followed, so the file it points to
+    is changed and the link stays a link. Every change first copies the old
+    file to a new backup under ~/.safeeasyapi/backups (the last 20 per file are
+    kept); returns the backup's path, or None for a new file."""
+    target = os.path.realpath(path)
+    folder = os.path.dirname(target)
     os.makedirs(folder, exist_ok=True)
-    if had_file:
-        backup = path + ".safeeasyapi-backup"
-        if not os.path.exists(backup):
-            shutil.copy2(path, backup)
+    backup = _backup(target) if had_file and os.path.isfile(target) else None
     fd, tmp = tempfile.mkstemp(prefix=".settings-", suffix=".tmp", dir=folder)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
@@ -329,26 +481,37 @@ def save_settings(path: str, data: dict, had_file: bool) -> None:
             f.write("\n")
         if had_file:
             try:
-                os.chmod(tmp, os.stat(path).st_mode & 0o777)
+                os.chmod(tmp, os.stat(target).st_mode & 0o777)
             except OSError:
                 pass
-        os.replace(tmp, path)
+        os.replace(tmp, target)
     except BaseException:
         try:
             os.unlink(tmp)
         except OSError:
             pass
         raise
+    return backup
 
 
-def self_test(command: str, run=subprocess.run) -> bool:
-    """Run the installed command on a made-up Read of .env and see that it
-    says no."""
+def self_test(handler: dict | str, run=subprocess.run) -> bool:
+    """Start the hook the way Claude Code does - exec form: the program with
+    its arguments, no shell; shell form: `sh -c <string>` - on a made-up Read
+    of .env and see that it says no. `handler` is always one THIS install
+    generated, never one read from a file."""
+    if isinstance(handler, str):
+        handler = {"command": handler}
     sample = json.dumps({"hook_event_name": "PreToolUse", "tool_name": "Read",
                          "tool_input": {"file_path": "/tmp/.env"}})
+    if "args" in handler:
+        argv = [handler["command"], *handler["args"]]
+    elif _ON_WINDOWS:
+        argv = hook_argv()          # Git Bash cannot be started faithfully here
+    else:
+        argv = ["/bin/sh", "-c", handler["command"]]
     try:
-        done = run(command, input=sample.encode(), capture_output=True,
-                   shell=True, timeout=30)
+        done = run(argv, input=sample.encode(), capture_output=True,
+                   shell=False, timeout=30, cwd=tempfile.gettempdir())
         answer = json.loads(done.stdout.decode("utf-8", "replace"))
         return answer["hookSpecificOutput"]["permissionDecision"] == "deny"
     except Exception:
@@ -359,6 +522,13 @@ def _resolve_path(args) -> str:
     if getattr(args, "settings", None):
         return args.settings
     return project_settings_path() if args.project else user_settings_path()
+
+
+def _backup_note(backup: str | None, project: bool) -> str:
+    text = ""
+    if backup:
+        text += f"  The old file was copied to {recipes_mod.printable(backup)}\n"
+    return text
 
 
 def cmd_hook(args, out=None, err=None, run=subprocess.run) -> int:
@@ -375,26 +545,34 @@ def cmd_hook(args, out=None, err=None, run=subprocess.run) -> int:
         data = load_settings(path)
         had_file = os.path.exists(path)
         if action == "install":
-            command = hook_command()
-            result = merge_install(data, command)
+            handler = hook_handler(shell_form=True if getattr(args, "shell_form", False) else None,
+                                   fail_closed=getattr(args, "fail_closed", False))
+            result = merge_install(data, handler)
+            backup = None
             if result != "unchanged":
-                save_settings(path, data, had_file)
+                backup = save_settings(path, data, had_file)
             out.write(f"  {'Already installed' if result == 'unchanged' else result.capitalize()}"
                       f": the safeeasyapi hook in {shown}\n")
-            out.write("  From now on Claude Code asks it before every Read, Grep and "
-                      "Bash call, and it refuses .env files.\n")
+            out.write(_backup_note(backup, getattr(args, "project", False)))
+            out.write("  From now on Claude Code asks it before every Read, Grep, Bash, "
+                      "PowerShell and Monitor call, and it refuses .env files.\n")
+            if getattr(args, "project", False):
+                out.write("  This is the project's settings file: commit it if you want the "
+                          "team to have the hook. Your hook's backups are kept outside the "
+                          "project, in ~/.safeeasyapi/backups.\n")
             out.write("  Restart Claude Code (or open /hooks) so it picks the change up.\n")
-            if not self_test(command, run):
+            if not self_test(handler, run):
                 out.write("  Warning: a test run of the hook did not answer as expected, "
                           "so it may not be protecting you yet.\n"
-                          f"  Command: {recipes_mod.printable(command)}\n")
+                          f"  Command: {recipes_mod.printable(_describe(handler))}\n")
                 return 1
             return 0
         removed = merge_uninstall(data)
         if removed:
-            save_settings(path, data, had_file)
+            backup = save_settings(path, data, had_file)
             out.write(f"  Removed the safeeasyapi hook from {shown}. "
                       f"Your other hooks were not touched.\n")
+            out.write(_backup_note(backup, False))
         else:
             out.write(f"  No safeeasyapi hook found in {shown}; nothing changed.\n")
         return 0
@@ -406,10 +584,17 @@ def cmd_hook(args, out=None, err=None, run=subprocess.run) -> int:
         return 2
 
 
+def _describe(handler: dict) -> str:
+    return " ".join([handler.get("command", ""), *handler.get("args", [])])
+
+
 def _status(args, out, run) -> int:
     paths = ([args.settings] if getattr(args, "settings", None)
              else [user_settings_path(), project_settings_path()])
+    expected = hook_handler()
+    tested: bool | None = None
     installed = False
+    problem = False
     for path in paths:
         shown = recipes_mod.printable(path)
         try:
@@ -418,15 +603,31 @@ def _status(args, out, run) -> int:
         except SettingsError as e:
             out.write(f"  {shown}: cannot tell - {recipes_mod.printable(e)}\n")
             continue
-        mine = [h for _g, h in _our_handlers(groups)]
+        mine = list(_our_handlers(groups))
         if not mine:
             out.write(f"  {shown}: not installed\n")
             continue
         installed = True
-        command = mine[0].get("command", "")
-        works = self_test(command, run)
-        out.write(f"  {shown}: installed, "
-                  f"{'blocks a test read of .env' if works else 'but a test run did NOT block - reinstall it'}\n")
+        group, handler = mine[0]
+        # NOTHING in the file is run: only the command this install generates
+        if tested is None:
+            tested = self_test(expected, run)
+        notes = []
+        if group.get("matcher") != MATCHER:
+            notes.append("it watches fewer tools than this version (run "
+                         "`safeeasyapi hook install` to update it)")
+        same = (handler.get("command") == expected["command"]
+                and handler.get("args") == expected.get("args"))
+        if not same:
+            notes.append("its command is not the one this installation would write "
+                         "(not run; `safeeasyapi hook install` rewrites it)")
+        if tested:
+            result = "this install's hook blocks a test read of .env"
+        else:
+            result = "but a test run of this install's hook did NOT block - reinstall it"
+            problem = True
+        extra = ("; " + "; ".join(notes)) if notes else ""
+        out.write(f"  {shown}: installed, {result}{extra}\n")
     if not installed:
         out.write("  Not installed. Run: safeeasyapi hook install\n")
-    return 0 if installed else 1
+    return 0 if installed and not problem else 1

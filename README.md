@@ -72,18 +72,33 @@ safeeasyapi scan --all            # every text file, not just the agent-readable
 
 It reads `.env` files (`.env`, `.env.local`, `prod.env` ...), `CLAUDE.md`,
 `AGENTS.md`, `GEMINI.md`, `.cursorrules`, `CLAUDE.local.md`,
-`.windsurfrules`, `.mcp.json` and everything inside a `.claude` folder. It
-skips `.git`, `node_modules`, binary files, files over 1 MB, pipes and
-devices, and links that lead outside the folder; it never opens
-anything but a regular file, so it cannot hang on one.
+`.windsurfrules`, `.mcp.json` and everything inside a `.claude` folder. UTF-8
+and UTF-16 files (what PowerShell's `>` writes) are both read. It skips `.git`,
+`node_modules`, build output (`target`, `build`, `dist`, `.next` ...),
+binary files, pipes and devices, and links that lead outside the folder; it
+never opens anything but a regular file, so it cannot hang on one.
 
 What it recognises: the key format of each built-in recipe (OpenAI,
 Anthropic, Stripe, GitHub, AWS ...), a few well-known prefixes for services
-without a recipe (Slack, npm, Shopify, Google, a PEM private key), and any
-`NAME=value` where the name ends in `KEY`, `TOKEN` or `SECRET` and the
-value looks random. A few prefixes are marked "format is a guess" in the
-output because the vendor documents them thinly. Stand-ins such as
-`your_key_here`, `xxxx`, `<token>` and `example` are ignored.
+without a recipe (Slack tokens and webhook URLs, Stripe `whsec_` signing
+secrets, npm, Shopify, Google, a PEM private key - also when it sits on one
+line inside JSON), `Bearer <token>`, a password inside a connection URL
+(`postgres://user:PASSWORD@host/db`), and any `NAME=value` where the name
+ends in `KEY`, `TOKEN`, `SECRET` or `PASSWORD` and the value looks random. A
+few prefixes are marked "format is a guess" in the output because the vendor
+documents them thinly. Stand-ins such as `your_key_here`, `xxxx`, `<token>`
+and `example` are ignored - by word, so a real key that happens to contain
+`abc123` in the middle is not thrown away.
+
+**It cannot be made to hang, and it does not call a partial look clean.**
+Every pattern runs on pieces of a line (a 1 MB minified line is scanned in
+8 KB pieces, not cut off), each file has a 10-second budget, and the walk
+counts only the files it will read, so an agent file behind 50,000 empty files
+is found. If a limit is hit anyway (too many files or folders, more than 12
+folders deep, a folder or an agent file it could not open or read - a `.env`
+over 1 MB - or out of time) the report starts with an `INCOMPLETE` line, says
+what was not looked at, and the exit status is 2 (1 if keys were found; with
+`--fail-on live` it is never 0 when incomplete).
 
 A finding looks like this (the key is never shown in full; at most its
 first 4 and last 2 characters):
@@ -95,24 +110,45 @@ first 4 and last 2 characters):
 ```
 
 Each finding has one of four states: `unchecked` (the default; nothing was
-sent anywhere), `live` (the service still accepts it), `dead` (it does not)
-or `unknown` (it could not be checked, with the reason).
+sent anywhere), `live` (the service still accepts it), `dead` (the service
+answered 401: it rejected it - it may be revoked or may not be that
+service's key at all, so the advice is "rotate it if you are unsure", never
+"delete the line") or `unknown` (it could not be checked, with the reason; a
+403 is `unknown`, because it can mean "valid key, no permission").
 
 **`--validate` sends keys over the internet, so it asks first.** It lists
 the exact host each kind of key will go to, then needs a `y` at the prompt
 or `--yes`. With no terminal to ask on and no `--yes`, it sends nothing and
-exits 2. Only https checks run, one read-only request per distinct key,
+still prints the report (every key `not checked`), with the exit status the
+findings give. Only https checks run, one read-only request per distinct key,
 through the same code as `connect`. A check on a different domain than the
 key's page still needs a typed `yes` (`--yes` does not replace that). Keys of
 services that need a second value (AWS, Twilio), keys whose format several
-services share (Google), and services without a recipe are listed as
-`unknown` and never sent.
+services share (Google), services without a recipe, and a key found only by
+its NAME whose value does not have that service's key format (an
+`OPENAI_API_KEY` holding something that is not an `sk-` key) are listed as
+`unknown` and never sent. Names containing `webhook`, `anon`, `maps` or
+`public` are never matched to a service.
+
+**Only the recipes shipped inside the package are used.** A recipe in
+`~/.safeeasyapi/recipes` brings its own regular expression and names the
+host a key is sent to, so `scan` ignores it - and cannot be made to send a
+key to it - unless you pass `--my-recipes`. With that flag its key format is
+searched for under a 0.25-second timer per piece of text (where the system
+has no timer signal, such as Windows, its pattern is not used), and with
+`--validate` its keys need a typed `y` at a terminal every time, even with
+`--yes`.
 
 Exit status: `0` nothing found, `1` keys found, `2` could not run (bad
-path, bad option, no consent for `--validate`). `--fail-on live` exits 1
-only for a key that still works (it needs `--validate`). `--json` and
-`--sarif` print only the report on stdout; questions and the host list go to
-stderr. SARIF is version 2.1.0, with the redacted key in each message.
+path, bad option) or the scan was incomplete and found nothing. `--fail-on
+live` exits 1 only for a key that still works (it needs `--validate`); **a
+key that could not be checked (`unknown`, or `not checked`) is not live, so
+`--fail-on live` exits 0 for it** - it says so on stderr. `--json` and
+`--sarif` print only the report on stdout (with an `incomplete` flag, and a
+SARIF notification when the scan was incomplete); questions and the host
+list go to stderr. SARIF is version 2.1.0, with the redacted key in each
+message. The same file reached through a link is reported once, under its
+real path.
 
 ## Hook: stop Claude Code reading `.env`
 
@@ -124,23 +160,74 @@ safeeasyapi hook uninstall          # take it out again
 ```
 
 This adds a Claude Code "PreToolUse hook": a small check Claude Code runs
-before every Read, Grep and Bash call. If the call touches a `.env` file
-(`.env`, `.env.local`, `prod.env`, `.envrc`) it says no and tells the agent
-why, in plain words. Templates (`.env.example`, `.env.sample`,
-`.env.template`) are allowed. Your other hooks and settings are kept; a copy
-of the old file is saved once next to it as `settings.json.safeeasyapi-backup`;
-installing twice changes nothing; a settings file that is not valid JSON is
-left alone (exit 2). The hook runs the installed `safeeasyapi` by its full
-path (or this Python with `-I`, which ignores the current folder), with a
-10-second limit. `safeeasyapi hook check` is the hook itself: it reads
-Claude Code's JSON on stdin and prints the answer. Restart Claude Code after
-installing.
+before every Read, Grep, Bash, PowerShell and Monitor call. If the call
+touches a `.env` file (`.env`, `.env.local`, `prod.env`, `.envrc`) it says no
+and tells the agent why, in plain words. Templates (`.env.example`,
+`.env.sample`, `.env.template`) are allowed. `Edit`, `Write`, `NotebookEdit`
+and `Glob` are not matched on purpose: they do not hand the file's contents
+to the agent (Edit and NotebookEdit normally need a prior Read, which is blocked;
+Glob lists names), and refusing `Write` would stop the agent creating a `.env` for
+you.
 
-It is a guardrail, not a wall. It stops the direct ways (`cat .env`, a Read,
-`grep KEY .env`, `source .env`), and it also blocks harmless commands that
-merely name the file (`echo .env >> .gitignore`); a program that builds the
-file name out of pieces can still get past it. Keep keys out of the files
-too: `safeeasyapi connect <service> --store keychain`.
+Your other hooks and settings are kept. The hook always sits in a matcher
+group of its own: another group's matcher or handlers are never edited, and
+`uninstall` removes only our handler (found by a `statusMessage` marker or by
+the exact command an older version wrote - a hook that merely mentions
+`safeeasyapi` is not ours). Every change first copies the old file to a new
+backup in `~/.safeeasyapi/backups` (the last 20 per file are kept; private to
+you; never inside a project, where a `.claude/` folder is often committed). A
+settings file that is a symbolic link is changed through the link; one that is
+not valid JSON is left alone (exit 2). Installing twice changes nothing.
+
+`hook status` **never runs a command it reads from a settings file** (a
+cloned repository's `.claude/settings.json` is not yours). It tests only the
+command this installation would write, and says when the file's command is a
+different one.
+
+How the command is written: on macOS and Linux a shell string with the
+installed `safeeasyapi` by its full path (or this Python with `-I`, which
+ignores the current folder). On Windows the documented exec form -
+`"command"` is the program and `"args"` is `["hook", "check"]`, no shell - so
+a backslash or a space in the path survives Git Bash and PowerShell. Claude
+Code's documentation does not say which version introduced `args`; for a
+client that predates it use `safeeasyapi hook install --shell-form` (forward
+slashes, quoted; works in Git Bash, not in PowerShell). The timeout is 10
+seconds. `safeeasyapi hook check` is the hook itself: it reads Claude Code's
+JSON on stdin (all of it, however big) and prints the answer. Restart Claude
+Code after installing.
+
+**If the hook itself fails** (it cannot start, crashes, times out, or is sent
+something it cannot parse), Claude Code lets the tool call through: that is
+"fail-open", the default. Input that is too big or not valid JSON is first
+searched for a `.env` file name as plain text and refused if one is there.
+If you would rather block everything when the hook is broken, install with
+`--fail-closed` (it sets `"onFailure": "block"`; needs Claude Code 2.1.295 or
+later; a missing or broken `safeeasyapi` then blocks every call until you fix
+or uninstall it).
+
+### What this hook does NOT stop
+
+It is a guardrail, not a wall. It looks at the file names in the call, so it
+does not stop:
+
+- a name built from pieces: `cat .e""nv`, `cat $(echo .en)v`, `python -c
+  "open('.'+'env')"`;
+- a folder sweep that never names the file: `grep -r KEY .`, `rg KEY`, `cat
+  *`, `cat .[e]nv`, `find . -name '.env*' -exec cat {} +`;
+- a link to the file under another name (`ln -s .env notes.txt; cat
+  notes.txt`) or a copy made before the hook was installed;
+- a program that prints the settings, such as `docker compose config`,
+  `printenv` or `npm run env`;
+- tools this hook is not attached to: an MCP filesystem server, `Glob`
+  (names only), a subagent in another session without the hook, and a file
+  you `@`-mention in your prompt (Claude Code inserts it without a tool call
+  - add a `Read` deny rule for that);
+- anything when the hook fails and you did not use `--fail-closed`.
+
+And it blocks some harmless things: a virtual environment folder named
+`.env` (`source .env/bin/activate`), and a command that merely names the
+file (`echo .env >> .gitignore`). Keep keys out of the files too:
+`safeeasyapi connect <service> --store keychain`.
 
 ## Commands
 
@@ -728,23 +815,28 @@ is UTF-8 bytes regardless of console code page, console output is
 reconfigured to replace unencodable characters instead of crashing, and
 every text file is opened as UTF-8.
 
-## Scope / limits (v0.5.0)
+## Scope / limits (v0.5.1)
 
 - `scan` finds keys by their shape. It misses a key with no recognisable
-  prefix under a name that does not end in KEY, TOKEN or SECRET, and a key
-  split over several lines; it can flag a random-looking value that is not a
-  key. `live` means "the service accepted it", `dead` means "the service
-  said no": a network failure or an unexpected answer is `unknown`.
-- `hook`: the settings shape and the answer format were checked against
-  Claude Code's hooks documentation (code.claude.com/docs/en/hooks). The
-  field names of the Read and Grep tool inputs (`file_path`, `path`, `glob`)
-  could not be confirmed in that page and are kept in one small function
-  (`hook.touched_text`). The hook was exercised by feeding it Claude Code's
-  JSON, not inside a running Claude Code. On Windows the command line is
-  written for a POSIX-style shell or PowerShell by reading the code, not by
-  running it there. A hook that fails to run does not block the agent
-  (Claude Code treats most failures as non-blocking); `hook status` runs a
-  test and tells you.
+  prefix under a name that does not end in KEY, TOKEN, SECRET or PASSWORD, and
+  a key split over several lines (a PEM private key is the exception); it can
+  flag a random-looking value that is not a key. A value longer than about
+  1.7 KB after `NAME=` is looked at only up to that length. `live` means "the
+  service accepted it", `dead` means "the service said 401": a network failure,
+  a 403 or an unexpected answer is `unknown`. Build folders such as `dist/` are
+  not scanned.
+- `hook`: the settings shape, the exec form (`command` + `args`), `onFailure`
+  and the answer format were checked against Claude Code's hooks
+  documentation (code.claude.com/docs/en/hooks); the Read, Grep, Bash and
+  PowerShell tool-input field names are in that page too. The `Monitor` tool's
+  input is not documented field by field, so the hook reads every text field
+  of it except `description`. The documentation does not say which Claude Code
+  version added `args` (hence `--shell-form`). The hook was exercised by
+  feeding it Claude Code's JSON, not inside a running Claude Code. **Nothing
+  here was run on Windows**: the Windows command (exec form, forward-slash
+  shell form), the junction check in the folder walk and the "no timer, so no
+  patterns from your own recipes" path were written from the documentation
+  and tested with the platform faked on Linux, not on a Windows machine.
 
 - Keychain storage is best effort and opt-in (`--store keychain`); the
   `.env` file is the default and the fallback. No Doppler / Vault

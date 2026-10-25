@@ -1,5 +1,64 @@
 # Changelog
 
+## 0.5.1
+
+Fixes from a security review of 0.5.0.
+
+- `scan` can no longer be made to hang: the `NAME=value` pattern was
+  quadratic (20,000 `A`s on one line took 9-26 seconds, a 1 MB file ten
+  minutes). Every pattern now runs on bounded pieces of a line, each file has
+  a 10-second budget, and a long minified line is scanned in 8 KB pieces
+  instead of being cut off after 20,000 characters.
+- `scan` no longer says "no keys found" after a partial look. Only files that
+  will be read count toward the limits (an agent file behind 50,000 empty
+  files is found), build output (`target`, `build`, `dist`, `.next` ...) is
+  skipped, and when any limit is hit (too many files or folders, too deep, a
+  folder or agent file that could not be read, out of time) the report says
+  `INCOMPLETE` and the exit status is 2 (`--fail-on` never gives a clean 0).
+  JSON has `incomplete`; SARIF has a notification.
+- `scan --validate`: a key found only by its variable name is no longer sent
+  to the service its name suggests unless it has that service's key format
+  (a wrong guess used to send a key to the wrong vendor and then say "delete
+  the line"). Only a 401 means rejected, now worded "rejected ... may not be
+  an X key; rotate it if you are unsure"; a 403 is "could not be checked".
+  Names with `webhook`, `anon`, `maps` or `public` are never matched to a
+  service. With no terminal and no `--yes` the report is still printed (keys
+  "not checked") instead of being dropped.
+- `scan` uses only the recipes shipped in the package. Your own recipes in
+  `~/.safeeasyapi/recipes` (their regular expression and the host a key is
+  sent to) are used only with the new `--my-recipes`, under a timer, and with
+  `--validate` they need a typed `y` every time, even with `--yes`.
+- `scan` finds more: a PEM private key on one line inside JSON, a password in
+  a connection URL, `*_PASSWORD` names, an unnamed `Bearer <token>`, Slack and
+  Discord webhook URLs, Stripe `whsec_` secrets, and UTF-16 `.env` files
+  (what PowerShell's `>` writes). A stand-in is recognised by word, not by
+  letters inside a key, so real keys containing `abc123` or `fake` are no
+  longer thrown away. Trailing `.`, `-`, `_` are no longer part of a match
+  ("the key is sk-...abc." redacts and validates the key, not the full stop).
+  The same file reached through a link is reported once, under its real path;
+  the "skipped" line states the real reasons.
+- `hook status` no longer runs a command read from a settings file (a cloned
+  repository's `.claude/settings.json` could run anything). It tests only the
+  command this installation would write, without a shell.
+- The hook now also covers PowerShell and Monitor (it missed both). `hook
+  check` reads all of its input however big; input too big or not JSON is
+  searched for a `.env` name as text. New `hook install --fail-closed`
+  (`onFailure: block`, Claude Code 2.1.295+).
+- The hook is recognised by a `statusMessage` marker or by the exact command
+  0.5.0 wrote, not by "ends with hook check". It always installs into a group
+  of its own; another group's matcher and handlers are never edited.
+- Windows: the hook is written in the documented exec form (`command` +
+  `args`) so a backslash or space in the path survives Git Bash and
+  PowerShell; `--shell-form` is the fallback for an older Claude Code. The
+  self-test starts the hook the way Claude Code does (no shell). Not run on a
+  real Windows machine - see the README.
+- Settings are written through a symbolic link; every change gets its own
+  backup in `~/.safeeasyapi/backups` (not once, and not inside the project).
+- The release workflow now requires the tagged commit to be on `main`, the
+  tests to pass first, the sdist's own tests to pass, and has time limits.
+- README: what the hook does NOT stop; what `--fail-on live` does with keys
+  that could not be checked.
+
 ## 0.5.0
 
 - New: `safeeasyapi scan [PATH]` finds API keys that leaked into files an AI

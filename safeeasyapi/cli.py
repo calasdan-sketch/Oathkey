@@ -53,7 +53,8 @@ def _build_parser() -> argparse.ArgumentParser:
                     "CLAUDE.md, AGENTS.md, GEMINI.md, .cursorrules, the .claude "
                     "folder) and say what to do about each. Works offline; a "
                     "key is never shown in full. Exit status: 0 nothing found, "
-                    "1 keys found, 2 could not run.")
+                    "1 keys found, 2 could not run or the scan was INCOMPLETE "
+                    "(a limit was hit, so a clean result cannot be trusted).")
     sc.add_argument("path", nargs="?", default=".",
                     help="Folder to scan (default: this folder), or one file.")
     sc.add_argument("--all", action="store_true",
@@ -71,12 +72,24 @@ def _build_parser() -> argparse.ArgumentParser:
                     help="With --validate: agree to send, without being asked.")
     sc.add_argument("--fail-on", choices=["any", "live"], default="any",
                     help="Exit 1 for any key found (default), or only for a "
-                         "key that still works (needs --validate).")
+                         "key that still works (needs --validate; a key that "
+                         "could not be checked does not count, so this exits 0 "
+                         "for it).")
+    sc.add_argument("--my-recipes", action="store_true",
+                    help="Also use the recipes in ~/.safeeasyapi/recipes: their "
+                         "key formats are searched for (under a timer) and, "
+                         "with --validate, their hosts may receive keys - "
+                         "after a typed y every time, even with --yes. "
+                         "Off by default: only the recipes shipped with "
+                         "safeeasyapi are used.")
 
     hk = sub.add_parser(
         "hook", help="Stop Claude Code reading your .env files.",
-        description="Install a Claude Code hook that refuses Read, Grep and "
-                    "Bash calls that touch .env files.")
+        description="Install a Claude Code hook that refuses Read, Grep, Bash, "
+                    "PowerShell and Monitor calls that touch .env files. It "
+                    "is a guardrail, not a wall: it does not stop split-up "
+                    "file names, folder sweeps like `grep -r KEY .`, links, "
+                    "MCP file tools or subagents (see the README).")
     hsub = hk.add_subparsers(dest="hook_cmd", required=True)
     for hname, htext in (("install", "Add the hook (your other hooks are kept)."),
                          ("uninstall", "Remove the hook (your other hooks are kept)."),
@@ -87,6 +100,16 @@ def _build_parser() -> argparse.ArgumentParser:
                             "of ~/.claude/settings.json.")
         h.add_argument("--settings", default=None, metavar="FILE",
                        help="Use this settings file.")
+        if hname == "install":
+            h.add_argument("--shell-form", action="store_true",
+                           help="Write the hook as one command string, for a "
+                                "Claude Code too old to know `args` (Windows "
+                                "only; elsewhere this is already the default).")
+            h.add_argument("--fail-closed", action="store_true",
+                           help="Block the tool call if the hook itself fails "
+                                "or times out (onFailure: block; needs Claude "
+                                "Code 2.1.295 or later). Without it a broken "
+                                "hook lets the call through.")
     hsub.add_parser("check", help="The hook itself: reads Claude Code's JSON "
                                   "on stdin. Not for typing by hand.")
 
@@ -559,10 +582,14 @@ def _main(argv: list[str] | None = None) -> int:
         # before the recipes load: the hook's stdout must hold only its answer
         from . import hook as hook_mod
         return hook_mod.cmd_hook(args)
-    catalog = recipes_mod.load_recipes()
     if args.cmd == "scan":
         from . import scan as scan_mod
+        # only the recipes shipped in the package, unless --my-recipes: a recipe
+        # of your own names the hosts keys are sent to and brings its own regex
+        catalog = (recipes_mod.load_recipes() if args.my_recipes
+                   else recipes_mod.load_recipes(recipes_mod.RECIPES_DIR))
         return scan_mod.cmd_scan(args, catalog)
+    catalog = recipes_mod.load_recipes()
 
     if args.cmd == "list":
         return _cmd_list(catalog)

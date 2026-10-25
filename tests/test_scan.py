@@ -189,8 +189,9 @@ class TestDetection(NoNetwork):
     def test_two_keys_on_one_line(self):
         self.assertEqual(len(scan_text(f"{OPENAI} {ANTHROPIC}")), 2)
 
-    def test_a_very_long_line_is_cut_not_hung(self):
-        self.assertEqual(scan_text("a" * 500000 + f" {OPENAI}"), [])
+    def test_a_very_long_line_is_scanned_in_pieces_not_hung_or_dropped(self):
+        found = scan_text("a" * 500000 + f" {OPENAI}")
+        self.assertEqual([f.provider for f in found], ["openai"])
 
 
 class TestRedaction(NoNetwork):
@@ -400,10 +401,12 @@ class TestOutput(NoNetwork):
         self.assertEqual(scan_mod.STATUS_WORDS["live"], "STILL WORKS")
         self.assertEqual(set(scan_mod.STATUSES), set(scan_mod.STATUS_WORDS))
 
-    def test_next_step_when_dead_says_delete_it(self):
+    def test_next_step_when_dead_never_says_delete_it(self):
         f = scan_text(f"K={OPENAI}")[0]
         f.status = "dead"
-        self.assertIn("Delete the line", f.next_step)
+        self.assertNotIn("Delete", f.next_step)
+        self.assertIn("may not be a OpenAI key", f.next_step)
+        self.assertIn("Rotate it", f.next_step)
 
 
 class FakeValidate:
@@ -443,8 +446,10 @@ class TestValidate(NoNetwork):
 
     def test_no_terminal_and_no_yes_sends_nothing(self):
         code, out, err, fake = self.go("--validate")
-        self.assertEqual((code, fake.calls), (2, []))
+        # the report is still printed (every key "not checked"); exit by findings
+        self.assertEqual((code, fake.calls), (1, []))
         self.assertIn("--yes", err)
+        self.assertEqual(out.count("not checked"), 2)
 
     def test_yes_sends_and_marks_live(self):
         code, out, err, fake = self.go("--validate", "--yes")
@@ -458,7 +463,8 @@ class TestValidate(NoNetwork):
         self.assertEqual([f["status"] for f in json.loads(out)["findings"]], ["dead", "dead"])
         self.assertEqual(code, 1)
         text = self.go("--validate", "--yes", fake=FakeValidate({OPENAI: False}))[1]
-        self.assertIn("no longer works", text)
+        self.assertIn("rejected by the service", text)
+        self.assertNotIn("no longer works", text)
 
     def test_the_host_is_printed_before_the_key_is_sent(self):
         code, out, err, fake = self.go("--validate", "--yes")
@@ -528,7 +534,8 @@ class TestValidate(NoNetwork):
 
     def test_a_check_on_another_domain_is_not_sent_without_a_typed_yes(self):
         catalog, root = self._custom("https://acme.test/keys", "https://collector.example.net/me")
-        code, out, err, fake = self.go("--validate", "--yes", catalog=catalog, root=root)
+        code, out, err, fake = self.go("--validate", "--yes", answer="y", interactive=True,
+                                       catalog=catalog, root=root)
         self.assertEqual(fake.calls, [])
         self.assertIn("DIFFERENT domain", err)
         self.assertIn("could not be checked", out)
@@ -541,7 +548,10 @@ class TestValidate(NoNetwork):
 
     def test_same_domain_custom_recipe_is_sent(self):
         catalog, root = self._custom("https://acme.test/keys", "https://api.acme.test/me")
-        self.assertEqual(len(self.go("--validate", "--yes", catalog=catalog, root=root)[3].calls), 1)
+        # a recipe of your own always needs a typed y: --yes alone sends nothing
+        self.assertEqual(self.go("--validate", "--yes", catalog=catalog, root=root)[3].calls, [])
+        self.assertEqual(len(self.go("--validate", "--yes", answer="y", interactive=True,
+                                     catalog=catalog, root=root)[3].calls), 1)
 
     def test_a_non_https_check_is_refused(self):
         catalog, root = self._custom("https://acme.test/keys", "https://api.acme.test/me")
@@ -563,8 +573,8 @@ class TestValidate(NoNetwork):
 
 
 class TestVersionAndHelp(unittest.TestCase):
-    def test_version_is_0_5_0_everywhere(self):
-        self.assertEqual(__version__, "0.5.0")
+    def test_version_is_0_5_1_everywhere(self):
+        self.assertEqual(__version__, "0.5.1")
         self.assertIn(__version__, run_cli("--version")[1])
 
     def test_help_leads_with_scan(self):

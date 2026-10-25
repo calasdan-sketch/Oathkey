@@ -160,11 +160,12 @@ class TestInstall(Settings):
         code, out, _ = self.hook("install")
         self.assertEqual(code, 0)
         group = self.get()["hooks"]["PreToolUse"][0]
-        self.assertEqual(group["matcher"], "Read|Grep|Bash")
+        self.assertEqual(group["matcher"], "Read|Grep|Bash|PowerShell|Monitor")
         handler = group["hooks"][0]
         self.assertEqual(handler["type"], "command")
         self.assertEqual(handler["command"], "/opt/bin/safeeasyapi hook check")
         self.assertEqual(handler["timeout"], hook_mod.HOOK_TIMEOUT)
+        self.assertEqual(handler["statusMessage"], hook_mod.MARKER)
         self.assertIn("Restart Claude Code", out)
 
     def test_twice_changes_nothing(self):
@@ -205,14 +206,18 @@ class TestInstall(Settings):
         self.assertEqual(groups[0]["hooks"][0]["command"], "/opt/bin/safeeasyapi hook check")
         self.assertEqual(groups[0]["hooks"][0]["timeout"], hook_mod.HOOK_TIMEOUT)
 
-    def test_a_backup_of_the_old_file_is_kept_once(self):
+    def test_every_change_keeps_its_own_backup_outside_the_folder(self):
+        _isolation.rmtree(hook_mod.backup_dir())
         self.put({"model": "opus"})
         self.hook("install")
-        with open(self.path + ".safeeasyapi-backup", encoding="utf-8") as f:
-            self.assertEqual(json.load(f), {"model": "opus"})
         self.hook("uninstall")
-        with open(self.path + ".safeeasyapi-backup", encoding="utf-8") as f:
+        self.assertFalse(os.path.exists(self.path + ".safeeasyapi-backup"))
+        names = sorted(os.listdir(hook_mod.backup_dir()))
+        self.assertEqual(len(names), 2)
+        with open(os.path.join(hook_mod.backup_dir(), names[0]), encoding="utf-8") as f:
             self.assertEqual(json.load(f), {"model": "opus"})
+        with open(os.path.join(hook_mod.backup_dir(), names[1]), encoding="utf-8") as f:
+            self.assertIn("hooks", json.load(f))
 
     def test_broken_json_is_left_alone(self):
         self.put("{ not json")
@@ -314,6 +319,7 @@ class TestCommand(unittest.TestCase):
             self.assertIn("'/opt/my tools/safeeasyapi'", hook_mod.hook_command()) if os.name != "nt" else None
 
     def test_entry_shape_lives_in_one_function(self):
-        entry = hook_mod.hook_entry("x safeeasyapi hook check")
+        entry = hook_mod.hook_entry(hook_mod.hook_handler(shell_form=True))
         self.assertEqual(set(entry), {"matcher", "hooks"})
-        self.assertEqual(set(entry["hooks"][0]), {"type", "command", "timeout"})
+        self.assertEqual(set(entry["hooks"][0]),
+                         {"type", "command", "timeout", "statusMessage"})
