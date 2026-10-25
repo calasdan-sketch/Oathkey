@@ -123,9 +123,18 @@ class Settings(unittest.TestCase):
     def setUp(self):
         self.dir = _isolation.mktemp()
         self.path = os.path.join(self.dir, ".claude", "settings.json")
-        p = mock.patch.object(hook_mod, "hook_command", lambda: "/opt/bin/safeeasyapi hook check")
-        p.start()
-        self.addCleanup(p.stop)
+        # POSIX writes the shell string, Windows the exec form (`command` is
+        # the program, `args` the rest): patch both sources of the program
+        for name, fake in (("hook_command", lambda: "/opt/bin/safeeasyapi hook check"),
+                           ("hook_argv", lambda: ["/opt/bin/safeeasyapi", "hook", "check"])):
+            p = mock.patch.object(hook_mod, name, fake)
+            p.start()
+            self.addCleanup(p.stop)
+
+    @staticmethod
+    def command_of(handler):
+        """The whole command line of a stored handler, whichever form it has."""
+        return " ".join([handler["command"], *handler.get("args", [])])
 
     def put(self, data):
         os.makedirs(os.path.dirname(self.path), exist_ok=True)
@@ -163,7 +172,7 @@ class TestInstall(Settings):
         self.assertEqual(group["matcher"], hook_mod.MATCHER)
         handler = group["hooks"][0]
         self.assertEqual(handler["type"], "command")
-        self.assertEqual(handler["command"], "/opt/bin/safeeasyapi hook check")
+        self.assertEqual(self.command_of(handler), "/opt/bin/safeeasyapi hook check")
         self.assertEqual(handler["timeout"], hook_mod.HOOK_TIMEOUT)
         self.assertEqual(handler["statusMessage"], hook_mod.MARKER)
         self.assertIn("Restart Claude Code", out)
@@ -203,7 +212,7 @@ class TestInstall(Settings):
         self.hook("install")
         groups = self.get()["hooks"]["PreToolUse"]
         self.assertEqual(len(groups), 1)
-        self.assertEqual(groups[0]["hooks"][0]["command"], "/opt/bin/safeeasyapi hook check")
+        self.assertEqual(self.command_of(groups[0]["hooks"][0]), "/opt/bin/safeeasyapi hook check")
         self.assertEqual(groups[0]["hooks"][0]["timeout"], hook_mod.HOOK_TIMEOUT)
 
     def test_every_change_keeps_its_own_backup_outside_the_folder(self):

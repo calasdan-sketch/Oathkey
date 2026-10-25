@@ -56,6 +56,27 @@ class TestTooDeepToParse(unittest.TestCase):
         self.check(b'{"jsonrpc":"2.0","id":1,"method":"ping","params":'
                    + b"[" * 100000 + b"]" * 100000 + b"}")
 
+    def test_it_does_not_depend_on_how_deep_this_python_can_parse(self):
+        # Python 3.14 parsed 100000 levels on some machines (a limit that
+        # follows the C stack): the answer is still "Parse error"
+        deep = (b'{"jsonrpc":"2.0","id":1,"method":"ping","params":'
+                + b"[" * 5000 + b"]" * 5000 + b"}")
+        real_loads = json.loads
+
+        def lenient(text, *a, **k):         # a parser that does not give up
+            return {"jsonrpc": "2.0", "id": 1, "method": "ping", "params": []} \
+                if len(text) > 5000 else real_loads(text, *a, **k)
+
+        with mock.patch.object(mcp_mod.json, "loads", lenient):
+            self.check(deep)
+
+    def test_ordinary_nesting_and_brackets_in_strings_are_fine(self):
+        self.assertFalse(mcp_mod._too_deep("[" * 150 + "]" * 150))
+        self.assertTrue(mcp_mod._too_deep("[" * 201 + "]" * 201))
+        self.assertFalse(mcp_mod._too_deep('{"a":"' + "[" * 1000 + '"}'))
+        self.assertFalse(mcp_mod._too_deep('{"a":"\\"' + "[" * 1000 + '"}'))
+        self.assertTrue(mcp_mod._too_deep('{"a":"x\\\\",' + '"b":' + "[" * 300 + "]" * 300 + "}"))
+
     def test_a_bomb_between_good_messages(self):
         replies = run_server([PING.encode(), b"[" * 100000, PING.encode()])
         self.assertEqual([r.get("id") for r in replies], [7, None, 7])

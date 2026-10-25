@@ -8,6 +8,7 @@ cleanup that tolerates read-only files (Windows).
 """
 
 import atexit
+import contextlib
 import os
 import shutil
 import stat
@@ -136,3 +137,23 @@ def _local_only_connect(self, address):
 
 
 _socket.socket.connect = _local_only_connect
+
+
+@contextlib.contextmanager
+def custom_patterns_allowed():
+    """Where the system has no timer signal (Windows) a recipe of your own is
+    never run, by design (scan.user_patterns_usable). Tests of the CONSENT rules
+    around such recipes (what is asked, what is sent) are about something else,
+    so they run with a no-op timer there; elsewhere nothing is changed."""
+    from unittest import mock
+    from safeeasyapi import scan as scan_mod
+    if scan_mod.user_patterns_usable():
+        yield
+        return
+
+    @contextlib.contextmanager
+    def no_timer(_seconds):
+        yield
+    with mock.patch.object(scan_mod, "user_patterns_usable", lambda: True), \
+            mock.patch.object(scan_mod, "_pattern_timer", no_timer):
+        yield

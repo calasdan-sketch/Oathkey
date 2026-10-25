@@ -36,7 +36,10 @@ def _read_limited(path: str) -> str | None:
     """The file's text, or None for anything but a small plain file. It is
     opened without waiting and without following a link, and checked after
     opening, so a named pipe (or a device) called x.py cannot hang the walk."""
-    flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0)
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    if not nofollow and os.path.islink(path):
+        return None     # Windows has no O_NOFOLLOW: a link is turned away here
+    flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | nofollow
     try:
         fd = os.open(path, flags)
     except OSError:

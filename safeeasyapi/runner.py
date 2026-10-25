@@ -9,6 +9,7 @@ so a program that prints a key does not put it on your screen.
 from __future__ import annotations
 
 import os
+import signal
 import subprocess
 import sys
 import threading
@@ -53,6 +54,40 @@ def _pump(src, dst, redactor: redact_mod.Redactor) -> None:
             pass
 
 
+class _interrupt_held_back:
+    """While active, Ctrl-C (SIGINT) is noted instead of raised; `held` says
+    whether it came. A no-op where the handler cannot be changed (not the main
+    thread) or SIGINT is ignored or not a Python handler."""
+
+    def __init__(self):
+        self.held = False
+        self._old = None
+
+    def __bool__(self):
+        return self.held
+
+    def __enter__(self):
+        try:
+            old = signal.getsignal(signal.SIGINT)
+            if callable(old):
+                signal.signal(signal.SIGINT, self._note)
+                self._old = old
+        except (ValueError, OSError):
+            self._old = None
+        return self
+
+    def _note(self, _signum, _frame):
+        self.held = True
+
+    def __exit__(self, *exc):
+        if self._old is not None:
+            try:
+                signal.signal(signal.SIGINT, self._old)
+            except (ValueError, OSError):
+                pass
+        return False
+
+
 def _binary(stream):
     return getattr(stream, "buffer", stream)
 
@@ -66,12 +101,22 @@ def run_redacted(cmd: list[str], child_env: dict, secrets, popen=subprocess.Pope
     err = _binary(stderr if stderr is not None else sys.stderr)
     proc = popen(cmd, env=child_env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     threads = []
-    for src, dst in ((proc.stdout, out), (proc.stderr, err)):
-        t = threading.Thread(target=_pump, args=(src, dst, redact_mod.Redactor(secrets)),
-                             daemon=True)
-        t.start()
-        threads.append(t)
     try:
+        # Ctrl-C must not land while the readers are being started: raised
+        # inside Thread.start it can leave threading's own locks broken
+        # ("release unlocked lock") or a reader running as Python exits, which
+        # holds the lock of standard output and kills the interpreter with
+        # "could not acquire lock ... at interpreter shutdown" (SIGABRT)
+        # instead of leaving with 130. So it is held back until they are up.
+        with _interrupt_held_back() as held:
+            for src, dst in ((proc.stdout, out), (proc.stderr, err)):
+                t = threading.Thread(target=_pump,
+                                     args=(src, dst, redact_mod.Redactor(secrets)),
+                                     daemon=True)
+                t.start()
+                threads.append(t)
+        if held:
+            raise KeyboardInterrupt
         status = proc.wait()
     except KeyboardInterrupt:
         # Ctrl-C reached the child too; give it a moment to finish, then say so
@@ -81,7 +126,20 @@ def run_redacted(cmd: list[str], child_env: dict, secrets, popen=subprocess.Pope
             proc.kill()
             status = proc.wait()
         raise
+    except BaseException:
+        # could not start a reader (no threads left): do not leave the child
+        # running with nobody reading it
+        proc.kill()
+        proc.wait()
+        raise
     finally:
         for t in threads:
             t.join(timeout=5)
+        # a reader that never started leaves its pipe open
+        for pipe in (proc.stdout, proc.stderr):
+            try:
+                if pipe is not None and not any(t.is_alive() for t in threads):
+                    pipe.close()
+            except (OSError, ValueError):
+                pass
     return 128 - status if status < 0 else status

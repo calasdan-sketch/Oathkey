@@ -32,6 +32,39 @@ INVALID_PARAMS = -32602
 INTERNAL_ERROR = -32603
 PARSE_ERROR = -32700
 
+# JSON nested deeper than this is refused as unparseable, the same on every
+# Python: how deep json.loads itself gets before it raises RecursionError
+# depends on the version and on the size of the C stack (3.14 parsed 100000
+# levels on some machines), and the answer must not depend on either.
+MAX_JSON_DEPTH = 200
+
+
+def _too_deep(text: str, limit: int = MAX_JSON_DEPTH) -> bool:
+    """True when `text` opens more than `limit` arrays/objects inside one
+    another. Brackets inside strings do not count."""
+    if text.count("[") + text.count("{") <= limit:
+        return False        # cannot be that deep: skip the walk
+    depth = 0
+    in_string = escaped = False
+    for ch in text:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+        elif ch == '"':
+            in_string = True
+        elif ch in "[{":
+            depth += 1
+            if depth > limit:
+                return True
+        elif ch in "]}":
+            depth -= 1
+    return False
+
+
 _METHODS = ("initialize", "ping", "tools/list", "tools/call")
 
 
@@ -445,6 +478,8 @@ def serve(catalog: dict[str, dict] | None = None,
         if not line:
             continue
         try:
+            if _too_deep(line):
+                raise ValueError("nested too deep")
             request = json.loads(line)
         except (ValueError, RecursionError):
             # RecursionError, not ValueError, is what text nested a hundred

@@ -298,6 +298,23 @@ def project_settings_path(cwd: str | None = None) -> str:
     return os.path.join(cwd or os.getcwd(), ".claude", "settings.json")
 
 
+def _in_current_folder(path: str) -> bool:
+    """Is `path` a file of the folder we are running in? Compared as the
+    folders themselves, not as text: the same folder has more than one
+    spelling (/var/... and /private/var/... on macOS, a link, 8.3 names or a
+    different case on Windows), and getcwd() gives only one of them."""
+    here = os.getcwd()
+    folder = os.path.dirname(os.path.abspath(path))
+    try:
+        if os.path.samefile(folder, here):
+            return True
+    except OSError:
+        pass
+    def norm(p):
+        return os.path.normcase(os.path.realpath(p))
+    return norm(folder) == norm(here)
+
+
 def console_script() -> str | None:
     """Absolute path of this install's `safeeasyapi` program, or None."""
     name = "safeeasyapi.exe" if _ON_WINDOWS else "safeeasyapi"
@@ -308,7 +325,7 @@ def console_script() -> str | None:
         pass
     found = shutil.which("safeeasyapi")
     # never a program that sits in the current folder (Windows looks there first)
-    if found and os.path.dirname(os.path.abspath(found)) != os.getcwd():
+    if found and not _in_current_folder(found):
         candidates.append(found)
     for path in candidates:
         path = os.path.abspath(path)

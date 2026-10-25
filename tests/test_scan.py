@@ -428,6 +428,10 @@ class FakeValidate:
 class TestValidate(NoNetwork):
     def setUp(self):
         super().setUp()
+        # (Windows: recipes of your own are not run there - see _isolation)
+        stack = contextlib.ExitStack()
+        stack.enter_context(_isolation.custom_patterns_allowed())
+        self.addCleanup(stack.close)
         write(self.root, ".env", f"OPENAI_API_KEY={OPENAI}\nANTHROPIC_API_KEY={ANTHROPIC}\n")
 
     def go(self, *argv, fake=None, answer="", interactive=False, catalog=CATALOG, root=None):
@@ -573,8 +577,8 @@ class TestValidate(NoNetwork):
 
 
 class TestVersionAndHelp(unittest.TestCase):
-    def test_version_is_0_6_1_everywhere(self):
-        self.assertEqual(__version__, "0.6.1")
+    def test_version_is_0_6_2_everywhere(self):
+        self.assertEqual(__version__, "0.6.2")
         self.assertIn(__version__, run_cli("--version")[1])
 
     def test_help_leads_with_scan(self):

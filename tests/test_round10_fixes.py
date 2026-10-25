@@ -249,6 +249,13 @@ class TestNameBasedGuessesAreNotSent(NoNetwork):
 # ------------------------------------------- 7. user recipes are not trusted
 
 class TestYourOwnRecipesAreOptIn(NoNetwork):
+    def setUp(self):
+        super().setUp()
+        # (Windows: recipes of your own are not run there - see _isolation)
+        stack = contextlib.ExitStack()
+        stack.enter_context(_isolation.custom_patterns_allowed())
+        self.addCleanup(stack.close)
+
     def put_recipe(self):
         folder = recipes_mod.user_recipes_dir()
         os.makedirs(folder, exist_ok=True)
@@ -529,7 +536,7 @@ class TestOurOwnGroup(Settings):
         self.hook("install")
         groups = self.get()["hooks"]["PreToolUse"]
         self.assertEqual(len(groups), 1)
-        self.assertEqual(groups[0]["hooks"][0]["command"], "/opt/bin/safeeasyapi hook check")
+        self.assertEqual(self.command_of(groups[0]["hooks"][0]), "/opt/bin/safeeasyapi hook check")
         self.assertEqual(groups[0]["matcher"], hook_mod.MATCHER)
 
 
@@ -585,6 +592,25 @@ class TestWindowsCommand(unittest.TestCase):
         os.chdir(here)
         self.addCleanup(os.chdir, old)
         with mock.patch("shutil.which", lambda _n: planted), \
+                mock.patch.object(sys, "executable", os.path.join(_isolation.mktemp(), "python")), \
+                mock.patch("sysconfig.get_path", lambda _n: _isolation.mktemp()):
+            self.assertIsNone(hook_mod.console_script())
+
+    @unittest.skipUnless(hasattr(os, "symlink") and os.name == "posix", "needs a symlink")
+    def test_the_same_folder_by_another_name_is_still_the_current_folder(self):
+        # macOS: the temp folder is /var/..., getcwd() says /private/var/...
+        real = _isolation.mktemp()
+        alias = os.path.join(_isolation.mktemp(), "alias")
+        os.symlink(real, alias)
+        planted = os.path.join(real, "safeeasyapi")
+        with open(planted, "w") as f:
+            f.write("#!/bin/sh\n")
+        os.chmod(planted, 0o755)
+        old = os.getcwd()
+        os.chdir(real)
+        self.addCleanup(os.chdir, old)
+        spelled_otherwise = os.path.join(alias, "safeeasyapi")
+        with mock.patch("shutil.which", lambda _n: spelled_otherwise), \
                 mock.patch.object(sys, "executable", os.path.join(_isolation.mktemp(), "python")), \
                 mock.patch("sysconfig.get_path", lambda _n: _isolation.mktemp()):
             self.assertIsNone(hook_mod.console_script())

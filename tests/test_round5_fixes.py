@@ -268,6 +268,18 @@ class TestLineEndings(unittest.TestCase):
 # ------------------------------------------------------------------ 2
 
 
+def same_path(a, b):
+    """The same file by two spellings: Windows' readlink gives the
+    extended-length form (\\\\?\\C:\\...) for a link made with a plain path."""
+    def norm(p):
+        for prefix in ("\\\\?\\UNC\\", "\\\\?\\"):
+            if p.startswith(prefix):
+                p = ("\\\\" if "UNC" in prefix else "") + p[len(prefix):]
+                break
+        return os.path.normcase(os.path.normpath(p))
+    return norm(a) == norm(b)
+
+
 def make_link(test, link, target):
     try:
         os.symlink(target, link)
@@ -288,7 +300,8 @@ class TestLinkedEnvFile(unittest.TestCase):
 
     def assert_untouched(self):
         self.assertTrue(os.path.islink(self.env), "the link was replaced")
-        self.assertEqual(os.readlink(self.env), self.target)
+        self.assertTrue(same_path(os.readlink(self.env), self.target),
+                        (os.readlink(self.env), self.target))
         self.assertEqual(read_bytes(self.target), b"SHARED=1\n")
         self.assertEqual(os.listdir(self.proj), [".env"], "a stray temp file")
         if os.name != "nt":
@@ -387,6 +400,7 @@ class TestLinkedEnvFile(unittest.TestCase):
 
     def test_windows_acl_step_skips_a_link_too(self):
         calls = []
+        before = stat.S_IMODE(os.stat(self.target).st_mode)
 
         def fake_run(argv, **kw):
             calls.append(argv)
@@ -396,7 +410,8 @@ class TestLinkedEnvFile(unittest.TestCase):
                 mock.patch.object(store_mod.subprocess, "run", fake_run):
             self.assertFalse(store_mod._lock_down(self.env))
         self.assertEqual(calls, [], "icacls ran against a link")
-        self.assertEqual(stat.S_IMODE(os.stat(self.target).st_mode), 0o644)
+        # unchanged (on Windows a mode is only the read-only flag: 0o666 there)
+        self.assertEqual(stat.S_IMODE(os.stat(self.target).st_mode), before)
 
 
 # ------------------------------------------------------------------ 4

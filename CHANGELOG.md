@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.6.2
+
+Fixes for what the test matrix (Linux, macOS, Windows; Python 3.10-3.14) found.
+
+- `run`: Ctrl-C that lands while the output readers are still starting no
+  longer ends in "could not acquire lock for <stdout> at interpreter shutdown"
+  (exit -6) or a traceback; the interrupt is held until the readers are up,
+  every reader is finished before `run` leaves, and the child is never left
+  running. Exit status is 130 as documented.
+- MCP: JSON nested more than 200 levels deep is a Parse error (-32700) on every
+  Python version; before, Python 3.14 could parse it and the reply was
+  Invalid params (-32602).
+- Hook: a `safeeasyapi` program in the current folder is never used as the hook
+  command, also when the folder has another spelling (macOS `/var` and
+  `/private/var`, links, Windows case and short names).
+- `detect` does not read a symbolic link on Windows (no `O_NOFOLLOW` there).
+- Tests only: Windows-aware hook, symlink, file-mode and own-recipe tests.
+
 ## 0.6.1
 
 Fixes from an independent review of 0.6.0.

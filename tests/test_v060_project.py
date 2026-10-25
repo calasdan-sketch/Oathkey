@@ -333,6 +333,18 @@ class TestDetect(unittest.TestCase):
         _, read = detect.names_in_project(d)
         self.assertEqual(read, ["real.py"])
 
+    @unittest.skipUnless(hasattr(os, "symlink") and hasattr(os, "O_NOFOLLOW"), "symlinks")
+    def test_symlinked_files_not_followed_where_there_is_no_o_nofollow(self):
+        # Windows: no O_NOFOLLOW, so the link must be refused by name
+        d = proj({"real.py": "GROQ_API_KEY"})
+        try:
+            os.symlink(os.path.join(d, "real.py"), os.path.join(d, "link.py"))
+        except OSError:
+            self.skipTest("no symlink right")
+        with mock.patch.object(detect.os, "O_NOFOLLOW", 0):
+            _, read = detect.names_in_project(d)
+        self.assertEqual(read, ["real.py"])
+
     def test_match_recipes_returns_all_vars_of_a_service(self):
         found = detect.match_recipes({"TWILIO_AUTH_TOKEN"}, CAT)
         self.assertEqual(found, [{"service": "twilio", "env_vars": ["TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN"]}])
