@@ -697,6 +697,8 @@ class TestSettingsFileHandling(Settings):
 class TestVersionAndDocs(unittest.TestCase):
     def test_release_workflow_guards(self):
         path = os.path.join(_isolation.REPO, ".github", "workflows", "release.yml")
+        if not os.path.exists(path):
+            self.skipTest("the sdist does not carry .github")
         with open(path, encoding="utf-8") as f:
             text = f.read()
         for needle in ("fetch-depth: 0", "timeout-minutes", "merge-base --is-ancestor",
