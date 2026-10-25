@@ -279,6 +279,11 @@ class TestFindingsApplied(unittest.TestCase):
         self.assertIn("400", steps("anthropic"))
         self.assertEqual(field("anthropic")["detect_confidence"], "guess")
 
+    def test_urls_that_a_real_doctor_run_found_moved_were_updated(self):
+        self.assertEqual(CAT["notion"]["key_url"], "https://app.notion.com/developers/tokens")
+        self.assertIn("api_reference", CAT["openrouter"]["docs"])
+        self.assertIn("account-management", CAT["assemblyai"]["docs"])
+
     def test_assemblyai_deepgram_pinecone_mistral_notion_unchanged_urls(self):
         self.assertEqual(CAT["pinecone"]["validate"]["url"], "https://api.pinecone.io/indexes")
         self.assertEqual(CAT["notion"]["validate"]["headers"]["Notion-Version"], "2026-03-11")

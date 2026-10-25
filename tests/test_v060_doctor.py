@@ -63,11 +63,10 @@ class TestJudging(unittest.TestCase):
         t = {"https://a.test/x": (302, "https://b.test/y", None), "https://b.test/y": (404, None, None)}
         self.assertEqual(doctor.check_url("https://a.test/x", fake(t))["verdict"], "ROT")
 
-    def test_redirect_loop_is_rot(self):
+    def test_redirect_to_itself_is_rot(self):
         t = {"https://a.test/x": (302, "/x", None)}
         r = doctor.check_url("https://a.test/x", fake(t))
         self.assertEqual(r["verdict"], "ROT")
-        self.assertIn("redirects", r["detail"])
 
     def test_redirect_to_plain_http_is_rot(self):
         t = {"https://a.test/x": (302, "http://a.test/y", None)}
@@ -80,10 +79,29 @@ class TestJudging(unittest.TestCase):
         r = doctor.check_url("https://a.test/d/x", fake(t))
         self.assertEqual(r["final"], "https://a.test/y")
 
-    def test_hop_limit(self):
-        t = {f"https://a.test/{i}": (302, f"/{i + 1}", None) for i in range(20)}
+    def test_a_very_long_chain_of_new_addresses_is_a_warning_not_rot(self):
+        t = {f"https://a.test/{i}": (302, f"/{i + 1}", None) for i in range(40)}
         r = doctor.check_url("https://a.test/0", fake(t))
-        self.assertEqual(r["verdict"], "ROT")
+        self.assertEqual(r["verdict"], "warn")
+        self.assertIn("sign-in", r["detail"])
+
+    def test_a_loop_through_two_addresses_is_rot(self):
+        t = {"https://a.test/a": (302, "/b", None), "https://a.test/b": (302, "/a", None)}
+        self.assertEqual(doctor.check_url("https://a.test/a", fake(t))["detail"], "redirect loop")
+
+    def test_a_redirect_to_a_sign_in_page_is_ok(self):
+        t = {"https://a.test/keys": (302, "https://a.test/login?next=/keys", None)}
+        r = doctor.check_url("https://a.test/keys", fake(t))
+        self.assertEqual(r["verdict"], "ok")
+        self.assertIn("sign-in", r["detail"])
+
+    def test_google_sign_in_counts(self):
+        t = {"https://a.test/k": (302, "https://accounts.google.com/v3/signin/identifier", None)}
+        self.assertEqual(doctor.check_url("https://a.test/k", fake(t))["verdict"], "ok")
+
+    def test_a_redirect_to_a_different_page_is_moved(self):
+        t = {"https://a.test/old": (301, "https://a.test/docs/new", None)}
+        self.assertEqual(doctor.check_url("https://a.test/old", fake(t))["verdict"], "moved")
 
 
 class TestFetchErrors(unittest.TestCase):

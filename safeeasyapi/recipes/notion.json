@@ -2,7 +2,7 @@
   "display": "Notion",
   "docs": "https://developers.notion.com/guides/get-started/personal-access-tokens",
   "env_var": "NOTION_TOKEN",
-  "key_url": "https://www.notion.so/developers/tokens",
+  "key_url": "https://app.notion.com/developers/tokens",
   "scopes": [],
   "service": "notion",
   "steps": [

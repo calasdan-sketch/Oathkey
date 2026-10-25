@@ -6,7 +6,7 @@
 pipx install safeeasyapi          # Python 3.10+, no other dependencies
 safeeasyapi scan                  # find keys an AI agent can read (works offline)
 safeeasyapi hook install          # stop Claude Code reading your .env files
-safeeasyapi list                  # the services it knows (35 built in)
+safeeasyapi list                  # the services it knows (36 built in)
 safeeasyapi connect github        # opens the key page, shows the exact steps
 #   paste the key when asked (typing is hidden), or use --clipboard and
 #   click the vendor's Copy button; the key is tested with one API call
@@ -14,6 +14,11 @@ safeeasyapi connect github        # opens the key page, shows the exact steps
 safeeasyapi connect openai --store keychain
 safeeasyapi run openai -- python app.py     # keychain key goes to that command only
 safeeasyapi forget openai         # remove it from the keychain and .env
+
+# a whole project at once (0.6.0):
+safeeasyapi init --write          # list the services the project uses (safeeasyapi.json, no secrets)
+safeeasyapi setup                 # connect every service that has no key yet
+safeeasyapi status                # where each key lives, how old it is
 ```
 
 The key is never displayed, never logged, never in shell history.
@@ -39,6 +44,93 @@ with hidden input, **validates it with a test API call**, and writes it
 straight to `.env` with owner-only permissions — or, with
 `--store keychain`, into your OS keychain. The key is never displayed,
 never logged, never in shell history.
+
+## One flow: from the vendor's dashboard into your project
+
+The promise: **a key goes from the vendor's page into your project in one
+flow - no Notepad, no pasting into a terminal, never on screen, never in
+shell history, never in an AI agent's chat.** Here is exactly what that
+means, what you do, and what the tool does.
+
+```bash
+safeeasyapi connect openai --clipboard
+```
+
+| You | The tool |
+| --- | --- |
+| Run the command. | Shows the vendor's steps and which exact address your key will be tested against, then opens the vendor's key page in your browser. |
+| Sign in to the vendor and click their "Create key" button (the tool cannot do this for you - see below). | Waits. Nothing is shown. |
+| Click the vendor's own **Copy** button. | Sees a new key-shaped value on the clipboard, takes it, and **empties the clipboard**. |
+| Nothing. | Tests the key with one harmless read-only request. A key that is real but limited (for example a Stripe restricted key, a Resend "sending only" key) is accepted and told so, not called dead. |
+| Nothing. | Saves it to `.env` (owner-only, written so a crash cannot leave half a file) or, with `--store keychain`, to your OS keychain. It prints where, never the key. |
+
+Without `--clipboard` the same flow ends with a hidden prompt (what you
+type or paste is not shown). That is the default because it works
+everywhere; `--clipboard` is the "no pasting" mode. `--via-cli` (GitHub) is
+the zero-copy mode: GitHub's own `gh` signs you in and hands the token over.
+
+Then, in your project:
+
+```bash
+safeeasyapi init --write      # writes safeeasyapi.json: service names + variable names, no secrets, commit it
+safeeasyapi setup             # walks every service that has no key yet; safe to run again
+safeeasyapi run --all -- python app.py   # the program gets the keys; its output is scrubbed of them
+safeeasyapi export groq --to github      # copy a key into GitHub Actions secrets, through gh's standard input
+safeeasyapi status            # which keys exist, where, how old; says when to rotate
+```
+
+**AI agents.** Claude Code (or any MCP client) is told to *ask*, never to
+handle a key: the `request_connect` tool answers only
+`{service, env_var, status, instructions}`, and `needs_keys` lists which
+keys a project lacks. The instructions tell the person to run
+`safeeasyapi connect <service>` in their own terminal. No tool can return a
+secret value: answers are built from names and status words only, and a
+second filter blanks any secret the server can reach (a variable in its
+environment, a value in the project's `.env`), also in base64, hex and
+URL-encoded form. A test plants canary keys everywhere and searches every
+tool answer and every JSON output for them. The Claude Code skill in
+`skills/safeeasyapi/SKILL.md` tells the agent the same rules; copy it to
+`~/.claude/skills/safeeasyapi/SKILL.md` (or your project's
+`.claude/skills/`).
+
+### What it cannot do
+
+- **It cannot make the key for you.** Vendor dashboards sit behind your
+  login and none offers a way to mint a key without it. You sign in and click
+  "Create"; the tool does everything after that. The steps shown come from
+  each vendor's own documentation, and anything the docs do not confirm is
+  listed in the recipe as `unverified` and shown to you.
+- **It cannot keep a copy out of a clipboard history.** `--clipboard` empties
+  the clipboard, but Windows clipboard history (Win+V, and its cloud sync)
+  and clipboard managers (Maccy, CopyQ, Klipper ...) record a copy the moment
+  you press the vendor's Copy button, and only the program that copies can
+  ask Windows to leave something out of history - here that is the vendor's
+  web page. Windows has settings for that (`CanIncludeInClipboardHistory`,
+  `ExcludeClipboardContentFromMonitorProcessing`); they are set by the
+  writer, not by a reader like this tool, so it cannot use them. What it does
+  instead: on Windows, when the registry says clipboard history is on,
+  `--clipboard` switches to the hidden prompt and tells you why
+  (`--allow-clipboard-history` overrides). On macOS and Linux it cannot
+  detect a clipboard manager: if you run one, use the hidden prompt.
+- **It cannot stop the vendor's page, a browser extension or malware** that
+  can read the page or your clipboard from seeing the key.
+- **Redaction is not a vault.** `run` scrubs the exact key and its common
+  re-writings (base64, hex, URL-encoded, JSON-escaped) from the program's
+  output. It cannot catch a key the program hashes, truncates, reverses or
+  splits across lines, one written to a file or sent over the network, or one
+  shorter than 6 characters. With redaction on, the program's output is a
+  pipe, not a terminal, so some programs lose colours or stop prompting: use
+  `--no-redact` for those.
+- **The `.env` file is plain text** (owner-only). The OS keychain is better.
+- **The hook is a guardrail, not a wall** (see below), and `scan` finds keys by
+  their shape: a key with no recognisable shape can slip past it.
+- **It was not run against real vendor dashboards** for this release: the
+  recipes follow the vendors' documentation, and `safeeasyapi doctor-recipes`
+  (also a weekly check on GitHub) tells you when an address has moved.
+- **`export` works only through `gh` and `vercel`** (installed and signed in);
+  the key reaches them on standard input, never on a command line. Other
+  destinations are not offered because no other vendor tool was confirmed to
+  read secrets that way.
 
 ## Install
 
@@ -256,7 +348,18 @@ safeeasyapi connect <service> --store keychain   # OS keychain instead of .env
 safeeasyapi connect <service> --clipboard        # copy-and-go: click Copy, no pasting
 safeeasyapi connect github --via-cli    # zero-copy: the vendor CLI's browser sign-in
 safeeasyapi connect <service> --no-browser       # don't open the key page (its address is printed)
-safeeasyapi run <service> -- <command>  # run with a keychain-stored key in its env
+safeeasyapi run <service> -- <command>  # run with a stored key (keychain, else .env) in its env only
+safeeasyapi run --all -- <command>      # ... every service in safeeasyapi.json
+safeeasyapi run <service> --no-redact -- <command>   # don't scrub the output (interactive programs)
+safeeasyapi run <service> --redact -- <command>      # scrub it (the default)
+safeeasyapi run <service> --env-file FILE -- <command>   # read keys from another .env
+safeeasyapi init [--write] [--add] [--force]   # write safeeasyapi.json from the project's variable names
+safeeasyapi setup [service ...] [--dry-run]    # connect every missing service in order (resumable)
+safeeasyapi setup --env-file FILE | --no-browser | --clipboard | --allow-clipboard-history
+safeeasyapi status [--json] [--max-age DAYS] [--env-file FILE]   # where keys live, how old
+safeeasyapi export <service> --to github|vercel [--repo OWNER/REPO] [--environment NAME] [--overwrite] [--yes]
+safeeasyapi doctor-recipes [service ...] [--json] [--timeout S] [--my-recipes]   # have recipe addresses rotted?
+safeeasyapi connect <service> --allow-clipboard-history   # keep copy-and-go even if Windows keeps a history
 safeeasyapi rotate <service>            # replace a stored key
 safeeasyapi forget <service>            # remove the key: OS keychain entry + .env line(s)
 safeeasyapi add                         # capture a new service recipe interactively
@@ -280,8 +383,8 @@ $ safeeasyapi connect stripe
 
   Connect Stripe  (key opens in your browser)        # 1. your browser opens
                                                      #    the exact key page
-    1. If it asks, make sure you are in the right mode: Test keys start
-       with sk_test_, live keys with sk_live_
+    1. If it asks, check the mode: test keys (sandbox) contain _test_,
+       live keys contain _live_
     ...
   Key page: https://dashboard.stripe.com/apikeys
 
@@ -619,7 +722,7 @@ No secrets ever pass through MCP — only public how-to.
 clipboard, takes it and **empties the clipboard**, then validates and
 stores it as usual; nothing is typed, pasted or shown. It looks only while
 it is waiting for a key, takes only a value that matches the field's
-`pattern` (when the recipe has one) or looks like a key (one line, no
+`accept` pattern (when the recipe has one; it names only a shape the vendor documents, and only its start, so a valid key is never refused) or looks like a key (one line, no
 spaces, 8-4096 visible characters, different from what was already on the
 clipboard), and falls back to the hidden prompt after 3 minutes or when no
 clipboard tool exists (Windows needs nothing; macOS uses `pbpaste`; Linux
@@ -704,6 +807,44 @@ Discord), `auth.username` for Basic auth with the key as the password
 a provider does not answer 401/403 (Google and Resend say 400, Brave
 422).
 
+## What a recipe says (0.6.0)
+
+Beyond the steps and the check, a recipe can carry:
+
+- `accept` / `detect`: two different jobs for a key's shape. `accept` is the
+  copy-and-go gate: only a shape the vendor documents, matched from the start
+  of the value, or nothing (then any one-line value of 8-4096 visible
+  characters is taken). `detect` is what `scan` looks for; a commonly used but
+  undocumented shape (Groq's `gsk_`, SendGrid's `SG.` ...) lives only there and
+  is reported as "format is a guess". The older single `pattern` still works
+  and does both.
+- `validate.limited`: statuses that mean "real key, missing a permission" (a
+  403 from a Stripe restricted key, a Supabase token without projects-read, a
+  scoped Vercel token ...). `connect` stores the key and says what it cannot
+  do, instead of calling it dead.
+- `validate.body_rules`: the same idea when the status alone is not enough
+  (Resend answers 401 for a "sending only" key too; the body says
+  `restricted_api_key`). Only a phrase from the recipe is looked for in the
+  first 4 KB of the answer; none of it is kept or shown.
+- `least_privilege`: the smallest scope or permission that works, shown by
+  `connect`.
+- `unverified`: parts the vendor's docs do not confirm, shown by `connect`.
+
+PayPal has two recipes, `paypal` (live) and `paypal-sandbox`, so you choose explicitly.
+
+AWS's check is the one POST besides OAuth token calls: AWS documents STS
+`GetCallerIdentity` as a POST, it only says who the key is, and the recipe
+loader refuses a POST to anything else.
+
+`doctor-recipes` visits each recipe's key page, docs link and check server over
+HTTPS with no key at all and prints a table: `ok`, `moved` (redirected),
+`warn` (403, 429, 5xx: look by hand) or `ROT` (404/410, name not found, broken
+certificate, refused connection, too many redirects, a redirect to plain
+HTTP). It exits 1 on rot. A weekly GitHub Action
+(`.github/workflows/recipes.yml`, read-only except for one `issues: write` in
+the job that opens or updates a single issue) runs it. To fix a recipe, see
+`CONTRIBUTING.md`.
+
 ## The MCP server
 
 Add to Claude Code (`claude mcp add`) or `~/.claude.json`:
@@ -715,7 +856,8 @@ Add to Claude Code (`claude mcp add`) or `~/.claude.json`:
 
 (`python` is the Windows launcher's name; on macOS/Linux use whatever
 runs your Python 3.) Tools: `list_services`, `get_recipe`,
-`find_public_apis`, `get_public_api`. The recipe tells the agent the
+`find_public_apis`, `get_public_api`, `request_connect` and `needs_keys` (the agent
+handshake, above). The recipe tells the agent the
 exact steps and ends with: run `safeeasyapi connect <service>` in a
 terminal — never ask the user to paste the key into chat. The server
 speaks JSON-RPC 2.0 properly: notifications (`notifications/cancelled`,
@@ -825,7 +967,7 @@ is UTF-8 bytes regardless of console code page, console output is
 reconfigured to replace unencodable characters instead of crashing, and
 every text file is opened as UTF-8.
 
-## Scope / limits (v0.5.2)
+## Scope / limits (v0.6.0)
 
 - `scan` finds keys by their shape. It misses a key with no recognisable
   prefix under a name that does not end in KEY, TOKEN, SECRET or PASSWORD, and
@@ -851,6 +993,17 @@ every text file is opened as UTF-8.
   patterns from your own recipes" path were written from the documentation
   and tested with the platform faked on Linux, not on a Windows machine.
 
+- 0.6.0: `doctor-recipes` was run once for real against the 36 recipes' addresses
+  before release; its tests, like every test, use no network beyond
+  127.0.0.1. The `limited` and body rules follow the vendors' docs where they
+  speak (Stripe, Supabase, Vercel, GitHub, Resend, SendGrid); for ElevenLabs the
+  docs do not say how a restricted key answers, so that rule is flagged
+  `unverified`. `export` was checked against the `gh` and `vercel` manuals and
+  run against a stand-in `gh`, not a real GitHub or Vercel account. Nothing of
+  the Windows clipboard-history check was run on Windows (it reads the
+  `EnableClipboardHistory` registry value). The agent handshake was exercised
+  over the MCP wire format and with a stand-in client, not inside a running
+  Claude Code.
 - Keychain storage is best effort and opt-in (`--store keychain`); the
   `.env` file is the default and the fallback. No Doppler / Vault
   backends.

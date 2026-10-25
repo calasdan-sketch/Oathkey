@@ -11,8 +11,9 @@ asked the question a stranger could ask. A login page counts as alive.
 
 Verdicts per address:
   ok     the page answered (200 to 399)
-  moved  it redirected; the final address is shown - fix the recipe if it is
-         a different place, or ignore a sign-in redirect
+  moved  it redirected to another page; the final address is shown - fix the
+         recipe if it is a different place. A redirect to a sign-in page is
+         normal for a dashboard and counts as ok
   warn   answered, but not in a way that proves rot (403, 429, 5xx, or a
          site that refuses scripts) - look by hand
   ROT    gone or unreachable: 404 / 410, a name that does not resolve, a
@@ -25,6 +26,7 @@ from __future__ import annotations
 
 import http.client
 import json
+import re
 import socket
 import ssl
 import sys
@@ -36,7 +38,7 @@ from . import __version__
 from . import recipes as recipes_mod
 
 USER_AGENT = f"safeeasyapi-doctor/{__version__} (+https://github.com/calasdan-sketch/safeeasyapi)"
-MAX_HOPS = 5
+MAX_HOPS = 10
 TIMEOUT = 15.0
 OK, MOVED, WARN, ROT = "ok", "moved", "warn", "ROT"
 GONE = (404, 410)
@@ -86,6 +88,7 @@ def check_url(url: str, fetch_fn=None, timeout: float = TIMEOUT) -> dict:
     """Follow redirects by hand (up to MAX_HOPS) and judge the end."""
     fetch_fn = fetch_fn or fetch
     hops = []
+    seen = {url}
     current = url
     for _ in range(MAX_HOPS + 1):
         status, location, problem = fetch_fn(current, timeout)
@@ -97,19 +100,29 @@ def check_url(url: str, fetch_fn=None, timeout: float = TIMEOUT) -> dict:
             if urllib.parse.urlsplit(nxt).scheme.lower() != "https":
                 return {"url": url, "verdict": ROT, "detail": "redirects to a non-HTTPS address",
                         "final": nxt, "status": status, "hops": len(hops)}
+            if nxt in seen:
+                return {"url": url, "verdict": ROT, "detail": "redirect loop",
+                        "final": nxt, "status": status, "hops": len(hops)}
+            seen.add(nxt)
             hops.append(nxt)
             current = nxt
             continue
         break
     else:
-        return {"url": url, "verdict": ROT, "detail": f"more than {MAX_HOPS} redirects",
+        # a long chain that keeps finding new addresses is a sign-in flow
+        # (some dashboards hop through several auth hosts), not a dead page
+        return {"url": url, "verdict": WARN,
+                "detail": f"more than {MAX_HOPS} redirects (a sign-in flow?) - check by hand",
                 "final": current, "status": None, "hops": len(hops)}
-    verdict, detail = _judge(status, hops)
+    verdict, detail = _judge(status, hops, current)
     return {"url": url, "verdict": verdict, "detail": detail, "final": current,
             "status": status, "hops": len(hops)}
 
 
-def _judge(status, hops) -> tuple[str, str]:
+SIGN_IN_RE = re.compile(r"(?i)(?:log[-_]?in|sign[-_]?in|signin|/auth|accounts\.google\.com|sso)")
+
+
+def _judge(status, hops, final: str = "") -> tuple[str, str]:
     if status in GONE:
         return ROT, f"HTTP {status} (page gone)"
     if status is None or status >= 500 or status in (403, 429, 401, 400, 405):
@@ -118,6 +131,8 @@ def _judge(status, hops) -> tuple[str, str]:
         if status in (400, 401, 405):
             return (MOVED if hops else OK), f"HTTP {status} (alive)"
         return WARN, f"HTTP {status} - check by hand"
+    if hops and SIGN_IN_RE.search(final):
+        return OK, f"HTTP {status}, sign-in page (expected for a dashboard)"
     if hops:
         return MOVED, f"HTTP {status} after {len(hops)} redirect(s)"
     return OK, f"HTTP {status}"

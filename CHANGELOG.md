@@ -1,5 +1,63 @@
 # Changelog
 
+## 0.6.0
+
+One flow from the vendor's key page into your project, and the agent never
+touches a key.
+
+**Recipes (all 36 re-checked against the vendors' own documentation)**
+- Two separate ideas for a key's shape: `accept` (what `--clipboard` will
+  take: only documented shapes, matched from the start, so a valid key is never
+  refused - removed for Groq, Hugging Face, OpenAI, OpenRouter, SendGrid, Tavily,
+  GitHub, Vercel and Cloudflare) and `detect` (what `scan` looks for: the
+  commonly used shapes are kept, labelled "format is a guess"). The old
+  `pattern` still works. Fixes a bug where a prefix-only gate would have been
+  matched against the whole key.
+- Keys that are real but limited are no longer "dead": `validate.limited` (a
+  403 from a Stripe restricted key, a Supabase / Vercel / GitHub fine-grained /
+  SendGrid token without that permission) and `validate.body_rules` (Resend's
+  401 `restricted_api_key`). `connect` stores the key and says what it cannot do.
+- `least_privilege` (shown by `connect`) and `unverified` (parts the docs do
+  not confirm, shown by `connect`) on the recipes.
+- Corrections: AWS uses the documented STS POST; OpenRouter checks `/api/v1/key`
+  and wants a credit limit; eBay and Spotify are judged by the token call alone;
+  Cohere `/v1/models`; PayPal live and `paypal-sandbox` are separate; Mailgun asks
+  for the main account key; Postmark a server token; GitHub recommends
+  fine-grained tokens; ElevenLabs, Vercel and Notion key pages; many "starts
+  with ..." claims the vendors never made are gone; OpenWeather's two-hour
+  delay and Brave's plan requirement are said plainly.
+- `scan` also finds Supabase `sb_secret_` keys.
+
+**New commands**
+- `doctor-recipes`: visits each recipe's key page, docs and test server over
+  HTTPS with no key and reports moved or gone pages (exit 1 on rot). A weekly
+  GitHub Action keeps one issue up to date. `CONTRIBUTING.md` and a pull
+  request template ask for a docs link and a fake-key test. A real run found
+  three moved pages, now fixed.
+- `init`, `setup`, `status` and `safeeasyapi.json` (names only, committed):
+  detect the services a project uses (never opening a real `.env`), connect every
+  missing one in order (skipping those already stored, resumable), and list where
+  each key lives and how old it is, with a rotate hint after 90 days (a small
+  local record holds dates, never keys).
+- `run` reads the keychain or the `.env` file, `--all` injects every service in
+  the manifest, and the program's output is scrubbed of the key by default
+  (`--redact`; exact value, base64, hex, URL- and JSON-encoded forms;
+  `--no-redact` to turn it off). The limits are in the README.
+- `export <service> --to github|vercel`: through `gh secret set` / `vercel env
+  add`, with the key on standard input only, never in a command line.
+- MCP tools `request_connect` and `needs_keys`: the agent asks, the person runs
+  `safeeasyapi connect` in their own terminal. Answers hold names and statuses
+  only; a second filter blanks any reachable secret. The hook message and the new
+  `skills/safeeasyapi/SKILL.md` point agents at this.
+- Windows: `--clipboard` falls back to the hidden prompt when clipboard history
+  (Win+V) is on, because the history keeps a copy this tool cannot remove
+  (`--allow-clipboard-history` overrides).
+- Error messages no longer repeat an unknown service or tool name that is long
+  or odd (it could be a key pasted in the wrong place).
+
+**Tests** run with no real network at all: any connection that is not to
+127.0.0.1 fails the test.
+
 ## 0.5.2
 
 - The hook now also covers `Edit`, `Write`, `MultiEdit` and `NotebookEdit`:

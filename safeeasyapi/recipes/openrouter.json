@@ -1,6 +1,6 @@
 {
   "display": "OpenRouter",
-  "docs": "https://openrouter.ai/docs/api-reference/authentication",
+  "docs": "https://openrouter.ai/docs/api_reference/authentication",
   "env_var": "OPENROUTER_API_KEY",
   "fields": [
     {

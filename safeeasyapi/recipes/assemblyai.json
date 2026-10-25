@@ -1,6 +1,6 @@
 {
   "display": "AssemblyAI",
-  "docs": "https://assemblyai.com/docs/faq/how-to-get-your-api-key",
+  "docs": "https://www.assemblyai.com/docs/account-management",
   "env_var": "ASSEMBLYAI_API_KEY",
   "key_url": "https://www.assemblyai.com/dashboard/home",
   "scopes": [],
