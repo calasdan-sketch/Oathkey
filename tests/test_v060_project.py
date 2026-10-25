@@ -545,6 +545,36 @@ class TestSetup(unittest.TestCase):
         self.assertEqual(code, 0)
 
 
+class TestKeychainIsAskedOnlyWhenItMatters(unittest.TestCase):
+    def test_env_services_never_touch_the_keychain(self):
+        d = proj({manifest.FILE_NAME: json.dumps(man("openai")), ".env": ""})
+        out = io.StringIO()
+        with cd(d):
+            projectcmds.cmd_status(A(), CAT, out, check_keychain=True,
+                                   read=lambda *a: self.fail("keychain asked"),
+                                   index_path=os.path.join(_isolation.mktemp(), "i.json"))
+            projectcmds.cmd_setup(A(dry_run=True), CAT, lambda *a: 0, out, check_keychain=True,
+                                  read=lambda *a: self.fail("keychain asked"))
+
+    def test_manifest_keychain_services_are_asked(self):
+        d = proj({manifest.FILE_NAME: json.dumps(man({"service": "openai", "store": "keychain"})), ".env": ""})
+        asked = []
+        out = io.StringIO()
+        with cd(d), mock.patch.object(presence.keychain_mod, "detect_backend", return_value="fake"):
+            projectcmds.cmd_status(A(), CAT, out, check_keychain=True,
+                                   read=lambda s, v, b: asked.append(v) or KEY,
+                                   index_path=os.path.join(_isolation.mktemp(), "i.json"))
+        self.assertEqual(asked, ["OPENAI_API_KEY"])
+        self.assertIn("OS keychain", out.getvalue())
+
+    def test_the_record_can_send_us_to_the_keychain_too(self):
+        d = proj({manifest.FILE_NAME: json.dumps(man("openai")), ".env": ""})
+        idx = os.path.join(_isolation.mktemp(), "i.json")
+        ledger.record(d, "openai", "keychain", index_path=idx)
+        self.assertTrue(projectcmds.wants_keychain({"service": "openai"}, d, idx))
+        self.assertFalse(projectcmds.wants_keychain({"service": "groq"}, d, idx))
+
+
 class TestStatus(unittest.TestCase):
     def status(self, d, idx=None, now=None, **kw):
         out = io.StringIO()
@@ -637,3 +667,35 @@ class TestStatus(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DetectBoundsTests(unittest.TestCase):
+    def test_walk_stops_at_dir_cap(self):
+        import tempfile, os
+        from safeeasyapi import detect
+        with tempfile.TemporaryDirectory() as d:
+            for i in range(6):
+                os.makedirs(os.path.join(d, f"d{i}"))
+                with open(os.path.join(d, f"d{i}", "a.py"), "w") as f:
+                    f.write("import os\nos.environ['OPENAI_API_KEY']\n")
+            old = detect.MAX_DIRS
+            detect.MAX_DIRS = 2
+            try:
+                _, read = detect.names_in_project(d)
+            finally:
+                detect.MAX_DIRS = old
+            self.assertLess(len(read), 6)
+
+
+class ReadNoFollowTests(unittest.TestCase):
+    def test_symlink_not_followed(self):
+        import tempfile, os
+        from safeeasyapi import store
+        if not hasattr(os, "symlink") or not hasattr(os, "O_NOFOLLOW"):
+            self.skipTest("no symlinks")
+        with tempfile.TemporaryDirectory() as d:
+            real = os.path.join(d, "real"); open(real, "w").write("A=1\n")
+            link = os.path.join(d, ".env"); os.symlink(real, link)
+            with self.assertRaises(store.EnvFileRefused):
+                store._read_bytes(link)
+            self.assertEqual(store._read_bytes(os.path.join(d, "none")), b"")

@@ -291,9 +291,20 @@ def _closing_quote(s: str) -> int:
 
 def _read_bytes(path: str) -> bytes:
     """The file's raw bytes; a missing file is empty."""
-    if not os.path.isfile(path):
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    try:
+        fd = os.open(path, flags)
+    except FileNotFoundError:
         return b""
-    with open(path, "rb") as f:
+    except OSError as e:
+        if getattr(e, "errno", None) == errno.ELOOP:
+            raise EnvFileRefused(path, LINK_REASON)
+        if os.path.isdir(path) or not os.path.exists(path):
+            return b""
+        raise
+    with os.fdopen(fd, "rb") as f:
+        if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
+            return b""
         return f.read()
 
 

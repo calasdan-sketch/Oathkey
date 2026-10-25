@@ -123,10 +123,20 @@ class TestRequestConnect(Base):
 
     def test_open_key_page_uses_the_injected_opener_with_the_recipe_url_only(self):
         opened = []
+        agent._LAST_OPEN.clear()
         r = json.loads(call("request_connect", {"service": "groq", "open_key_page": True}, self.d,
                             opener=opened.append)["result"]["content"][0]["text"])
         self.assertEqual(opened, [CAT["groq"]["key_url"]])
         self.assertTrue(r["opened_key_page"])
+
+    def test_the_page_is_not_reopened_within_the_cooldown(self):
+        agent._LAST_OPEN.clear()
+        opened = []
+        for _ in range(3):
+            r = json.loads(call("request_connect", {"service": "groq", "open_key_page": True}, self.d,
+                                opener=opened.append)["result"]["content"][0]["text"])
+        self.assertEqual(len(opened), 1)
+        self.assertFalse(r["opened_key_page"])
 
     def test_the_page_is_not_opened_unless_asked(self):
         opened = []
@@ -134,6 +144,8 @@ class TestRequestConnect(Base):
         self.assertEqual(opened, [])
 
     def test_opener_failure_is_reported_not_raised(self):
+        agent._LAST_OPEN.clear()
+
         def boom(url):
             raise RuntimeError("no browser")
         r = json.loads(call("request_connect", {"service": "groq", "open_key_page": True}, self.d,

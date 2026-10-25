@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 
 from . import detect as detect_mod
 from . import manifest as manifest_mod
@@ -26,6 +27,8 @@ from . import redact as redact_mod
 from . import store as store_mod
 
 MAX_SERVICES = 100
+OPEN_COOLDOWN = 30.0         # seconds between two openings of one key page
+_LAST_OPEN: dict[str, float] = {}
 STATUSES = ("present", "missing", "unknown")
 AGENT_RULE = ("Do not ask the person to paste a key into chat, and do not read or "
               "write .env files or any file holding keys. Ask the person to run "
@@ -131,11 +134,17 @@ def request_connect(service, catalog: dict, open_key_page: bool = False,
         if opener is None:
             import webbrowser
             opener = webbrowser.open
-        try:
-            opener(recipe["key_url"])
-            out["opened_key_page"] = True
-        except Exception:
-            out["opened_key_page"] = False
+        now = time.monotonic()
+        if now - _LAST_OPEN.get(slug, -1e9) < OPEN_COOLDOWN:
+            out["opened_key_page"] = False      # an agent cannot make tabs pile up
+            out["note"] = "the key page was opened a moment ago"
+        else:
+            _LAST_OPEN[slug] = now
+            try:
+                opener(recipe["key_url"])
+                out["opened_key_page"] = True
+            except Exception:
+                out["opened_key_page"] = False
     return out
 
 

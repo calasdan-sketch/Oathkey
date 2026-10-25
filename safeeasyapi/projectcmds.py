@@ -22,9 +22,15 @@ from . import presence as presence_mod
 from .recipes import printable
 
 
-def project_dir(args=None) -> str:
-    found = manifest_mod.find()
-    return os.path.dirname(found) if found else os.getcwd()
+def wants_keychain(item: dict, root: str, index_path: str | None = None) -> bool:
+    """Should the OS keychain be asked about this service? Only when the
+    manifest says it lives there, or the local record says it was put there:
+    asking costs an unlock prompt (macOS) or a wait (a Secret Service that
+    does not answer), so a service kept in .env never pays it."""
+    if item.get("store") == "keychain":
+        return True
+    entry = ledger_mod.get(root, item["service"], index_path)
+    return bool(entry and entry.get("store") == "keychain")
 
 
 def _env_file(manifest: dict, root: str, override: str | None) -> str:
@@ -117,7 +123,8 @@ def cmd_setup(args, catalog: dict, connect_fn, out=None,
             rows.append((slug, "no recipe", None))
             continue
         variables = manifest_mod.service_vars(item, recipe)
-        where = presence_mod.locate(slug, variables, env_file, check_keychain, read)
+        where = presence_mod.locate(slug, variables, env_file,
+                                    check_keychain and wants_keychain(item, root), read)
         if where["complete"]:
             rows.append((slug, "already there", None))
         else:
@@ -169,7 +176,9 @@ def status_rows(manifest: dict, root: str, catalog: dict, env_file: str,
         slug = item["service"]
         recipe = catalog.get(slug)
         variables = manifest_mod.service_vars(item, recipe)
-        where = presence_mod.locate(slug, variables, env_file, check_keychain, read)
+        where = presence_mod.locate(
+            slug, variables, env_file,
+            check_keychain and wants_keychain(item, root, index_path), read)
         places = []
         if where["env"]:
             places.append(os.path.relpath(env_file, root) if root else env_file)

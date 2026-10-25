@@ -765,7 +765,7 @@ def _main(argv: list[str] | None = None) -> int:
                        for var in recipes_mod.env_vars(recipe))
             if code == 0:
                 from . import ledger as ledger_mod
-                ledger_mod.forget(os.getcwd(), recipe["service"])
+                ledger_mod.forget(_project_root(), recipe["service"])
             return code
         if args.cmd == "rotate":
             print(f"\n  rotating "
@@ -804,8 +804,16 @@ def connect_service(recipe: dict, env_file: str = ".env", store: str = "env",
                                store_fn=store_fn, clipboard=clip, via_cli=via_cli)
     if code == 0:
         from . import ledger as ledger_mod
-        ledger_mod.record(os.getcwd(), recipe["service"], store, rotated=rotate)
+        ledger_mod.record(_project_root(), recipe["service"], store, rotated=rotate)
     return code
+
+
+def _project_root() -> str:
+    """The folder holding safeeasyapi.json (found from here upward), else here:
+    the key `status` looks the record up by."""
+    from . import manifest as manifest_mod
+    found = manifest_mod.find()
+    return os.path.dirname(found) if found else os.getcwd()
 
 
 if __name__ == "__main__":

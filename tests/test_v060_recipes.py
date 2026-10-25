@@ -258,6 +258,19 @@ class TestFindingsApplied(unittest.TestCase):
         self.assertIn("restricted", steps("stripe").lower())
         self.assertEqual(CAT["stripe"]["validate"]["limited"][0]["status"], 403)
 
+    def test_vercel_invalid_token_403_is_not_called_limited(self):
+        # Vercel is believed to answer a bad token with 403 + invalidToken:true
+        self.assertEqual(self.run_vercel('{"error":{"code":"forbidden","invalidToken":true}}'), "invalid")
+        self.assertEqual(self.run_vercel('{"error":{"code":"forbidden","invalidToken": true}}'), "invalid")
+        self.assertEqual(self.run_vercel('{"error":{"code":"forbidden","invalidToken":false}}'), "limited")
+        self.assertTrue(CAT["vercel"]["unverified"])
+
+    def run_vercel(self, body):
+        spec = json.loads(json.dumps(CAT["vercel"]["validate"]))
+        with Stub({("*", "/x"): (403, body)}) as stub:
+            spec["url"] = stub.base + "/x"
+            return validate_mod.validate_key(spec, "k" * 20).status
+
     def test_supabase_403_limited_and_no_prefix_claim(self):
         self.assertEqual(CAT["supabase"]["validate"]["limited"][0]["status"], 403)
         self.assertNotIn("sbp_", steps("supabase"))

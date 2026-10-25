@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import re
+import time
 
 from . import hook as hook_mod
 from . import recipes as recipes_mod
@@ -43,6 +44,10 @@ def _read_limited(path: str) -> str | None:
     return data.decode("utf-8", "replace")
 
 
+MAX_DIRS = 20000
+MAX_SECONDS = 10.0
+
+
 def names_in_project(root: str) -> tuple[set[str], list[str]]:
     """({NAME, ...}, [files read]) for the folder `root`. Real .env files are
     never opened."""
@@ -50,7 +55,12 @@ def names_in_project(root: str) -> tuple[set[str], list[str]]:
     read: list[str] = []
     count = 0
     root = os.path.abspath(root)
+    started = time.monotonic()
+    seen_dirs = 0
     for dirpath, dirs, files in os.walk(root):
+        seen_dirs += 1
+        if seen_dirs > MAX_DIRS or time.monotonic() - started > MAX_SECONDS:
+            break
         depth = os.path.relpath(dirpath, root).count(os.sep)
         dirs[:] = sorted(d for d in dirs if d not in scan_mod.PRUNE_DIRS
                          and not os.path.islink(os.path.join(dirpath, d)))
