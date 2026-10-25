@@ -74,15 +74,19 @@ ENV_NAME_RE = re.compile(
 REASON = (
     "safeeasyapi blocked this because {what} is a .env file, which holds "
     "secret API keys. Anything you read goes into your memory and the "
-    "conversation log. Do not try another way to read it. If you need a key to run "
-    "something, ask the person to run the command themselves, or use "
-    "`safeeasyapi run <service> -- <command>`, which hands the key to the "
-    "command without showing it. If you only need to know which variables "
-    "exist, read .env.example instead.")
+    "conversation log. Do not try another way to read it. If you need a key, call "
+    "the safeeasyapi tool `request_connect` (service name) - or `needs_keys` to "
+    "see which keys the project lacks - and tell the person the command it "
+    "gives (`safeeasyapi connect <service>`); never ask for the key in chat. "
+    "To run something with a key, use `safeeasyapi run <service> -- <command>`, "
+    "which hands the key to the command without showing it. If you only need "
+    "to know which variables exist, read .env.example instead.")
 
 WRITE_REASON = (
     "Claude can't write to {what} - your keys stay out of the chat. "
-    "Run: safeeasyapi connect <service>  (or edit the file yourself).")
+    "Ask the safeeasyapi tool `request_connect` (or `needs_keys`) which key is "
+    "missing and tell the person to run: safeeasyapi connect <service>  "
+    "(or edit the file yourself).")
 
 
 # ------------------------------------------------------------------ the check

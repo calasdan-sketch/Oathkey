@@ -68,7 +68,7 @@ def run_cli(*args, read=FAKE_KEY, call=None):
             mock.patch.object(keychain_mod.subprocess, "call",
                               **(call or {"return_value": 0})) as call_mock, \
             redirect_stderr(err), redirect_stdout(io.StringIO()):
-        code = cli_mod.main(["run", "acme", "--", *args])
+        code = cli_mod.main(["run", "--no-redact", "acme", "--", *args])
     return code, err.getvalue(), read_mock, call_mock
 
 

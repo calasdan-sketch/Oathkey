@@ -6,6 +6,7 @@ import argparse
 import errno
 import json
 import os
+import subprocess
 import sys
 
 from . import __version__
@@ -134,11 +135,27 @@ def _build_parser() -> argparse.ArgumentParser:
         c.add_argument("--clipboard", action="store_true",
                        help="Copy-and-go: click the vendor's Copy button and the key "
                             "is taken from the clipboard (then emptied) - no pasting.")
+        c.add_argument("--allow-clipboard-history", action="store_true",
+                       help="With --clipboard on Windows: go on even though Windows "
+                            "clipboard history is on and would keep a copy of the key.")
         c.add_argument("--via-cli", action="store_true",
                        help="Get the key from the vendor's own CLI after its browser "
                             "sign-in (built-in recipes that support it, e.g. github).")
 
     sub.add_parser("list", help="List services with saved recipes.")
+
+    dr = sub.add_parser(
+        "doctor-recipes", help="Check that the recipes' web addresses still work.",
+        description="Visit every recipe's key page, docs link and test server "
+                    "over HTTPS - with NO key, nothing secret - and report "
+                    "moved or gone pages. Exit status: 0 nothing rotted, 1 "
+                    "something rotted, 2 could not run.")
+    dr.add_argument("service", nargs="*", help="Only these services.")
+    dr.add_argument("--json", action="store_true", help="Print the result as JSON.")
+    dr.add_argument("--timeout", type=float, default=15.0,
+                    help="Seconds to wait for each address (default 15).")
+    dr.add_argument("--my-recipes", action="store_true",
+                    help="Also check the recipes in ~/.safeeasyapi/recipes.")
 
     fg = sub.add_parser("forget", help="Remove a stored key: from the OS "
                                        "keychain and from the .env file.")
@@ -151,11 +168,80 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="Write the recipe here instead of "
                         f"{recipes_mod.user_recipes_dir()}.")
 
-    r = sub.add_parser("run", help="Run a command with a keychain-stored key "
-                                   "in its environment (never printed).")
-    r.add_argument("service", help="Service slug.")
+    r = sub.add_parser("run", help="Run a command with a stored key in its "
+                                   "environment (never printed).",
+                       description="Run a command with the service's key in ITS "
+                                   "environment only. The key comes from the OS "
+                                   "keychain or, failing that, the .env file. "
+                                   "The command's output is scrubbed of the key "
+                                   "unless you pass --no-redact. With --all the "
+                                   "first word after run is part of the command "
+                                   "and every service in safeeasyapi.json is "
+                                   "injected.")
+    r.add_argument("service", help="Service slug (with --all: the start of the command).")
     r.add_argument("command", nargs=argparse.REMAINDER,
                    help="command after -- : safeeasyapi run stripe -- python app.py")
+    r.add_argument("--env-file", default=None,
+                   help="The .env file to read keys from (default: .env, or the "
+                        "manifest's env_file).")
+    r.add_argument("--all", action="store_true",
+                   help="Inject every service listed in safeeasyapi.json.")
+    r.add_argument("--no-redact", dest="redact", action="store_false", default=True,
+                   help="Do not scrub the command's output (it then runs on your "
+                        "terminal directly; use it for interactive programs).")
+    r.add_argument("--redact", dest="redact", action="store_true",
+                   help="Scrub the key out of the command's output (the default).")
+
+    ini = sub.add_parser("init", help="Write safeeasyapi.json for this project.",
+                         description="Look at the variable names this project uses "
+                                     "(source files and .env.example-style templates "
+                                     "- never a real .env) and list the services "
+                                     "that have a recipe. Shows a preview; --write "
+                                     "saves safeeasyapi.json (names only, safe to "
+                                     "commit).")
+    ini.add_argument("--write", action="store_true", help="Save the file.")
+    ini.add_argument("--add", action="store_true", help="Add newly found services to an existing file.")
+    ini.add_argument("--force", action="store_true", help="Start the file over.")
+
+    su = sub.add_parser("setup", help="Connect every service the project needs.",
+                        description="Connect each service in safeeasyapi.json that "
+                                    "has no key yet, in order. Services that "
+                                    "already have one are skipped, so it is safe to "
+                                    "run again after a stop.")
+    su.add_argument("service", nargs="*", help="Only these services.")
+    su.add_argument("--env-file", default=None, help="Override the .env file.")
+    su.add_argument("--dry-run", action="store_true", help="Say what would be done.")
+    su.add_argument("--no-browser", action="store_true", help="Don't auto-open key pages.")
+    su.add_argument("--clipboard", action="store_true", help="Copy-and-go for each key.")
+    su.add_argument("--allow-clipboard-history", action="store_true",
+                    help="Go on with copy-and-go even if Windows clipboard history is on.")
+
+    stt = sub.add_parser("status", help="Where each key lives and how old it is.",
+                         description="List the services in safeeasyapi.json, where "
+                                     "each key is stored, when it was added and "
+                                     "its age. Never shows a key. Exit status 1 "
+                                     "when a key is missing or past its age limit.")
+    stt.add_argument("--env-file", default=None, help="Override the .env file.")
+    stt.add_argument("--max-age", type=int, default=None, metavar="DAYS",
+                     help="Suggest rotating keys older than this (default 90, or "
+                          "the manifest's max_age_days).")
+    stt.add_argument("--json", action="store_true", help="Print the result as JSON.")
+
+    ex = sub.add_parser("export", help="Send a stored key to GitHub or Vercel.",
+                        description="Hand a stored key to the vendor's own tool "
+                                    "(gh secret set / vercel env add) through a "
+                                    "pipe, so it is never in a command line, a "
+                                    "file or on screen. You must have gh / "
+                                    "vercel installed and signed in.")
+    ex.add_argument("service", help="Service slug.")
+    ex.add_argument("--to", required=True, choices=["github", "vercel"])
+    ex.add_argument("--repo", default=None, help="GitHub: OWNER/REPO (default: this folder's repository).")
+    ex.add_argument("--environment", default=None,
+                    help="GitHub: a deployment environment; Vercel: development, "
+                         "preview or production (default production).")
+    ex.add_argument("--env-file", default=".env", help="Where to find the key if it is not in the keychain.")
+    ex.add_argument("--overwrite", action="store_true", help="Vercel: replace an existing variable.")
+    ex.add_argument("--yes", action="store_true", help="Agree without being asked.")
 
     sub.add_parser("mcp", help="Run the MCP server on stdio (for Claude Code).")
 
@@ -452,7 +538,8 @@ def _cmd_forget(recipe: dict, env_file: str, out=None,
     return 1 if problems else 0
 
 
-def _cmd_run(recipe: dict, command: list[str]) -> int:
+def _cmd_run(recipes_to_run: list, command: list[str], env_file: str = ".env",
+             redact: bool = True, prefer: str = "keychain") -> int:
     cmd = list(command)
     if cmd and cmd[0] == "--":
         cmd = cmd[1:]
@@ -461,9 +548,9 @@ def _cmd_run(recipe: dict, command: list[str]) -> int:
               file=sys.stderr)
         return 2
     backend = keychain_mod.detect_backend()
-    if backend is None:
-        print("error: no OS keychain on this system - the key is in your "
-              ".env file; load that instead.", file=sys.stderr)
+    if backend is None and not os.path.isfile(env_file):
+        print("error: no OS keychain on this system and no .env file to read.",
+              file=sys.stderr)
         return 1
     try:
         # before the keychain is asked for the key: a typo costs no unlock
@@ -471,19 +558,23 @@ def _cmd_run(recipe: dict, command: list[str]) -> int:
     except keychain_mod.CannotRun as e:
         print(f"error: {e}", file=sys.stderr)
         return e.code
+    names = ", ".join(r["service"] for r in recipes_to_run)
     try:
-        return keychain_mod.run_with_key(recipe, cmd, backend)
+        values: dict[str, str] = {}
+        for recipe in recipes_to_run:
+            values.update(keychain_mod.gather(recipe, backend, None, env_file, prefer))
+        return keychain_mod.execute(cmd, values, None, None if redact else subprocess.call, redact)
     except keychain_mod.CannotRun as e:
         print(f"error: {e}", file=sys.stderr)
         return e.code
     except keychain_mod.KeychainUnavailable as e:
         print(f"error: the {keychain_mod.label(backend)} did not give the key "
-              f"for '{recipe['service']}': {e}.", file=sys.stderr)
+              f"for '{names}': {e}.", file=sys.stderr)
         return 1
     except keychain_mod.KeychainError:
-        print(f"error: no key for '{recipe['service']}' in the "
-              f"{keychain_mod.label(backend)} - run "
-              f"`safeeasyapi connect {recipe['service']} --store keychain`.",
+        print(f"error: no key for '{names}' in the "
+              f"{keychain_mod.label(backend)} or in {env_file} - run "
+              f"`safeeasyapi connect {recipes_to_run[0]['service']} --store keychain`.",
               file=sys.stderr)
         return 1
 
@@ -591,6 +682,11 @@ def _main(argv: list[str] | None = None) -> int:
         catalog = (recipes_mod.load_recipes() if args.my_recipes
                    else recipes_mod.load_recipes(recipes_mod.RECIPES_DIR))
         return scan_mod.cmd_scan(args, catalog)
+    if args.cmd == "doctor-recipes":
+        from . import doctor as doctor_mod
+        catalog = (recipes_mod.load_recipes() if args.my_recipes
+                   else recipes_mod.load_recipes(recipes_mod.RECIPES_DIR))
+        return doctor_mod.cmd_doctor(args, catalog)
     catalog = recipes_mod.load_recipes()
 
     if args.cmd == "list":
@@ -601,39 +697,111 @@ def _main(argv: list[str] | None = None) -> int:
         return _cmd_add(args.recipes_dir)
     if args.cmd == "mcp":
         return mcp_mod.serve(catalog)
+    if args.cmd == "init":
+        from . import projectcmds
+        return projectcmds.cmd_init(args, catalog)
+    if args.cmd == "status":
+        from . import projectcmds
+        return projectcmds.cmd_status(args, catalog)
+    if args.cmd == "setup":
+        from . import projectcmds
+
+        def connect_one(recipe, store, env_file):
+            return connect_service(recipe, env_file=env_file, store=store,
+                                   no_browser=args.no_browser,
+                                   clipboard=args.clipboard,
+                                   allow_history=args.allow_clipboard_history)
+        return projectcmds.cmd_setup(args, catalog, connect_one)
+    if args.cmd == "export":
+        from . import export as export_mod
+        return export_mod.cmd_export(args, catalog)
+    if args.cmd == "run" and args.all:
+        from . import manifest as manifest_mod
+        path = manifest_mod.find()
+        if not path:
+            print("error: --all needs a safeeasyapi.json (run `safeeasyapi init`).",
+                  file=sys.stderr)
+            return 1
+        try:
+            manifest = manifest_mod.load(path)
+        except manifest_mod.ManifestError as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 1
+        chosen = [catalog[i["service"]] for i in manifest["services"] if i["service"] in catalog]
+        env_file = args.env_file or os.path.join(os.path.dirname(path), manifest.get("env_file") or ".env")
+        prefer = "env" if all(i.get("store", "env") == "env" for i in manifest["services"]) else "keychain"
+        if not chosen:
+            print("error: no known service in safeeasyapi.json.", file=sys.stderr)
+            return 1
+        return _cmd_run(chosen, [args.service] + list(args.command), env_file, args.redact, prefer)
     if args.cmd in ("connect", "rotate", "run", "forget"):
         recipe = catalog.get(args.service)
         if not recipe:
-            print(f"unknown service '{args.service}'.")
+            print(f"unknown service '{recipes_mod.printable(args.service)}'.")
             _cmd_list(catalog)
             return 1
         if args.cmd == "run":
-            return _cmd_run(recipe, args.command)
+            from . import manifest as manifest_mod
+            env_file, prefer = args.env_file, "keychain"
+            found = manifest_mod.find()
+            if found:
+                try:
+                    manifest = manifest_mod.load(found)
+                    env_file = env_file or os.path.join(os.path.dirname(found),
+                                                        manifest.get("env_file") or ".env")
+                    for item in manifest["services"]:
+                        if item["service"] == args.service and item.get("store") == "env":
+                            prefer = "env"
+                except manifest_mod.ManifestError:
+                    pass
+            return _cmd_run([recipe], args.command, env_file or ".env", args.redact, prefer)
         if args.cmd == "forget":
             # one pass per stored value: an App ID and its secret are both removed
-            return max(_cmd_forget(dict(recipe, env_var=var), args.env_file)
+            code = max(_cmd_forget(dict(recipe, env_var=var), args.env_file)
                        for var in recipes_mod.env_vars(recipe))
-        import webbrowser
-        opener = (lambda url: None) if args.no_browser else webbrowser.open
-        store_fn = None
-        if args.store == "keychain":
-            store_fn = keychain_store(recipe, args.env_file)
+            if code == 0:
+                from . import ledger as ledger_mod
+                ledger_mod.forget(os.getcwd(), recipe["service"])
+            return code
         if args.cmd == "rotate":
             print(f"\n  rotating "
                   f"{recipes_mod.printable(recipe['display'], words=True)} - "
                   f"the stored key will be replaced.\n")
-        clip = None
-        if args.clipboard:
-            from . import clipboard as clipboard_mod
-            try:
-                clip = clipboard_mod.backend()
-            except clipboard_mod.Unavailable as e:
-                print(f"  (copy-and-go unavailable: {recipes_mod.printable(e)} - "
-                      f"using the hidden paste instead)")
-        return connect_mod.connect(recipe, env_file=args.env_file,
-                                   browser_open=opener, store_fn=store_fn,
-                                   clipboard=clip, via_cli=args.via_cli)
+        return connect_service(recipe, env_file=args.env_file, store=args.store,
+                               no_browser=args.no_browser, clipboard=args.clipboard,
+                               via_cli=args.via_cli, rotate=args.cmd == "rotate",
+                               allow_history=args.allow_clipboard_history)
     return 0
+
+
+def connect_service(recipe: dict, env_file: str = ".env", store: str = "env",
+                    no_browser: bool = False, clipboard: bool = False,
+                    via_cli: bool = False, rotate: bool = False,
+                    allow_history: bool = False) -> int:
+    """The connect flow plus the local record of when the key was added."""
+    import webbrowser
+    opener = (lambda url: None) if no_browser else webbrowser.open
+    store_fn = keychain_store(recipe, env_file) if store == "keychain" else None
+    clip = None
+    if clipboard:
+        from . import clipboard as clipboard_mod
+        try:
+            clip = clipboard_mod.backend()
+            warning = clipboard_mod.history_warning()
+            if warning and not allow_history:
+                print(f"  {warning}")
+                print("  So I will ask you to paste the key (hidden) instead. "
+                      "Pass --allow-clipboard-history to use copy-and-go anyway.")
+                clip = None
+        except clipboard_mod.Unavailable as e:
+            print(f"  (copy-and-go unavailable: {recipes_mod.printable(e)} - "
+                  f"using the hidden paste instead)")
+    code = connect_mod.connect(recipe, env_file=env_file, browser_open=opener,
+                               store_fn=store_fn, clipboard=clip, via_cli=via_cli)
+    if code == 0:
+        from . import ledger as ledger_mod
+        ledger_mod.record(os.getcwd(), recipe["service"], store, rotated=rotate)
+    return code
 
 
 if __name__ == "__main__":

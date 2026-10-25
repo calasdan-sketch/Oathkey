@@ -1,0 +1,144 @@
+"""`safeeasyapi export`: copy a stored key into GitHub or Vercel without typing it.
+
+The key goes to the vendor's OWN command-line tool through its standard
+INPUT (a pipe), the way both tools document for secrets:
+
+  GitHub   gh secret set NAME [--repo OWNER/REPO] [--env ENVIRONMENT]
+           (the docs: "reads from standard input if --body is not specified")
+  Vercel   vercel env add NAME ENVIRONMENT --sensitive
+           (the docs: a value can come from standard input)
+
+So the key is never on a command line (where `ps` and shell history would
+see it), never in a file this tool writes and never on screen. Only names
+are in the argument list. This tool does not talk to GitHub or Vercel
+itself: you must have `gh` / `vercel` installed and signed in.
+"""
+
+from __future__ import annotations
+
+import re
+import subprocess
+import sys
+
+from . import keychain as keychain_mod
+from . import procs
+from . import recipes as recipes_mod
+from . import redact as redact_mod
+
+TARGETS = ("github", "vercel")
+PROGRAMS = {"github": "gh", "vercel": "vercel"}
+LABELS = {"github": "GitHub (gh secret set)", "vercel": "Vercel (vercel env add)"}
+REPO_RE = re.compile(r"^(?:[A-Za-z0-9][A-Za-z0-9.-]*/)?[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*\Z")
+ENV_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}\Z")
+VERCEL_ENVS = ("development", "preview", "production")
+TIMEOUT = 90
+
+
+class ExportError(Exception):
+    """A plain sentence; never holds a key."""
+
+
+def build_argv(target: str, exe: str, name: str, repo: str | None = None,
+               environment: str | None = None, overwrite: bool = False) -> list[str]:
+    """The command line: names only, never a value."""
+    if not recipes_mod.ENV_VAR_RE.match(name):
+        raise ExportError("not a valid variable name")
+    if target == "github":
+        argv = [exe, "secret", "set", name]
+        if repo:
+            if not REPO_RE.match(repo):
+                raise ExportError("--repo must look like OWNER/REPO")
+            argv += ["--repo", repo]
+        if environment:
+            if not ENV_NAME_RE.match(environment):
+                raise ExportError("--environment is not a valid environment name")
+            argv += ["--env", environment]
+        return argv
+    if target == "vercel":
+        environment = environment or "production"
+        if environment not in VERCEL_ENVS:
+            raise ExportError("--environment for Vercel must be development, preview or production")
+        if repo:
+            raise ExportError("--repo is for GitHub; Vercel uses the project linked in this folder")
+        argv = [exe, "env", "add", name, environment, "--sensitive"]
+        if overwrite:
+            argv.append("--force")
+        return argv
+    raise ExportError("unknown target")
+
+
+def send(argv: list[str], value: str, run=subprocess.run) -> tuple[bool, str]:
+    """Run the vendor tool with `value` on its standard input. Returns
+    (ok, note); the note is the tool's complaint with the value scrubbed
+    out, cut short."""
+    try:
+        done = run(argv, input=value.encode("utf-8"), capture_output=True,
+                   timeout=TIMEOUT)
+    except subprocess.TimeoutExpired:
+        return False, f"{argv[0]} did not finish within {TIMEOUT} seconds"
+    except OSError as e:
+        return False, f"{argv[0]} could not be run ({type(e).__name__})"
+    if done.returncode == 0:
+        return True, ""
+    scrub = redact_mod.Redactor([value])
+    text = scrub.text(done.stderr.decode("utf-8", "replace") or done.stdout.decode("utf-8", "replace"))
+    text = " ".join(recipes_mod.printable(text).split())[:300]
+    return False, text or f"{argv[0]} exited with status {done.returncode}"
+
+
+def cmd_export(args, catalog: dict, ask=input, interactive=None, out=None,
+               which=None, run=subprocess.run, read_fn=None, backend=None) -> int:
+    out = out or sys.stdout
+    recipe = catalog.get(args.service)
+    if recipe is None:
+        out.write("unknown service. See `safeeasyapi list`.\n")
+        return 1
+    program = PROGRAMS[args.to]
+    exe = procs.find_program(program, which or __import__("shutil").which)
+    if not exe:
+        out.write(f"  {program} is not installed (or not on PATH). Install it and sign in "
+                  f"({program} auth login), then run this again.\n")
+        return 1
+    try:
+        values = keychain_mod.gather(
+            recipe, backend if backend is not None else keychain_mod.detect_backend(),
+            read_fn, args.env_file, "keychain")
+        argvs = {name: build_argv(args.to, exe, name, args.repo, args.environment,
+                                  args.overwrite) for name in values}
+    except ExportError as e:
+        out.write(f"  {recipes_mod.printable(e)}\n")
+        return 1
+    except keychain_mod.KeychainError as e:
+        out.write(f"  I could not find the stored key to export: "
+                  f"{recipes_mod.printable(e)}. Run `safeeasyapi connect {args.service}` first.\n")
+        return 1
+    names = ", ".join(values)
+    target = LABELS[args.to] + (f" for {args.repo}" if args.repo else "")
+    out.write(f"  About to send {names} to {target}.\n"
+              f"  The value goes to `{program}` through a pipe - never on a command line, "
+              f"never on screen.\n")
+    if not args.yes:
+        if interactive is None:
+            interactive = lambda: bool(sys.stdin and sys.stdin.isatty())
+        if not interactive():
+            out.write("  There is no terminal to ask, so nothing was sent. Add --yes to agree.\n")
+            values.clear()
+            return 1
+        try:
+            answer = ask("  Send it? [y/N]: ")
+        except (EOFError, KeyboardInterrupt):
+            answer = ""
+        if (answer or "").strip().lower() not in ("y", "yes"):
+            out.write("  cancelled - nothing was sent.\n")
+            values.clear()
+            return 1
+    failed = 0
+    for name, value in list(values.items()):
+        ok, note = send(argvs[name], value, run)
+        if ok:
+            out.write(f"  ✓ {name} sent to {args.to}\n")
+        else:
+            failed += 1
+            out.write(f"  ✗ {name}: {note}\n")
+    values.clear()
+    return 1 if failed else 0

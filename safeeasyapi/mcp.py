@@ -20,6 +20,7 @@ import re
 import sys
 
 from . import __version__
+from . import agent as agent_mod
 from . import publicapis as pa_mod
 from . import recipes as recipes_mod
 
@@ -47,6 +48,27 @@ def _tool_defs() -> list[dict]:
          "inputSchema": {"type": "object",
                          "properties": {"service": {"type": "string"}},
                          "required": ["service"]}},
+        {"name": "request_connect",
+         "description": ("Ask the PERSON to connect a service's API key. Returns "
+                         "only {service, env_var, status, instructions}: the "
+                         "status is present, missing or unknown. You never see "
+                         "the key; tell the person to run the command in the "
+                         "instructions in their own terminal. Never ask them to "
+                         "paste a key into chat."),
+         "inputSchema": {"type": "object",
+                         "properties": {
+                             "service": {"type": "string"},
+                             "open_key_page": {"type": "boolean",
+                                               "description": "Also open the vendor's key page in the person's browser."}},
+                         "required": ["service"]}},
+        {"name": "needs_keys",
+         "description": ("List the API keys a project uses (from safeeasyapi.json, "
+                         ".env.example and variable names in the code) and which "
+                         "are not stored yet. Returns names and statuses only - "
+                         "never a value."),
+         "inputSchema": {"type": "object",
+                         "properties": {"project": {"type": "string",
+                                                    "description": "Folder path; default is the current folder."}}}},
         {"name": "find_public_apis",
          "description": ("Search the public APIs directory for free APIs "
                          "matching a task (e.g. 'weather', 'crypto price', "
@@ -72,7 +94,7 @@ def _tool_defs() -> list[dict]:
     ]
 
 
-_TYPE_WORDS = {"string": "a string", "integer": "an integer"}
+_TYPE_WORDS = {"string": "a string", "integer": "an integer", "boolean": "true or false"}
 
 
 def _has_type(value, json_type: str) -> bool:
@@ -82,6 +104,8 @@ def _has_type(value, json_type: str) -> bool:
         return isinstance(value, str)
     if json_type == "integer":
         return isinstance(value, int) and not isinstance(value, bool)
+    if json_type == "boolean":
+        return isinstance(value, bool)
     return True
 
 
@@ -211,13 +235,35 @@ def _served_brief(e: dict) -> dict:
     return brief
 
 
+def _short(name: str) -> str:
+    """A name from the caller, for an error message: only a short plain one is
+    echoed (a long or odd one could be a key pasted by mistake)."""
+    return name if re.fullmatch(r"[A-Za-z0-9_./-]{1,24}", name) else "(not shown)"
+
+
 def _error(req_id, code: int, message: str) -> dict:
     return {"jsonrpc": "2.0", "id": req_id,
             "error": {"code": code, "message": message}}
 
 
 def handle(request, catalog: dict[str, dict],
-           pa_loader=None) -> dict | None:
+           pa_loader=None, opener=None, cwd: str | None = None) -> dict | None:
+    """Every answer is passed through agent.guard_text on the way out (see
+    agent.py): if a secret value this process can reach ever got into a
+    reply, it is blanked."""
+    response = _handle(request, catalog, pa_loader, opener, cwd)
+    if response is not None and "result" in response:
+        for item in response["result"].get("content", []) if isinstance(response["result"], dict) else []:
+            if isinstance(item, dict) and isinstance(item.get("text"), str):
+                item["text"] = agent_mod.guard_text(item["text"], catalog, cwd)
+    elif response is not None and "error" in response:
+        response["error"]["message"] = agent_mod.guard_text(
+            str(response["error"].get("message", "")), catalog, cwd)
+    return response
+
+
+def _handle(request, catalog: dict[str, dict],
+            pa_loader=None, opener=None, cwd: str | None = None) -> dict | None:
     """Handle one JSON-RPC message. Returns the response dict, or None when
     nothing must be sent: a notification (no `id`, or any `notifications/*`
     method — initialized, cancelled, roots/list_changed ...) never gets a
@@ -240,7 +286,7 @@ def handle(request, catalog: dict[str, dict],
         return _error(req_id, code, message)
 
     if method not in _METHODS:
-        return err(METHOD_NOT_FOUND, f"unknown method: {method}")
+        return err(METHOD_NOT_FOUND, f"unknown method: {_short(method)}")
     # MCP passes its parameters by name, so `params` is an object or absent.
     # null, a list, a string or a number is Invalid params - never a crash
     # on `.get`, never -32603.
@@ -269,7 +315,7 @@ def handle(request, catalog: dict[str, dict],
                        "Invalid params: 'arguments' must be an object")
         tool = next((t for t in _tool_defs() if t["name"] == name), None)
         if tool is None:
-            return err(INVALID_PARAMS, f"unknown tool: {name}")
+            return err(INVALID_PARAMS, f"unknown tool: {_short(name)}")
         problem = _argument_problem(tool["inputSchema"], args)
         if problem:
             return err(INVALID_PARAMS, f"Invalid params: {problem}")
@@ -281,11 +327,12 @@ def handle(request, catalog: dict[str, dict],
             return ok({"content": [{"type": "text",
                                     "text": json.dumps(services)}]})
         if name == "get_recipe":
-            recipe = catalog.get(args.get("service", ""))
+            slug = agent_mod.clean_slug(args.get("service"))
+            recipe = catalog.get(slug) if slug else None
             if not recipe:
                 err_text = json.dumps({
-                    "error": "no recipe for '%s'. Available: %s" % (
-                        args.get("service"), sorted(catalog))})
+                    "error": "no recipe for that service. Available: %s" % (
+                        sorted(catalog),)})
                 return ok({"content": [{"type": "text", "text": err_text}],
                            "isError": True})
             hint = ("\n\nTo complete the connection, run in a terminal: "
@@ -295,6 +342,22 @@ def handle(request, catalog: dict[str, dict],
             return ok({"content": [{"type": "text",
                                     "text": json.dumps(
                                         _public_recipe(recipe)) + hint}]})
+        if name == "request_connect":
+            answer = agent_mod.request_connect(
+                args.get("service"), catalog, bool(args.get("open_key_page")),
+                opener, cwd)
+            failed = answer.pop("isError", False)
+            result = {"content": [{"type": "text", "text": json.dumps(answer)}]}
+            if failed:
+                result["isError"] = True
+            return ok(result)
+        if name == "needs_keys":
+            answer = agent_mod.needs_keys(args.get("project"), catalog, cwd)
+            failed = answer.pop("isError", False)
+            result = {"content": [{"type": "text", "text": json.dumps(answer)}]}
+            if failed:
+                result["isError"] = True
+            return ok(result)
         if name == "find_public_apis":
             try:
                 entries = _pa_entries(pa_loader)
@@ -393,7 +456,7 @@ def serve(catalog: dict[str, dict] | None = None,
                 response = handle(request, catalog, pa_loader)
             except Exception as e:  # never let one bad request kill the server
                 rid = request.get("id") if isinstance(request, dict) else None
-                response = _error(rid, INTERNAL_ERROR, str(e))
+                response = _error(rid, INTERNAL_ERROR, agent_mod.guard_text(str(e), catalog))
         if response is not None:
             try:
                 data = (json.dumps(response) + "\n").encode("utf-8")

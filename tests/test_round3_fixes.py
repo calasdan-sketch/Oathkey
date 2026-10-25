@@ -546,7 +546,7 @@ class TestKeychain(unittest.TestCase):
                                       return_value=0) as call:
                 out = io.StringIO()
                 with redirect_stdout(out):
-                    self.assertEqual(cli_mod.main(["run", "acme", "--", *prog]), 0)
+                    self.assertEqual(cli_mod.main(["run", "--no-redact", "acme", "--", *prog]), 0)
                 self.assertEqual(call.call_args.args[0], prog)
                 self.assertEqual(call.call_args.kwargs["env"]["ACME_API_KEY"], FAKE_KEY)
                 self.assertNotIn(FAKE_KEY, out.getvalue())

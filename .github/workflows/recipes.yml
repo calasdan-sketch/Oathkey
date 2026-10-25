@@ -1,0 +1,58 @@
+name: recipes
+
+# Once a week, visit every recipe's key page, docs link and test server over
+# HTTPS with NO key (nothing secret exists in this job) and keep ONE open
+# issue up to date when a page has moved or gone. Also runnable by hand.
+on:
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  doctor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      issues: write          # only this job may open or update the one issue
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Check every recipe address
+        id: check
+        run: |
+          set +e
+          python -m safeeasyapi doctor-recipes > "$RUNNER_TEMP/report.txt"
+          echo "code=$?" >> "$GITHUB_OUTPUT"
+          cat "$RUNNER_TEMP/report.txt"
+      - name: Open or update the one rot issue
+        if: steps.check.outputs.code == '1'
+        run: |
+          title="Recipe rot: some recipe web addresses no longer work"
+          {
+            echo "The weekly \`safeeasyapi doctor-recipes\` check found addresses that are gone or unreachable."
+            echo
+            echo "Run: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+            echo
+            echo '```'
+            grep -E "ROT|rotted" "$RUNNER_TEMP/report.txt" || true
+            echo '```'
+            echo
+            echo "See CONTRIBUTING.md for how to fix a recipe (cite the vendor docs page)."
+          } > "$RUNNER_TEMP/body.md"
+          number=$(gh issue list --state open --search "in:title \"Recipe rot\"" --json number --jq '.[0].number')
+          if [ -n "$number" ]; then
+            gh issue edit "$number" --body-file "$RUNNER_TEMP/body.md"
+          else
+            gh issue create --title "$title" --body-file "$RUNNER_TEMP/body.md"
+          fi
+      - name: Fail the run when nothing could be checked
+        if: steps.check.outputs.code == '2'
+        run: exit 1

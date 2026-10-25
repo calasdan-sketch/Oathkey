@@ -116,6 +116,48 @@ def backend():
     raise Unavailable("no clipboard tool found (install wl-clipboard, xclip or xsel)")
 
 
+# ---- clipboard history -----------------------------------------------------
+
+HISTORY_KEY = r"Software\Microsoft\Clipboard"
+HISTORY_WARNING = (
+    "Windows clipboard history is ON (Win+V). It keeps its own copy of what "
+    "you copy - including this key - and this tool cannot remove it: only the "
+    "program that copies can ask Windows to leave something out of the "
+    "history, and here that program is the vendor's web page. Clearing the "
+    "clipboard does not clear the history.")
+
+
+def _read_registry_flags() -> dict:
+    """{"history": bool, "cloud": bool} from the current user's settings."""
+    import winreg
+    flags = {}
+    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, HISTORY_KEY) as key:
+        for name, label in (("EnableClipboardHistory", "history"),
+                            ("CloudClipboardAutomaticUpload", "cloud")):
+            try:
+                flags[label] = bool(winreg.QueryValueEx(key, name)[0])
+            except OSError:
+                flags[label] = False
+    return flags
+
+
+def history_warning(platform: str | None = None, read_flags=None) -> str | None:
+    """A sentence when this system is known to keep a clipboard history that
+    copy-and-go cannot keep the key out of - today only Windows' history
+    (Win+V), which the registry says is on. None otherwise. On macOS and
+    Linux a clipboard manager (Maccy, CopyQ, Klipper ...) may do the same and
+    cannot be detected from here: see the README."""
+    if (platform or sys.platform) != "win32":
+        return None
+    try:
+        flags = (read_flags or _read_registry_flags)()
+    except (OSError, ImportError):
+        return None         # setting not present: history is off by default
+    if flags.get("history"):
+        return HISTORY_WARNING + (" Cloud sync of the clipboard is on too." if flags.get("cloud") else "")
+    return None
+
+
 # ---- waiting for a key ---------------------------------------------------------
 
 def looks_like(value: str, pattern: str | None) -> bool:
@@ -125,7 +167,10 @@ def looks_like(value: str, pattern: str | None) -> bool:
     if re.match(r"https?://", value, re.IGNORECASE):
         return False                        # a copied link is never the key
     if pattern:
-        return re.fullmatch(pattern, value) is not None
+        # from the START of the value, not the whole of it: a gate such as
+        # "^sk-ant-" names only the documented beginning, and a valid key
+        # that is longer than any example must still pass
+        return re.match(pattern, value) is not None
     return KEY_SHAPE.match(value) is not None
 
 

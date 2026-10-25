@@ -615,7 +615,7 @@ class TestShippedCatalog(unittest.TestCase):
             for url in (r["key_url"], r["validate"]["url"], r.get("docs")):
                 self.assertTrue(url.startswith("https://"), (slug, url))
             self.assertTrue(r["display"] and r["steps"] and r["env_var"], slug)
-            self.assertEqual(r["validate"]["method"], "GET", slug)
+            self.assertEqual(r["validate"]["method"], "POST" if slug == "aws" else "GET", slug)
             for host in r["validate"].get("trusted_hosts", []):
                 self.assertEqual(host, connect_mod._host(r["validate"]["url"]), slug)
             # validation requests are buildable with every shape used, and
