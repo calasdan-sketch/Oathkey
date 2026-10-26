@@ -899,14 +899,22 @@ class TestSetupAgent(unittest.TestCase):
         self.assertIsNone(c("claude-code", "/h", "/w"))
 
     def test_claude_code_prints_a_command_quoted_for_the_shell(self):
-        with mock.patch.object(agentsetup.sys, "executable", "/opt/my py/bin/python"):
+        import shlex
+        exe = os.path.abspath(os.path.join(self.home, "my py", "bin", "python"))   # a path with a space
+        with mock.patch.object(agentsetup.sys, "executable", exe):
             code, text = self.run_setup("claude-code", platform="linux")
         self.assertEqual(code, 0)
-        self.assertIn("claude mcp add safeeasyapi -- '/opt/my py/bin/python' -m safeeasyapi mcp", text)
-        with mock.patch.object(agentsetup.sys, "executable", "C:\\Program Files\\Python\\python.exe"):
+        self.assertIn("claude mcp add safeeasyapi -- " + shlex.quote(exe) + " -m safeeasyapi mcp", text)
+
+    def test_the_windows_form_quotes_a_path_with_spaces(self):
+        win = "C:\\Program Files\\Python\\python.exe"
+        self.assertEqual(
+            agentsetup._command_line(["claude", "mcp", "add", "safeeasyapi", "--", win, "-m"], "win32"),
+            'claude mcp add safeeasyapi -- "C:\\Program Files\\Python\\python.exe" -m')
+        with mock.patch.object(agentsetup.sys, "executable", win), \
+                mock.patch.object(agentsetup.os.path, "abspath", lambda p: p):
             code, text = self.run_setup("claude-code", platform="win32")
-        self.assertIn('"', text)
-        self.assertIn("claude mcp add safeeasyapi --", text)
+        self.assertIn('claude mcp add safeeasyapi -- "' + win + '" -m safeeasyapi mcp', text)
 
     def test_without_write_nothing_is_written(self):
         for client in ("cursor", "gemini", "codex", "claude-desktop"):
@@ -1029,8 +1037,8 @@ class TestInstallRules(unittest.TestCase):
         self.assertTrue(self.read("cursor").decode().startswith("---\ndescription"))
 
     def test_an_update_replaces_only_our_block(self):
-        with open(self.path(), "w") as f:
-            f.write("# My rules\n\nkeep me\n")
+        with open(self.path(), "wb") as f:
+            f.write(b"# My rules\n\nkeep me\n")
         agentsetup.install_rules("codex", self.base, self.TEXT, self.out)
         agentsetup.install_rules("codex", self.base, self.TEXT.replace("careful", "very careful"), self.out)
         body = self.read().decode()
@@ -1055,11 +1063,11 @@ class TestInstallRules(unittest.TestCase):
         for content in (agentsetup.END + "\nx\n" + agentsetup.BEGIN + "\n",
                         agentsetup.BEGIN + "\nonly begin\n",
                         agentsetup.BEGIN + "\na\n" + agentsetup.END + "\n" + agentsetup.BEGIN + "\nb\n" + agentsetup.END + "\n"):
-            with open(self.path(), "w") as f:
-                f.write(content)
+            with open(self.path(), "wb") as f:               # bytes: no newline translation on Windows
+                f.write(content.encode("utf-8"))
             out = io.StringIO()
             self.assertEqual(agentsetup.install_rules("codex", self.base, self.TEXT, out), 1)
-            self.assertEqual(self.read().decode(), content)
+            self.assertEqual(self.read(), content.encode("utf-8"))
             self.assertIn("markers", out.getvalue())
 
     def test_a_file_that_is_not_text_is_not_touched(self):
