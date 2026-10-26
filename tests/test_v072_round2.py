@@ -135,9 +135,9 @@ class TestDialogBranches(unittest.TestCase):
 
     def test_osascript_allow_deny_and_gave_up(self):
         w = self.which("osascript")
-        for out, rc, err, want in ((b"button returned:Allow", 0, b"", True),
+        for out, rc, err, want in ((b"button returned:Yes", 0, b"", True),
                                    (b"", 1, b"execution error: User canceled. (-128)", False),
-                                   (b"button returned:Allow, gave up:true", 0, b"", None),
+                                   (b"button returned:Yes, gave up:true", 0, b"", dialog_mod.EXPIRED),
                                    (b"", 1, b"syntax error", None), (b"", 0, b"", None)):
             run = self.runner(rc, out, err)
             self.assertIs(dialog_mod.confirm("t", "m", "darwin", {}, w, run), want, out)
@@ -153,7 +153,7 @@ class TestDialogBranches(unittest.TestCase):
         self.assertIn("--no-markup", argv)
         self.assertIn("--default-cancel", argv)
         self.assertFalse(dialog_mod.confirm("t", "m", "linux", self.ENV, w, self.runner(1)))
-        self.assertIsNone(dialog_mod.confirm("t", "m", "linux", self.ENV, w, self.runner(5)))
+        self.assertIs(dialog_mod.confirm("t", "m", "linux", self.ENV, w, self.runner(5)), dialog_mod.EXPIRED)
 
     def test_kdialog_and_its_timeout(self):
         w = self.which("kdialog")
@@ -162,7 +162,7 @@ class TestDialogBranches(unittest.TestCase):
         self.assertEqual(run.calls[0][0][0], "/usr/bin/kdialog")
         self.assertFalse(dialog_mod.confirm("t", "m", "linux", self.ENV, w, self.runner(1)))
         slow = self.runner(boom=subprocess.TimeoutExpired("kdialog", 1))
-        self.assertIsNone(dialog_mod.confirm("t", "m", "linux", self.ENV, w, slow))
+        self.assertIs(dialog_mod.confirm("t", "m", "linux", self.ENV, w, slow), dialog_mod.EXPIRED)
 
     def test_a_crash_is_neither_a_yes_nor_a_no(self):
         w = self.which("zenity")
@@ -179,7 +179,7 @@ class TestDialogBranches(unittest.TestCase):
     def test_windows_goes_to_the_message_box(self):
         self.assertTrue(dialog_mod.confirm("t", "m", "win32", {}, message_box=lambda t, m: True))
         self.assertFalse(dialog_mod.confirm("t", "m", "win32", {}, message_box=lambda t, m: False))
-        self.assertIsNone(dialog_mod.confirm("t", "m", "win32", {}, message_box=lambda t, m: None))
+        self.assertIs(dialog_mod.confirm("t", "m", "win32", {}, message_box=lambda t, m: None), dialog_mod.EXPIRED)
 
     def test_look_alike_letters_and_long_paths_cannot_mislead(self):
         self.assertEqual(dialog_mod.plain("pr\u043ej\u0435ct"), "pr?j?ct")
@@ -560,7 +560,8 @@ class TestWindowConsentLifecycle(base.Base):
         mgr.start("github", CATALOG["github"], deep)
         self.assertTrue(wait_for(lambda: w.asked))
         text = w.asked[0][1]
-        self.assertIn("...", text)
+        self.assertIn('"' + "d" * 20 + '"', text)               # the last folder name only
+        self.assertNotIn(self.proj, text)
         self.assertTrue(all(ord(c) < 128 for c in text))
 
 
@@ -598,18 +599,30 @@ class TestAccountConfirmation(base.Base):
         self.clip.copy(GH_KEY)
         done = until(mgr)
         self.assertEqual(done["state"], "failed")
-        self.assertIn("did not confirm", done["message"])
+        self.assertIn("not their account", done["message"])
         self.assertEqual(self.env_text(), "")
         self.assertNoKey(done)
 
-    def test_no_answer_in_time_stores_nothing(self):
+    def test_no_answer_in_time_stores_nothing_and_tells_the_agent_to_tell_the_person(self):
+        self.window.answer = dialog_mod.EXPIRED
+        mgr = self.mgr()
+        self.start(mgr)
+        self.clip.copy(GH_KEY)
+        done = until(mgr)
+        self.assertEqual(done["state"], "failed")
+        self.assertIn("closed by itself", done["message"])
+        self.assertIn("TELL THE PERSON", done["message"])
+        self.assertIn("ask you again", done["message"])
+        self.assertEqual(self.env_text(), "")
+
+    def test_a_window_that_could_not_be_shown_is_said_plainly(self):
         self.window.answer = None
         mgr = self.mgr()
         self.start(mgr)
         self.clip.copy(GH_KEY)
         done = until(mgr)
         self.assertEqual(done["state"], "failed")
-        self.assertIn("in time", done["message"])
+        self.assertIn("could not be shown", done["message"])
         self.assertEqual(self.env_text(), "")
 
     def test_the_state_is_confirming_while_the_window_is_open(self):
@@ -1513,6 +1526,210 @@ class TestFreshLockIsNotStolen(base.Base):
         self.assertTrue(os.path.exists(lock))        # the fresh lock is back where it was
         self.assertEqual([n for n in os.listdir(folder) if "stale" in n], [])
         self.assertGreaterEqual(len(calls), 1)
+
+
+# ------------------------------------------------------------------ 0.7.4 wording and behaviour
+
+class TestWindowWording(unittest.TestCase):
+    def windows(self):
+        root = os.path.join(os.sep, "home", "dan", "projects", "my-shop")
+        return {"consent": dialog_mod.consent_window("GitHub", root),
+                "replace": dialog_mod.replace_window("GitHub", root),
+                "account": dialog_mod.account_window("GitHub", "octo-cat", root)}
+
+    def test_exact_final_wording(self):
+        w = self.windows()
+        self.assertEqual(w["consent"], (
+            "safeeasyapi (installed on this computer)",
+            "safeeasyapi (installed on this computer) asks:\n"
+            'Your AI assistant wants to connect GitHub for "my-shop".\n'
+            "safeeasyapi will save the key safely; the assistant never sees it.\n"
+            "Did you ask your assistant to do this?\n"
+            "No = nothing is stored or changed. This window closes by itself in 5 minutes (same as No)."))
+        self.assertEqual(w["replace"][1],
+            "safeeasyapi (installed on this computer) asks:\n"
+            'Your AI assistant wants to REPLACE your saved GitHub key for "my-shop".\n'
+            "The old key will be overwritten. The assistant never sees either key.\n"
+            "Did you ask your assistant to do this?\n"
+            "No = nothing is stored or changed. This window closes by itself in 5 minutes (same as No).")
+        self.assertEqual(w["account"][1],
+            "GitHub account: octo-cat\n"
+            "Is this your account?\n"
+            'Yes = save the key for "my-shop". No = nothing is stored.\n'
+            "This window closes by itself in 5 minutes (same as No).")
+
+    def test_short_plain_and_never_allow_deny(self):
+        for name, (title, text) in self.windows().items():
+            self.assertLessEqual(len(text.splitlines()), 5, name)
+            for banned in ("Allow", "Deny", "allow", "deny", "HMAC", "clipboard", "MCP", "session"):
+                self.assertNotIn(banned, title + text, (name, banned))
+            self.assertIn("5 minutes", text, name)
+            self.assertTrue(all(len(line) < 100 for line in text.splitlines()), name)
+        for name in ("consent", "replace"):
+            title, text = self.windows()[name]
+            self.assertIn("safeeasyapi", title)
+            self.assertIn("installed on this computer", title)
+            self.assertTrue(text.splitlines()[0].startswith("safeeasyapi (installed on this computer)"))
+            self.assertIn("nothing is stored or changed", text)
+        self.assertTrue(self.windows()["account"][1].startswith("GitHub account: octo-cat"))
+
+    def test_only_the_last_folder_and_only_plain_letters(self):
+        title, text = dialog_mod.consent_window("GitHub", "/home/d\u0430n/secret/place/pr\u043eject")
+        self.assertIn('"pr?ject"', text)
+        self.assertNotIn("secret", text)
+        self.assertEqual(dialog_mod.project_name("C:\\Users\\dan\\my shop\\"), "my shop")
+        self.assertEqual(dialog_mod.project_name(""), "this project")
+
+    def test_the_helpers_are_given_yes_and_no_buttons(self):
+        ENV = {"DISPLAY": ":0"}
+        which = lambda n: "/usr/bin/" + n
+        for tool, flag in (("zenity", "--ok-label"), ("kdialog", "--yes-label")):
+            seen = []
+
+            def run(argv, **kw):
+                seen.append(argv)
+                return types.SimpleNamespace(returncode=0, stdout=b"", stderr=b"")
+            only = lambda n, tool=tool: "/usr/bin/" + n if n == tool else None
+            dialog_mod.confirm("t", "m", "linux", ENV, only, run)
+            argv = seen[0]
+            self.assertEqual(argv[argv.index(flag) + 1], "Yes")
+            self.assertIn("No", argv)
+            self.assertNotIn("Allow", argv)
+            self.assertNotIn("Deny", argv)
+        script = []
+        dialog_mod.confirm("t", "m", "darwin", {}, which, lambda argv, **kw: script.append(argv[2]) or types.SimpleNamespace(
+            returncode=0, stdout=b"button returned:Yes", stderr=b""))
+        self.assertIn('buttons {"No", "Yes"}', script[0])
+        self.assertIn('default button "No"', script[0])
+
+    def test_a_window_stays_open_at_least_five_minutes(self):
+        self.assertGreaterEqual(dialog_mod.TIMEOUT_SECONDS, 300)
+        seen = []
+
+        def run(argv, **kw):
+            seen.append((argv, kw))
+            return types.SimpleNamespace(returncode=0, stdout=b"", stderr=b"")
+        dialog_mod.confirm("t", "m", "linux", {"DISPLAY": ":0"},
+                           lambda n: "/usr/bin/" + n if n == "zenity" else None, run)
+        self.assertIn("--timeout=%d" % dialog_mod.TIMEOUT_SECONDS, seen[0][0])
+        self.assertGreater(seen[0][1]["timeout"], dialog_mod.TIMEOUT_SECONDS)
+
+    def test_the_windows_box_asks_for_the_full_time(self):
+        got = {}
+
+        def fn(hwnd, text, caption, flags, lang, ms):
+            got["ms"] = ms
+            got["flags"] = flags
+            return 6
+        user32 = types.SimpleNamespace(MessageBoxTimeoutW=fn, MessageBeep=lambda k: None,
+                                       FindWindowW=lambda c, t: 0)
+        with mock.patch.object(ctypes, "windll", types.SimpleNamespace(user32=user32), create=True):
+            self.assertTrue(dialog_mod._message_box("t", "m"))
+        self.assertGreaterEqual(got["ms"], 300_000)
+        self.assertTrue(got["flags"] & 0x40000)             # MB_TOPMOST
+        self.assertTrue(got["flags"] & 0x10000)             # MB_SETFOREGROUND
+        self.assertTrue(got["flags"] & 0x4)                 # MB_YESNO
+        self.assertTrue(got["flags"] & 0x100)               # No is the default button
+
+    def test_the_windows_box_is_brought_forward_flashed_and_beeps(self):
+        events = []
+        shown = threading.Event()
+
+        def box(hwnd, text, caption, flags, lang, ms):
+            shown.wait(5)
+            return 6
+        user32 = types.SimpleNamespace(
+            MessageBoxTimeoutW=box, MessageBeep=lambda k: events.append(("beep", k)),
+            FindWindowW=lambda c, t: 77,
+            SetForegroundWindow=lambda h: events.append(("front", h)),
+            FlashWindowEx=lambda info: (events.append(("flash",)), shown.set()))
+        with mock.patch.object(ctypes, "windll", types.SimpleNamespace(user32=user32), create=True), \
+                mock.patch.object(dialog_mod.time, "sleep", lambda s: None):
+            self.assertTrue(dialog_mod._message_box("t", "m"))
+        self.assertIn(("beep", 0x20), events)
+        self.assertIn(("front", 77), events)
+        self.assertIn(("flash",), events)
+
+    def test_attention_failures_never_break_the_question(self):
+        def boom(*a):
+            raise OSError("no")
+        user32 = types.SimpleNamespace(MessageBoxTimeoutW=lambda *a: 6, MessageBeep=boom,
+                                       FindWindowW=boom, SetForegroundWindow=boom, FlashWindowEx=boom)
+        with mock.patch.object(ctypes, "windll", types.SimpleNamespace(user32=user32), create=True), \
+                mock.patch.object(dialog_mod.time, "sleep", lambda s: None):
+            self.assertTrue(dialog_mod._message_box("t", "m"))
+
+
+class TestOneQuestionPerAction(base.Base):
+    def setUp(self):
+        super().setUp()
+        with open(os.path.join(self.proj, ".env"), "w") as f:
+            f.write("GITHUB_TOKEN=already-there-12345\n")
+
+    def test_replace_without_any_consent_asks_once_and_then_goes_ahead(self):
+        w = Window(True)
+        mgr = self.manager(window_available=lambda: True, ask_person=w)
+        self.assertEqual(self.start(mgr, replace=True)["state"], "consent_pending")
+        self.assertTrue(wait_for(lambda: mgr.status(0)["state"] == "replace_granted"))
+        out = self.start(mgr, replace=True, timeout=30)
+        self.assertEqual(out["state"], "waiting")            # no second window
+        self.assertEqual(len(w.asked), 1)
+        self.assertIn("REPLACE", w.asked[0][1])
+        mgr.cancel()
+
+    def test_a_no_to_the_combined_question_blocks_both(self):
+        w = Window(False)
+        mgr = self.manager(window_available=lambda: True, ask_person=w)
+        self.start(mgr, replace=True)
+        self.assertTrue(wait_for(lambda: mgr.status(0)["state"] == "consent_denied"))
+        self.assertEqual(self.start(mgr, replace=True)["state"], "consent_denied")
+        self.assertEqual(self.start(mgr)["state"], "consent_denied")      # a plain start would ask the same person again
+        self.assertEqual(len(w.asked), 1)
+
+    def test_replace_when_consent_is_already_given_is_one_window(self):
+        w = Window(True)
+        mgr = self.manager(window_available=lambda: True, ask_person=w)
+        self.session_grant(mgr)
+        self.start(mgr, replace=True)
+        self.assertTrue(wait_for(lambda: mgr.status(0)["state"] == "replace_granted"))
+        self.assertEqual(len(w.asked), 1)
+
+    def test_an_agent_that_starts_again_and_again_gets_one_window(self):
+        w = Window(True)
+        w.hold = True
+        self.addCleanup(w.release.set)
+        mgr = self.manager(window_available=lambda: True, ask_person=w)
+        for _ in range(5):
+            self.assertEqual(self.start(mgr, replace=True)["state"], "consent_pending")
+            self.assertEqual(self.start(mgr)["state"], "consent_pending")
+        self.assertTrue(wait_for(lambda: len(w.asked) >= 1))
+        self.assertEqual(len(w.asked), 1)
+
+
+class TestExpiredWindow(base.Base):
+    def test_the_next_status_tells_the_agent_to_tell_the_person(self):
+        w = Window(dialog_mod.EXPIRED)
+        mgr = self.manager(window_available=lambda: True, ask_person=w)
+        self.start(mgr)
+        self.assertTrue(wait_for(lambda: mgr.status(0)["state"] == "consent_expired"))
+        out = mgr.status(0)
+        self.assertIn("TELL THE PERSON", out["message"])
+        self.assertIn("expired", out["message"])
+        self.assertIn("simply ask you again", out["message"])
+        self.assertNotIn("denied", out["state"])
+
+    def test_it_is_not_a_no_and_can_be_asked_again(self):
+        answers = iter([dialog_mod.EXPIRED, True])
+        mgr = self.manager(window_available=lambda: True, ask_person=lambda t, x: next(answers))
+        self.start(mgr)
+        self.assertTrue(wait_for(lambda: mgr.status(0)["state"] == "consent_expired"))
+        self.assertEqual(self.start(mgr)["state"], "consent_pending")
+        self.assertTrue(wait_for(lambda: mgr.status(0)["state"] == "consent_granted"))
+
+    def test_the_tool_text_lists_the_state(self):
+        r = mcp_mod.handle({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}, CATALOG)
+        text = next(t for t in r["result"]["tools"] if t["name"] == "capture_key")["description"]
+        self.assertIn("consent_expired", text)
 
 
 if __name__ == "__main__":

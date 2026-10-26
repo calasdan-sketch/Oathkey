@@ -406,7 +406,8 @@ class TestTheWindowRoute(base.Base):
         self.assertTrue(wait_for(lambda: asked))
         title, text = asked[0]
         self.assertIn("GitHub", text)
-        self.assertIn(os.path.realpath(self.proj), text)
+        self.assertIn(os.path.basename(os.path.realpath(self.proj)), text)
+        self.assertNotIn(os.path.realpath(self.proj), text)         # the last folder name only
         self.assertNotIn(GH_KEY, text)
 
     def test_windows_are_rate_limited(self):

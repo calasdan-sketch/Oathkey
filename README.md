@@ -909,7 +909,8 @@ see which account was connected. A key the vendor rejects is kept nowhere.
 **States** (`state`): `consent_pending` (a window is on your screen),
 `consent_needed` (no window possible: use `allow-agent`; or the window failed or timed
 out, which is not a refusal: ask again),
-`consent_denied`, `consent_granted` (then call `start`), `replace_granted` (then
+`consent_expired` (the window closed by itself after 5 minutes: tell the person, they can ask
+again), `consent_denied`, `consent_granted` (then call `start`), `replace_granted` (then
 call `start` with `replace=true`), `confirming` (a window asks you to confirm the
 account), `unavailable` (no clipboard, SSH, WSL ...: the reason is
 given), `unsupported_gateless` (the service has no documented key format),
@@ -921,14 +922,14 @@ soon as the state changes. `cancel` during `storing` answers `cancel: too_late`.
 Rules that make this safe enough to allow:
 
 - **Your yes is asked in a window of the operating system** (a Windows
-  message box with a time limit, macOS `osascript`, Linux `zenity`/`kdialog`)
+  message box that stays open 5 minutes, macOS `osascript`, Linux `zenity`/`kdialog`)
   shown by the server itself — not by anything the agent can type into. **When a
   window can be shown, only that window counts**: any permission file on disk is
   ignored, even a well-formed one, so a file an agent wrote cannot start a
   capture. Your yes is kept in the server's memory for that session only (it
   ends when the MCP server stops), never on disk. A window that fails to open,
   crashes, or is not answered is **not** a "no": the agent is told to ask again
-  (only an explicit Deny is remembered, for 10 minutes). After the key is checked
+  (only an explicit No is remembered, for 10 minutes). After the key is checked
   a **second window** shows which account it belongs to (GitHub: the login name)
   and asks you to confirm before anything is stored. Replacing a stored key needs
   its own window.
@@ -938,7 +939,7 @@ Rules that make this safe enough to allow:
   - *What it does not protect against:* an agent that can run programs as your
     user (it can reach the same operating-system facilities: it could, for
     example, drive the screen or tamper with this very program), one that controls
-    your screen and presses Allow, and a browser tool that reads the key field.
+    your screen and presses Yes, and a browser tool that reads the key field.
 - **Helper programs are trusted ones only.** `zenity`, `kdialog`, `osascript`,
   `security`, `secret-tool` and the clipboard tools are looked up only in
   `/usr/bin`, `/bin` and `/usr/local/bin`, only when root owns them and nobody
@@ -1108,7 +1109,7 @@ is UTF-8 bytes regardless of console code page, console output is
 reconfigured to replace unencodable characters instead of crashing, and
 every text file is opened as UTF-8.
 
-## Scope / limits (v0.7.3)
+## Scope / limits (v0.7.4)
 
 - `scan` finds keys by their shape. It misses a key with no recognisable
   prefix under a name that does not end in KEY, TOKEN, SECRET or PASSWORD, and

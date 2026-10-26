@@ -12,6 +12,7 @@ never in a tool result, an error, a log, the chat or on screen.
 States an answer can carry (`state`):
   consent_needed   the person has not allowed this; no window could be shown
   consent_pending  a confirmation window is on the person's screen
+  consent_expired  the window closed by itself (5 min); tell the person, they can ask again
   consent_granted / replace_granted   the person said yes; call start (replace_granted: with replace=true)
   consent_denied   the person said no
   unavailable      no usable clipboard here (reason in the message)
@@ -171,6 +172,7 @@ class _Job:
 
     def __init__(self, kind, root, slug, now=0.0):
         self.kind, self.root, self.slug = kind, root, slug
+        self.expired = False            # the window closed by itself: nobody answered
         self.answer = None              # True / False; None = open, or nobody could/did answer
         self.done = threading.Event()
         self.finished = None            # self.now() when answered
@@ -260,32 +262,26 @@ class Manager:
             self._job = job
             if self._current is not None and self._current.done.is_set():
                 self._current = None            # the old result must not hide this question
-        display = dialog_mod.plain(recipes_mod.printable(recipe["display"], words=True), 60)
-        where = dialog_mod.short_path(recipes_mod.printable(root))
+        display = recipes_mod.printable(recipe["display"], words=True)
         if kind == "consent":
-            title = "safeeasyapi: allow an AI agent to capture a key?"
-            text = (f"An AI agent wants to connect {display} for the project:\n{where}\n\n"
-                    f"If you allow it, the agent clicks Copy on {display}'s key page. "
-                    f"safeeasyapi takes the key from your clipboard, empties it, tests it "
-                    f"and stores it as {dialog_mod.plain(recipe['env_var'], 60)}. The agent "
-                    f"never sees the key. This permission lasts until safeeasyapi's MCP "
-                    f"server stops.\n\nAllow only if YOU asked the agent to do this.")
-        else:
-            title = "safeeasyapi: replace the stored key?"
-            text = (f"An AI agent wants to REPLACE the {display} key already stored for:\n"
-                    f"{where}\n\nThe old key will be overwritten. "
-                    f"Allow only if YOU asked for a new key.")
+            title, text = dialog_mod.consent_window(display, root)
+        else:                                   # "replace" and "replace_all" are one question
+            title, text = dialog_mod.replace_window(display, root)
 
         def run():
             try:
                 raw = self.ask_person(title, text)
-                job.answer = None if raw is None else bool(raw)
+                if raw is dialog_mod.EXPIRED:
+                    job.expired = True
+                job.answer = None if (raw is None or raw is dialog_mod.EXPIRED) else bool(raw)
             except Exception:
                 job.answer = None               # a helper that failed is not the person's "no"
             try:
                 if job.answer is None:
                     pass                        # no window / nobody answered: not a "no"; may be asked again
-                elif job.answer and kind == "consent":
+                elif job.answer and kind in ("consent", "replace_all"):
+                    if kind == "replace_all":
+                        self._replace_ok[key[:2] + ("replace",)] = self.now()
                     self._session[key[:2]] = {
                         "project": os.path.realpath(root), "service": slug,
                         "clipboard_history_ok": False, "via": "window",
@@ -295,6 +291,8 @@ class Manager:
                     self._replace_ok[key] = self.now()
                 else:
                     self._denied[key] = self.now()
+                    if kind == "replace_all":
+                        self._denied[key[:2] + ("consent",)] = self.now()
             except Exception:
                 job.answer = None
             finally:
@@ -329,7 +327,13 @@ class Manager:
         grant_ = self._consent(root, slug)
         if grant_ is None:
             if self.window_available():
-                return self._ask("consent", root, slug, recipe)
+                kind = "consent"
+                if replace:
+                    # one question, not two: the person is asked once about REPLACING
+                    env_file0, store0 = _where(root, slug, {}, self.default_store)
+                    if env_file0 is not None and _present(recipe, env_file0, store0, slug):
+                        kind = "replace_all"
+                return self._ask(kind, root, slug, recipe)
             return _need_consent(slug, self._note())
         warning = None
         try:
@@ -578,22 +582,21 @@ class Manager:
         if self.window_available():
             cap.set("confirming", "The key is valid. A window asks the person to confirm "
                                   "which account it belongs to.")
-            who = cap.account or "(this service did not report an account name)"
-            title = "safeeasyapi: store this key?"
-            text = (f"A valid {dialog_mod.plain(recipes_mod.printable(recipe['display'], words=True), 60)} "
-                    f"key was copied for the project:\n"
-                    f"{dialog_mod.short_path(recipes_mod.printable(cap.root))}\n\n"
-                    f"It belongs to the account: {dialog_mod.plain(who, 80)}\n\n"
-                    f"Store it? Choose Deny if that is not YOUR account.")
+            title, text = dialog_mod.account_window(
+                recipes_mod.printable(recipe["display"], words=True), cap.account, cap.root)
             try:
                 raw = self.ask_person(title, text)
             except Exception:
                 raw = None
             cap.account_confirmed = raw is True
             if raw is not True:
-                cap.set("failed", ("The person did not confirm the account in time. "
-                                   if raw is None else "The person did not confirm the account. ")
-                        + "The key was not stored. " + ORPHAN)
+                cap.set("failed", (
+                    "The account window closed by itself because nobody answered. TELL THE "
+                    "PERSON it expired and that they can simply ask you again. "
+                    if raw is dialog_mod.EXPIRED else
+                    "The person did not confirm the account (or the window could not be "
+                    "shown). " if raw is None else "The person said this is not their account. ")
+                    + "The key was NOT stored. " + ORPHAN)
                 return
             if cap.cancel.is_set():
                 cap.set("cancelled", "Cancelled before saving. The key was not stored. " + ORPHAN)
@@ -635,6 +638,8 @@ def _job_state(job: _Job, now: float, note: str | None = None) -> dict:
         return {"state": "consent_pending", "service": job.slug, "message": _PENDING}
     if job.finished is not None and now - job.finished > STALE_AFTER:
         return {"state": "idle", "message": "The earlier question to the person is no longer current."}
+    if job.answer is None and job.expired:
+        return _expired(job.slug)
     if job.answer is None:
         return _need_consent(job.slug, note, window_failed=True)
     if job.answer:
@@ -645,6 +650,14 @@ def _job_state(job: _Job, now: float, note: str | None = None) -> dict:
                 "message": "The person said yes to replacing the key. Call capture_key with "
                            "action=start AND replace=true now."}
     return {"state": "consent_denied", "service": job.slug, "message": "The person said no."}
+
+
+def _expired(slug: str) -> dict:
+    return {"state": "consent_expired", "service": slug, "message": (
+        "The permission window closed by itself because nobody answered (it stays open for "
+        "5 minutes). That is not a refusal and nothing was changed. TELL THE PERSON the "
+        "window expired and that they can simply ask you again; then call capture_key with "
+        "action=start when they do. Do not open the key page or click anything yet.")}
 
 
 def _need_consent(slug: str, note: str | None = None, window_failed: bool = False) -> dict:

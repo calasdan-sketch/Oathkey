@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.7.4
+
+A plain-words pass on the windows, after a real person used 0.7.3 on Windows.
+
+- **Wording.** Every window is at most five short lines, in everyday words, and says
+  what is going on first: *safeeasyapi (installed on this computer) asks: Your AI
+  assistant wants to connect GitHub for "my-shop". safeeasyapi will save the key
+  safely; the assistant never sees it. Did you ask your assistant to do this? No =
+  nothing is stored or changed.* The buttons are **Yes / No** on every platform (the
+  macOS, zenity and kdialog buttons are now labelled Yes / No too); "Allow" and
+  "Deny" are gone. The project is shown as its last folder name only.
+- **Account window** leads with the account: *GitHub account: octo-cat / Is this your
+  account?*
+- **One question per action.** Replacing a key with no earlier permission is ONE
+  window (not a permission window and then a replace window); asking again while a
+  window is open never opens another.
+- **Time.** Windows stay open 5 minutes (330 s) and say so. If one closes by itself
+  the next status is `consent_expired` (and the account window's failure says
+  "expired"): the agent is told to tell the person it expired and that they can simply
+  ask again. An expired window is not a "no".
+- **Windows:** the box is brought to the front and its taskbar button flashes, with the
+  system question sound (all best effort; it stays top-most).
+
 ## 0.7.3
 
 Fixes from the independent verification of 0.7.2.

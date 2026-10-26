@@ -13,8 +13,9 @@ and shell commands and cannot run code as the same user as this server. It is
 NOT a gate against an agent that can run code as that user (it can drive the
 same OS interfaces) or that controls the screen and presses the button itself.
 
-Answers: True (allowed), False (declined or closed), None (no window could be
-shown, or nobody answered in time - not a refusal, and may be asked again).
+Answers: True (Yes), False (No, or the window was closed), EXPIRED (nobody
+answered in time: not a refusal, ask again) and None (no window could be shown,
+or the helper failed: also not a refusal).
 """
 
 from __future__ import annotations
@@ -27,7 +28,23 @@ import time
 
 from . import safeexec
 
-TIMEOUT_SECONDS = 180
+# A window stays open at least five minutes: nobody should have it vanish while they
+# are still working out what it is. The text of every window says so.
+TIMEOUT_SECONDS = 330
+EXPIRES_TEXT = "This window closes by itself in 5 minutes (same as No)."
+
+
+class _Expired:
+    """What confirm() returns when nobody answered in time: not a Yes, not a No."""
+
+    def __repr__(self) -> str:
+        return "EXPIRED"
+
+    def __bool__(self) -> bool:
+        return False
+
+
+EXPIRED = _Expired()
 
 
 def available(platform: str | None = None, env=None, which=safeexec.find) -> bool:
@@ -84,8 +101,74 @@ def markup_free(text: str) -> str:
     return re.sub(r"[<>&]", "?", text)
 
 
+# ---------------------------------------------------------------- the words
+# Short, everyday words; at most five short lines; the buttons are Yes and No
+# (that is what the Windows box has, and the other platforms are made to match).
+
+TITLE = "safeeasyapi (installed on this computer)"
+FIRST = "safeeasyapi (installed on this computer) asks:"
+
+
+def project_name(root: str) -> str:
+    """Just the last folder's name, in plain ASCII."""
+    name = re.split(r"[\\/]", str(root).rstrip("/\\"))[-1] or "this project"
+    return plain(name, 40)
+
+
+def consent_window(display: str, root: str) -> tuple[str, str]:
+    display, project = plain(display, 40), project_name(root)
+    return TITLE, "\n".join((
+        FIRST,
+        f'Your AI assistant wants to connect {display} for "{project}".',
+        "safeeasyapi will save the key safely; the assistant never sees it.",
+        "Did you ask your assistant to do this?",
+        "No = nothing is stored or changed. " + EXPIRES_TEXT))
+
+
+def replace_window(display: str, root: str) -> tuple[str, str]:
+    display, project = plain(display, 40), project_name(root)
+    return TITLE, "\n".join((
+        FIRST,
+        f'Your AI assistant wants to REPLACE your saved {display} key for "{project}".',
+        "The old key will be overwritten. The assistant never sees either key.",
+        "Did you ask your assistant to do this?",
+        "No = nothing is stored or changed. " + EXPIRES_TEXT))
+
+
+def account_window(display: str, account: str | None, root: str) -> tuple[str, str]:
+    display, project = plain(display, 40), project_name(root)
+    who = plain(account, 60) if account else "(not reported)"
+    return TITLE, "\n".join((
+        f"{display} account: {who}",
+        "Is this your account?",
+        f'Yes = save the key for "{project}". No = nothing is stored.',
+        EXPIRES_TEXT))
+
+
 def _applescript_text(text: str) -> str:
     return text.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+
+
+def _attract(user32, title: str, tries: int = 12, pause: float = 0.25) -> None:
+    """Make sure the person notices the box: find it, bring it to the front and
+    flash its taskbar button. Best effort - every failure is ignored."""
+    import ctypes
+
+    class FLASHWINFO(ctypes.Structure):
+        _fields_ = [("cbSize", ctypes.c_uint), ("hwnd", ctypes.c_void_p), ("dwFlags", ctypes.c_uint),
+                    ("uCount", ctypes.c_uint), ("dwTimeout", ctypes.c_uint)]
+    for _ in range(tries):
+        time.sleep(pause)
+        try:
+            hwnd = user32.FindWindowW(None, title)
+            if not hwnd:
+                continue
+            user32.SetForegroundWindow(hwnd)
+            info = FLASHWINFO(ctypes.sizeof(FLASHWINFO), hwnd, 0x3 | 0xC, 6, 0)   # caption+taskbar, until foreground
+            user32.FlashWindowEx(ctypes.byref(info))
+            return
+        except Exception:
+            return
 
 
 def _message_box(title: str, message: str, seconds: int = TIMEOUT_SECONDS) -> bool | None:
@@ -98,6 +181,11 @@ def _message_box(title: str, message: str, seconds: int = TIMEOUT_SECONDS) -> bo
     MB_SETFOREGROUND, MB_TOPMOST = 0x10000, 0x40000
     flags = MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2 | MB_SETFOREGROUND | MB_TOPMOST
     user32 = ctypes.windll.user32
+    try:
+        user32.MessageBeep(MB_ICONQUESTION)          # the system "question" sound
+    except Exception:
+        pass
+    threading.Thread(target=_attract, args=(user32, title), daemon=True).start()
     timeout_fn = getattr(user32, "MessageBoxTimeoutW", None)
     if timeout_fn is not None:
         answer = timeout_fn(None, message, title, flags, 0, int(seconds * 1000))
@@ -150,24 +238,24 @@ def confirm(title: str, message: str, platform: str | None = None, env=None,
     try:
         if platform == "win32":
             answer = message_box(title, message)
-            return None if answer is None else bool(answer)
+            return EXPIRED if answer is None else bool(answer)
         if platform == "darwin":
             script = (f'display dialog "{_applescript_text(message)}" with title '
-                      f'"{_applescript_text(title)}" buttons {{"Deny", "Allow"}} '
-                      f'default button "Deny" cancel button "Deny" with icon caution '
+                      f'"{_applescript_text(title)}" buttons {{"No", "Yes"}} '
+                      f'default button "No" cancel button "No" with icon caution '
                       f'giving up after {TIMEOUT_SECONDS}')
             done = run([which("osascript"), "-e", script], capture_output=True,
                        timeout=TIMEOUT_SECONDS + 10)
             out, err = done.stdout or b"", done.stderr or b""
             if b"gave up:true" in out:
-                return None
+                return EXPIRED
             if done.returncode == 0:
-                return True if b"Allow" in out else None
-            # pressing Deny / Esc is "User canceled" (-128); anything else is a failure
+                return True if b"Yes" in out else None
+            # pressing No / Esc is "User canceled" (-128); anything else is a failure
             return False if (b"-128" in err or b"User canceled" in err) else None
         if which("zenity"):
             base = [which("zenity"), "--question", "--title", title, "--text", message,
-                    "--ok-label", "Allow", "--cancel-label", "Deny"]
+                    "--ok-label", "Yes", "--cancel-label", "No"]
             first = base + ["--no-markup", "--default-cancel", f"--timeout={TIMEOUT_SECONDS}"]
             done = run(first, capture_output=True, timeout=TIMEOUT_SECONDS + 10)
             if _launch_failed(done.returncode, done.stderr):
@@ -178,17 +266,17 @@ def confirm(title: str, message: str, platform: str | None = None, env=None,
                 again.append(f"--timeout={TIMEOUT_SECONDS}")
                 done = run(again, capture_output=True, timeout=TIMEOUT_SECONDS + 10)
             if done.returncode == 5:            # zenity: timed out
-                return None
+                return EXPIRED
             if done.returncode == 0:
                 return True
             return _no_or_failure(done)
         done = run([which("kdialog"), "--title", title, "--yesno", markup_free(message),
-                    "--yes-label", "Allow", "--no-label", "Deny"], capture_output=True,
+                    "--yes-label", "Yes", "--no-label", "No"], capture_output=True,
                    timeout=TIMEOUT_SECONDS + 10)
         if done.returncode == 0:
             return True
         return _no_or_failure(done)
     except subprocess.TimeoutExpired:
-        return None
+        return EXPIRED
     except Exception:
         return None
