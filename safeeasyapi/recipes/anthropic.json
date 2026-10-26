@@ -9,7 +9,8 @@
       "name": "key",
       "accept": "^sk-ant-",
       "detect": "sk-ant-[A-Za-z0-9_.-]{16,}",
-      "detect_confidence": "guess"
+      "detect_confidence": "guess",
+      "capture_accept": "^sk-ant-[A-Za-z0-9_-]{16,300}\\Z"
     }
   ],
   "key_url": "https://platform.claude.com/settings/keys",

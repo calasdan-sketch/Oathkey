@@ -18,16 +18,19 @@ the clipboard, tests it and stores it.
    `{service, env_var, status, instructions, browser, rules}`.
 3. **Use `capture_key`** (experimental; `service`, `action: "start"`). The answer's
    `state` tells you what to do:
-   - `consent_pending` / `consent_granted`: a window asked the person; wait for
-     their answer (`action: "status"`), then `start` again. `consent_needed`: ask
-     whether you may; they run `safeeasyapi allow-agent <service>` (you cannot).
+   - `consent_pending`: a window is on the person's screen; call `action: "status"`
+     (it waits) until they answer. `consent_granted`: call `start` again.
+     `consent_denied`: stop, do not ask again. `consent_needed`: ask whether you
+     may; they run `safeeasyapi allow-agent <service>` (you cannot). The window's
+     yes lasts only until the safeeasyapi server stops.
    - `unavailable`, `unsupported_gateless`, `refused`: tell the person what it
      says and ask them to run `safeeasyapi connect <service>` themselves.
    - `already_stored`: do nothing, unless they asked for a new key (`replace: true`;
-     they are asked in a window).
+     they are asked in a window, then the state is `replace_granted`: call `start`
+     again with `replace: true`).
    - `waiting`: you drive the browser (below), then call `action: "status"`. It
      waits up to 25 seconds and returns when the state changes: `validating`,
-     `storing` (wait again), then `stored` (done; `account` names the account),
+     `confirming` (the person confirms the account in a window), `storing` (wait again), then `stored` (done; `account` names the account),
      `failed` (nothing saved; start again once), `timeout`.
 4. If you have no browser tool that can click, stop at once and ask the person to
    run `safeeasyapi connect <service>`. Otherwise open `browser.open`, follow

@@ -21,10 +21,11 @@ and clipboard managers can keep their own copy; this cannot clear those.
 from __future__ import annotations
 
 import re
-import shutil
 import subprocess
 import sys
 import time
+
+from . import safeexec
 
 POLL_SECONDS = 0.3
 WAIT_SECONDS = 180
@@ -68,9 +69,11 @@ def _windows():
                 finally:
                     user32.CloseClipboard()
             time.sleep(0.05)
-        return None
+        raise OSError("the clipboard could not be opened")
 
     def get() -> str:
+        """The text, "" when the clipboard holds no text. Raises OSError when
+        it could not be opened: unreadable is not the same as empty."""
         def read():
             handle = user32.GetClipboardData(cf_unicode)
             if not handle:
@@ -85,7 +88,10 @@ def _windows():
         return opened(read) or ""
 
     def clear() -> bool:
-        return bool(opened(user32.EmptyClipboard))
+        try:
+            return bool(opened(user32.EmptyClipboard))
+        except OSError:
+            return False
 
     def sequence() -> int:
         """Changes whenever anything is copied (even the same text again):
@@ -96,41 +102,51 @@ def _windows():
     return get, clear
 
 
-def _command(read: list[str], clear: list[str]):
+def _command(read: list[str], clear: list[str], run=safeexec.run):
     def get() -> str:
+        """The text; raises OSError when the tool failed (unreadable is not
+        the same as empty). An empty clipboard is "" with some tools'
+        non-zero exit, which is treated as empty only for no-selection."""
         try:
-            done = subprocess.run(read, capture_output=True, timeout=5)
-        except (OSError, subprocess.TimeoutExpired):
-            return ""
-        return done.stdout.decode("utf-8", "replace") if done.returncode == 0 else ""
+            done = run(read, capture_output=True, timeout=5)
+        except (OSError, subprocess.TimeoutExpired) as e:
+            raise OSError("the clipboard tool did not answer") from e
+        if done.returncode == 0:
+            return done.stdout.decode("utf-8", "replace")
+        if not (done.stdout or b"").strip() and done.returncode in (1, 2):
+            return ""                           # xclip / wl-paste: nothing on the clipboard
+        raise OSError("the clipboard tool failed")
 
     def wipe() -> bool:
         # no pipes to hold: xclip and wl-copy stay alive to serve the
         # selection, and a captured pipe would make us wait for them
         try:
-            done = subprocess.run(clear, input=b"", stdout=subprocess.DEVNULL,
-                                  stderr=subprocess.DEVNULL, timeout=5)
+            done = run(clear, input=b"", stdout=subprocess.DEVNULL,
+                       stderr=subprocess.DEVNULL, timeout=5)
         except (OSError, subprocess.TimeoutExpired):
             return False
         return done.returncode == 0
     return get, wipe
 
 
-def backend():
-    """(get, clear) functions for this system, or raise Unavailable."""
+def backend(find=safeexec.find):
+    """(get, clear) functions for this system, or raise Unavailable. The tools
+    are looked up in system folders only (safeexec.py)."""
     if sys.platform == "win32":
         try:
             return _windows()
         except (OSError, AttributeError) as e:
             raise Unavailable(f"Windows clipboard not reachable ({e})") from None
-    if sys.platform == "darwin" and shutil.which("pbpaste"):
-        return _command(["pbpaste"], ["pbcopy"])
-    if shutil.which("wl-paste") and shutil.which("wl-copy"):
-        return _command(["wl-paste", "--no-newline"], ["wl-copy", "--clear"])
-    if shutil.which("xclip"):
-        return _command(["xclip", "-selection", "clipboard", "-o"], ["xclip", "-selection", "clipboard", "-i"])
-    if shutil.which("xsel"):
-        return _command(["xsel", "--clipboard", "--output"], ["xsel", "--clipboard", "--clear"])
+    if sys.platform == "darwin" and find("pbpaste") and find("pbcopy"):
+        return _command([find("pbpaste")], [find("pbcopy")])
+    if find("wl-paste") and find("wl-copy"):
+        return _command([find("wl-paste"), "--no-newline"], [find("wl-copy"), "--clear"])
+    if find("xclip"):
+        x = find("xclip")
+        return _command([x, "-selection", "clipboard", "-o"], [x, "-selection", "clipboard", "-i"])
+    if find("xsel"):
+        x = find("xsel")
+        return _command([x, "--clipboard", "--output"], [x, "--clipboard", "--clear"])
     raise Unavailable("no clipboard tool found (install wl-clipboard, xclip or xsel)")
 
 
@@ -220,6 +236,13 @@ def wait_for_key(pattern: str | None, taken: set[str], get, clear,
     early); a generic-looking value from before is stale: it is emptied
     away (so copying the same key again counts as new). The clipboard is
     emptied as soon as a value is taken."""
+    raw_get = get
+
+    def get():
+        try:
+            return raw_get()
+        except Exception:
+            return ""                           # unreadable now: look again next time
     start = (get() or "").strip()
     if pattern and start not in taken and looks_like(start, pattern):
         clear()
@@ -247,15 +270,18 @@ def wait_for_key(pattern: str | None, taken: set[str], get, clear,
 def clear_verified(get, clear, wait: float = 3.0, poll: float = 0.1,
                    now=time.monotonic, sleep=time.sleep) -> bool:
     """Empty the clipboard and make sure it is: clear, read it back, and try
-    again for up to `wait` seconds. False when it still holds something."""
+    again for up to `wait` seconds. False when it still holds something, when
+    clear() said it failed (returned False), or when the clipboard cannot be
+    read back (unreadable is NOT proof of empty)."""
     deadline = now() + wait
     while True:
+        cleared = True
         try:
-            clear()
+            cleared = clear() is not False
         except Exception:
-            pass
+            cleared = False
         try:
-            if not (get() or "").strip():
+            if cleared and not (get() or "").strip():
                 return True
         except Exception:
             pass

@@ -1,5 +1,42 @@
 # Changelog
 
+## 0.7.2
+
+Fixes from the second review of 0.7.x.
+
+- **Helpers are trusted ones only.** `zenity`, `kdialog`, `osascript`, `security`,
+  `secret-tool` and the clipboard tools are looked up only in `/usr/bin`, `/bin`
+  and `/usr/local/bin`, only if root owns them and neither they nor their folder
+  are writable by others, and run with a fixed `PATH` and a minimal environment
+  (`safeexec.py`).
+- **Honest consent.** The window's yes is kept in the server's memory for the
+  session, never on disk. The terminal `allow-agent` grant in the signed file is
+  advisory (a same-user program can read the secret or fake a terminal); README,
+  SKILL.md and docstrings say so. The consent file carries a counter that is also
+  kept with the secret, so an old copy no longer verifies; no `.bak` copies; the
+  write is under a lock and the secret file is created with `O_EXCL`; a keyring
+  that cannot save falls back to the 0600 file; `allow-agent` reports a grant it
+  could not save.
+- **Second window.** After the vendor accepts the key, a window shows the account
+  (GitHub login, `[A-Za-z0-9-]{1,39}` only) and the person confirms before anything
+  is stored (`confirming`, `account_confirmed_by_person`).
+- **Windows.** The message box has a time limit (a timeout is not a "no" and can be
+  asked again); the clipboard getter raises when it cannot open the clipboard.
+- **Dialogs:** zenity `--no-markup`, ASCII-only text (look-alike letters become
+  `?`), the project path cut to its last 120 characters.
+- **Clipboard.** `clear_verified` is false when `clear()` reports failure or the
+  clipboard cannot be read back. Strict, anchored (`\Z`, documented length)
+  `capture_accept` gates for the services with a documented format.
+- **Status:** a pending question makes `status` wait for the answer; an old answer
+  expires; `replace_granted` says to pass `replace=true`; `bool("false")` is false.
+- **Hook:** the steal rules are also applied to the quote-squashed text; `consent.key`,
+  `agent-consent` and the `.safeeasyapi` folder by relative path are protected (speed
+  bump, not a lock).
+- **setup-agent / skill install:** line ends, BOM and UTF-8 kept; markers must be
+  paired and in order; a stale Codex entry is updated; non-text files are refused
+  with a reason; shell-correct quoting of the Claude Code command.
+- More tests: 94 new (helpers, dialogs, stores, replay, status wait, setup-agent).
+
 ## 0.7.1
 
 Fixes from an independent review of 0.7.0 (security, correctness, architecture, tests).

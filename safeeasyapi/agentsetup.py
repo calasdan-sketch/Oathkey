@@ -12,6 +12,9 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import shlex
+import subprocess
 import sys
 import tempfile
 
@@ -28,7 +31,9 @@ HONEST = """
       Code. Cursor, Codex, Gemini and Claude Desktop have no such hook: their agent
       can read a .env file if it tries. For those clients the OS keychain is the
       safer place for keys, and this setup uses it when one is available.
-    - The permission window (consent) is shown by safeeasyapi itself, for every client.
+    - The permission window is shown by safeeasyapi itself, for every client. It is a
+      real gate only against an agent that cannot run code as you; the terminal
+      `allow-agent` fallback is advisory.
 """
 
 
@@ -59,21 +64,52 @@ def config_path(client: str, home: str, cwd: str, platform: str | None = None) -
 
 
 def _toml(entry: dict) -> str:
-    q = lambda s: json.dumps(s)
+    q = lambda s: json.dumps(s, ensure_ascii=False)
     return (f"[mcp_servers.safeeasyapi]\ncommand = {q(entry['command'])}\n"
             f"args = [{', '.join(q(a) for a in entry['args'])}]\n")
 
 
-def _atomic_write(path: str, text: str) -> None:
+def _atomic_write(path: str, text: str, bom: bool = False) -> None:
+    """Write `text` exactly as given (no newline translation), through a
+    temporary file, so a crash never leaves half a config."""
     os.makedirs(os.path.dirname(path), exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".sea-")
-    with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
-        f.write(text)
-    os.replace(tmp, path)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8-sig" if bom else "utf-8", newline="") as f:
+            f.write(text)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def _read_text(path: str):
+    """(text, bom, eol) of an existing file, or raise ValueError with a reason."""
+    with open(path, "rb") as f:
+        data = f.read()
+    bom = data.startswith(b"\xef\xbb\xbf")
+    try:
+        text = data.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        raise ValueError("it is not valid UTF-8 text") from None
+    return text.replace("\r\n", "\n"), bom, "\r\n" if "\r\n" in text else "\n"
+
+
+def _command_line(argv: list[str], platform: str | None = None) -> str:
+    """One shell-safe command line for the person to paste."""
+    if (platform or sys.platform) == "win32":
+        return subprocess.list2cmdline(argv)
+    return " ".join(shlex.quote(a) for a in argv)
+
+
+_TABLE = re.compile(r"^\[mcp_servers\.safeeasyapi\][^\n]*\n(?:(?!\[)[^\n]*\n?)*", re.M)
 
 
 def cmd_setup_agent(args, out=None, home: str | None = None, cwd: str | None = None,
-                    keychain_ok: bool | None = None) -> int:
+                    keychain_ok: bool | None = None, platform: str | None = None) -> int:
     out = out or sys.stdout
     home = home or os.path.expanduser("~")
     cwd = cwd or os.getcwd()
@@ -87,49 +123,70 @@ def cmd_setup_agent(args, out=None, home: str | None = None, cwd: str | None = N
     entry = server_entry(client, keychain_ok)
     path = config_path(client, home, cwd)
     if client == "claude-code":
-        cmd = " ".join(json.dumps(x) if " " in x else x
-                       for x in ["claude", "mcp", "add", "safeeasyapi", "--", entry["command"], *entry["args"]])
+        cmd = _command_line(["claude", "mcp", "add", "safeeasyapi", "--", entry["command"],
+                             *entry["args"]], platform)
         out.write(f"  Run this once:\n\n    {cmd}\n\n"
                   f"  then `safeeasyapi hook install` (blocks the agent reading .env files)\n"
                   f"  and `safeeasyapi skill install`.\n")
         return 0
+    shown = recipes_mod.printable(path)
     if client == "codex":
         block = _toml(entry)
         if not args.write:
-            out.write(f"  Add to {recipes_mod.printable(path)}:\n\n{block}\n")
+            out.write(f"  Add to {shown}:\n\n{block}\n")
         else:
-            existing = ""
-            if os.path.isfile(path):
-                with open(path, encoding="utf-8") as f:
-                    existing = f.read()
-            if "[mcp_servers.safeeasyapi]" in existing:
-                out.write(f"  {recipes_mod.printable(path)} already has safeeasyapi; left alone.\n")
-            else:
-                _atomic_write(path, existing + ("\n" if existing and not existing.endswith("\n") else "") + block)
-                out.write(f"  ✓ added to {recipes_mod.printable(path)}\n")
-    else:
-        snippet = json.dumps({"mcpServers": {"safeeasyapi": entry}}, indent=2)
-        if not args.write:
-            out.write(f"  Add to {recipes_mod.printable(path)}:\n\n{snippet}\n")
-        else:
-            data = {}
+            existing, bom, eol = "", False, "\n"
             if os.path.isfile(path):
                 try:
-                    with open(path, encoding="utf-8") as f:
-                        data = json.load(f)
-                except (OSError, ValueError):
-                    out.write(f"  {recipes_mod.printable(path)} is not valid JSON; I will not "
-                              f"touch it. Add the entry by hand:\n\n{snippet}\n")
+                    existing, bom, eol = _read_text(path)
+                except (OSError, ValueError) as e:
+                    out.write(f"  {shown} cannot be read ({recipes_mod.printable(e)}); I will "
+                              f"not touch it. Add this by hand:\n\n{block}\n")
+                    return 1
+            if _TABLE.search(existing):
+                new = _TABLE.sub(lambda m: block + ("\n" if m.group(0).endswith("\n\n") else ""),
+                                 existing, count=1)
+                what = "updated the safeeasyapi entry in"
+            else:
+                new = existing + ("\n" if existing and not existing.endswith("\n") else "") + block
+                what = "added the safeeasyapi entry to"
+            if new == existing:
+                out.write(f"  {shown} already has this safeeasyapi entry; left alone.\n")
+            else:
+                _atomic_write(path, new.replace("\n", eol), bom)
+                out.write(f"  \u2713 {what} {shown} (your other entries are kept). Restart the client.\n")
+    else:
+        snippet = json.dumps({"mcpServers": {"safeeasyapi": entry}}, indent=2, ensure_ascii=False)
+        if not args.write:
+            out.write(f"  Add to {shown}:\n\n{snippet}\n")
+        else:
+            data, bom, eol = {}, False, "\n"
+            if os.path.isfile(path):
+                try:
+                    text, bom, eol = _read_text(path)
+                    data = json.loads(text) if text.strip() else {}
+                except (OSError, ValueError, RecursionError) as e:
+                    out.write(f"  {shown} is not valid JSON ({recipes_mod.printable(e)}); I will "
+                              f"not touch it. Add the entry by hand:\n\n{snippet}\n")
                     return 1
                 if not isinstance(data, dict):
+                    out.write(f"  {shown} holds {type(data).__name__}, not a JSON object; I will "
+                              f"not touch it. Add the entry by hand:\n\n{snippet}\n")
                     return 1
             servers = data.setdefault("mcpServers", {})
             if not isinstance(servers, dict):
+                out.write(f"  \"mcpServers\" in {shown} is not an object; I will not touch it. "
+                          f"Add the entry by hand:\n\n{snippet}\n")
                 return 1
+            same = servers.get("safeeasyapi") == entry
             servers["safeeasyapi"] = entry
-            _atomic_write(path, json.dumps(data, indent=2) + "\n")
-            out.write(f"  ✓ wrote the safeeasyapi entry to {recipes_mod.printable(path)} "
-                      f"(your other entries are kept). Restart the client.\n")
+            if same:
+                out.write(f"  {shown} already has this safeeasyapi entry; left alone.\n")
+            else:
+                _atomic_write(path, json.dumps(data, indent=2, ensure_ascii=False).replace("\n", eol)
+                              + eol, bom)
+                out.write(f"  \u2713 wrote the safeeasyapi entry to {shown} "
+                          f"(your other entries are kept). Restart the client.\n")
     out.write(HONEST)
     if client != "claude-code" and not keychain_ok:
         out.write("  No OS keychain was found, so keys will go to a .env file.\n")
@@ -159,26 +216,36 @@ def install_rules(client: str, base: str, text: str, out) -> int:
     if os.path.islink(path):
         out.write(f"  {recipes_mod.printable(path)} is a link; I will not write through it.\n")
         return 1
-    existing = ""
+    existing, bom, eol = "", False, "\n"
     if os.path.isfile(path):
-        with open(path, encoding="utf-8", errors="replace") as f:
-            existing = f.read()
+        try:
+            existing, bom, eol = _read_text(path)
+        except (OSError, ValueError) as e:
+            out.write(f"  {recipes_mod.printable(path)} cannot be read "
+                      f"({recipes_mod.printable(e)}); I will not touch it.\n")
+            return 1
     elif os.path.exists(path):
         out.write(f"  {recipes_mod.printable(path)} is not a plain file.\n")
         return 1
-    if BEGIN in existing and END in existing:
+    begins, ends = existing.count(BEGIN), existing.count(END)
+    if begins or ends:
+        if begins != 1 or ends != 1 or existing.index(BEGIN) > existing.index(END):
+            out.write(f"  {recipes_mod.printable(path)} has safeeasyapi markers that are "
+                      "doubled, missing one half, or in the wrong order; I will not guess "
+                      "what to replace. Fix or delete them and run this again.\n")
+            return 1
         head, rest = existing.split(BEGIN, 1)
         tail = rest.split(END, 1)[1].lstrip("\n")
         new = head + block + ("\n" + tail if tail else "")
+    elif existing.strip():
+        new = existing + "\n\n" + block
     else:
-        header = ""
-        if client == "cursor" and not existing:
-            header = "---\ndescription: API keys with safeeasyapi\nalwaysApply: true\n---\n"
-        new = existing + ("\n\n" if existing.strip() else "") + header + block \
-            if existing.strip() else header + block
+        header = ("---\ndescription: API keys with safeeasyapi\nalwaysApply: true\n---\n"
+                  if client == "cursor" else "")
+        new = header + block
     if new == existing:
         out.write(f"  Already up to date: {recipes_mod.printable(path)}\n")
         return 0
-    _atomic_write(path, new)
-    out.write(f"  ✓ wrote the safeeasyapi block to {recipes_mod.printable(path)}\n")
+    _atomic_write(path, new.replace("\n", eol), bom)
+    out.write(f"  \u2713 wrote the safeeasyapi block to {recipes_mod.printable(path)}\n")
     return 0

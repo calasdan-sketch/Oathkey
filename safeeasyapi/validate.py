@@ -581,7 +581,7 @@ def _validate_key(spec: dict, key, timeout: float = 10.0) -> Result:
     return result
 
 
-_IDENTITY_OK = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._@+ -]{0,63}$")
+_IDENTITY_OK = re.compile(r"[A-Za-z0-9-]{1,39}\Z")      # a GitHub-style login: nothing to mislead a person
 
 
 def _identity(field: str, body: bytes) -> str | None:

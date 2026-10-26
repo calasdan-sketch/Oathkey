@@ -907,8 +907,10 @@ stored, a length class and — for GitHub — the account's login name, so you c
 see which account was connected. A key the vendor rejects is kept nowhere.
 
 **States** (`state`): `consent_pending` (a window is on your screen),
-`consent_needed` (no window possible: use `allow-agent`), `consent_denied`,
-`consent_granted`, `unavailable` (no clipboard, SSH, WSL ...: the reason is
+`consent_needed` (no window possible or nobody answered: use `allow-agent`),
+`consent_denied`, `consent_granted` (then call `start`), `replace_granted` (then
+call `start` with `replace=true`), `confirming` (a window asks you to confirm the
+account), `unavailable` (no clipboard, SSH, WSL ...: the reason is
 given), `unsupported_gateless` (the service has no documented key format),
 `refused` (clipboard history, a recipe of your own, limits), `busy`,
 `already_stored`, `waiting`, `validating`, `storing`, `stored`, `failed`,
@@ -918,17 +920,26 @@ soon as the state changes. `cancel` during `storing` answers `cancel: too_late`.
 Rules that make this safe enough to allow:
 
 - **Your yes is asked in a window of the operating system** (a Windows
-  message box, macOS `osascript`, Linux `zenity`/`kdialog`) shown by the
-  server itself — not by anything the agent can type into. It is recorded in
-  `~/.safeeasyapi/agent-consent.json` (the home folder from the system's user
-  database), per project and service, with an HMAC whose secret is kept in
-  Windows DPAPI, the macOS keychain or the Linux Secret Service (a 0600 file,
-  marked *advisory*, when none exists). A file that does not verify counts as
-  no consent. With no window possible (SSH, headless) the fallback is
-  `safeeasyapi allow-agent <service>` in a terminal — weaker, because a program
-  can fake a terminal. Replacing a stored key needs a separate yes in a window.
-  Not stopped: an agent that has full control of your screen and presses the
-  button itself.
+  message box with a time limit, macOS `osascript`, Linux `zenity`/`kdialog`)
+  shown by the server itself — not by anything the agent can type into. The
+  helper programs are looked up only in `/usr/bin`, `/bin` and `/usr/local/bin`,
+  only when root owns them and nobody else can write to them or their folder,
+  and they run with a fixed `PATH` and a minimal environment. Your yes is kept
+  **in the server's memory for that session only** (it ends when the MCP server
+  stops) and is never written to disk. After the key is checked a **second
+  window** shows which account it belongs to (GitHub: the login name) and asks
+  you to confirm before anything is stored. Replacing a stored key needs its own
+  window. Be honest about what this is: **a real gate only against an agent that
+  cannot run code as you** (one that works through files and chat). An agent
+  that can run programs as your user can reach the same operating-system
+  facilities, and one that controls your screen can press the button.
+- **`safeeasyapi allow-agent <service>`** in a terminal is the fallback when no
+  window is possible (SSH, headless). It is **advisory**: it is kept in
+  `~/.safeeasyapi/agent-consent.json` with an HMAC (counter inside, so an old
+  copy of the file does not verify; secret in Windows DPAPI, the macOS keychain
+  or the Linux Secret Service, else a 0600 file), and a program running as you
+  can read that secret or fake a terminal. A file that does not verify counts as
+  no consent. The hook's rules about these files are a speed bump, not a lock.
 - Built-in services **that have a documented key format** only (GitHub,
   Stripe, Anthropic, AWS, Cloudflare, Replicate, Twilio, Vercel). Other
   services answer `unsupported_gateless`. One capture at a time; 10 to 180
@@ -973,7 +984,7 @@ not a traceback.
 | | Claude Code | Claude Desktop, Cursor, Codex, Gemini |
 |---|---|---|
 | MCP tools never return a key | yes | yes |
-| Permission window and signed consent | yes | yes |
+| Permission window (session only) and advisory signed terminal consent | yes | yes |
 | Hook blocks reading `.env`, clipboard readers, keychain readers | **yes** (`hook install`) | **no hook exists**: the agent can read a `.env` file |
 | Where keys go | `.env` (or keychain) | keychain by default (`setup-agent`) |
 | Rules file | `skill install` | `skill install --for cursor\|codex\|gemini` |
@@ -1072,7 +1083,7 @@ is UTF-8 bytes regardless of console code page, console output is
 reconfigured to replace unencodable characters instead of crashing, and
 every text file is opened as UTF-8.
 
-## Scope / limits (v0.7.1)
+## Scope / limits (v0.7.2)
 
 - `scan` finds keys by their shape. It misses a key with no recognisable
   prefix under a name that does not end in KEY, TOKEN, SECRET or PASSWORD, and

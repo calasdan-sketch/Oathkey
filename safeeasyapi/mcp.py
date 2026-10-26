@@ -104,12 +104,15 @@ def _tool_defs() -> list[dict]:
                          "then create the key in the browser and click the vendor's Copy "
                          "button - never read, type or screenshot the key. This server "
                          "takes it from the clipboard, empties the clipboard, tests it "
-                         "with the vendor and stores it. action=status waits up to 60 s "
-                         "and returns {state, env_vars, stored_in, account} - never the "
-                         "key. States: consent_pending/consent_needed/consent_denied, "
-                         "unavailable, unsupported_gateless, refused, busy, already_stored, "
-                         "waiting, validating, storing, stored, failed, timeout, cancelled, "
-                         "idle. The person is asked to allow it in a window (or with "
+                         "with the vendor and stores it. action=status waits up to 25 s by "
+                         "default (at most 45) and returns as soon as the state changes, "
+                         "with {state, env_vars, stored_in, account} - never the key. "
+                         "States: consent_pending, consent_needed, consent_denied, "
+                         "consent_granted (then call start), replace_granted (then call "
+                         "start with replace=true), unavailable, unsupported_gateless, "
+                         "refused, busy, already_stored, waiting, validating, confirming "
+                         "(the person is confirming the account in a window), storing, "
+                         "stored, failed, timeout, cancelled, idle. The person is asked to allow it in a window (or with "
                          "`safeeasyapi allow-agent`). Login, 2FA, CAPTCHA and password "
                          "prompts are for the person to do in the browser."),
          "inputSchema": {"type": "object",
@@ -120,7 +123,7 @@ def _tool_defs() -> list[dict]:
                              "timeout_seconds": {"type": "integer",
                                                  "description": "How long to wait for the Copy, 10 to 180 (default 120)."},
                              "wait_seconds": {"type": "integer",
-                                              "description": "With action=status: wait this long (up to 60) for a result."},
+                                              "description": "With action=status: wait up to this many seconds (default 25, at most 45); returns early when the state changes."},
                              "replace": {"type": "boolean",
                                          "description": "Capture even though a key is already stored (rotation, only when the person asked)."}},
                          "required": []}},

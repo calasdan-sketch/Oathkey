@@ -33,7 +33,8 @@
       "label": "API token",
       "name": "key",
       "detect": "cfut_[A-Za-z0-9_-]{16,}",
-      "detect_confidence": "known"
+      "detect_confidence": "known",
+      "capture_accept": "^cfut_[A-Za-z0-9_-]{16,300}\\Z"
     }
   ],
   "unverified": [

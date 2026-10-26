@@ -336,10 +336,12 @@ class TestConsentIntegrity(base.Base):
         self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o600)
         self.assertEqual(consent_mod.FileSecret(path).load(), b"s" * 32)
 
-    def test_a_corrupt_file_is_kept_aside_not_overwritten_silently(self):
-        self.write("{{{ precious")
+    def test_a_corrupt_file_is_replaced_and_no_old_copy_is_left(self):
+        self.write("{{{ old")
+        with open(self.consent + ".bak", "w") as f:
+            f.write("an old copy")
         self.allow()
-        self.assertTrue(os.path.exists(self.consent + ".bak"))
+        self.assertFalse(os.path.exists(self.consent + ".bak"))
         self.assertIsNotNone(consent_mod.consent_for(self.proj, "github", self.consent, self.secret))
 
     def test_consent_found_from_a_subdirectory(self):
@@ -374,7 +376,9 @@ class TestTheWindowRoute(base.Base):
         mgr, asked = self.window_manager(True)
         self.assertEqual(self.start(mgr)["state"], "consent_pending")
         self.assertTrue(wait_for(lambda: mgr.status(0)["state"] == "consent_granted"))
-        self.assertIsNotNone(consent_mod.consent_for(self.proj, "github", self.consent, self.secret))
+        # the window's yes lives in this server's memory only - nothing on disk
+        self.assertIsNone(consent_mod.consent_for(self.proj, "github", self.consent, self.secret))
+        self.assertFalse(os.path.exists(self.consent))
         self.assertEqual(self.start(mgr, timeout=30)["state"], "waiting")
         self.assertEqual(len(asked), 1)
         self.assertEqual(self.clip.reads, 1)    # only the snapshot, once armed
@@ -401,7 +405,7 @@ class TestTheWindowRoute(base.Base):
         self.assertTrue(wait_for(lambda: asked))
         title, text = asked[0]
         self.assertIn("GitHub", text)
-        self.assertIn(self.proj, text)
+        self.assertIn(os.path.realpath(self.proj), text)
         self.assertNotIn(GH_KEY, text)
 
     def test_windows_are_rate_limited(self):

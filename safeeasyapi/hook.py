@@ -113,7 +113,8 @@ STEAL_RULES = (
      "read a password store"),
     (re.compile(r"\b(?:import|from)\s+keyring\b|\bkeyring\.get_password\b", re.I), "read the keyring from code"),
     (re.compile(r"/proc/[\w$*{}/-]*/environ", re.I), "read another program's environment"),
-    (re.compile(r"[/\\~]\.safeeasyapi(?![\w])", re.I), "read safeeasyapi's own store"),
+    (re.compile(r"(?:^|[\s/\\~=:;&|(<>])\.safeeasyapi(?![\w])", re.I), "read safeeasyapi's own store"),
+    (re.compile(r"consent\.key|agent-consent|\.safe\W*easy", re.I), "touch safeeasyapi's consent files"),
     (re.compile(_SAFE + r"(?:pbpaste|wl-paste|Get-Clipboard|xclip\b[^\n;&|]*\s-(?:o\b|out\b)|xsel\b[^\n;&|]*\s(?:-o\b|--output\b))", re.I),
      "read the clipboard"),
     (re.compile(r"\b(?:Windows\.Forms\.Clipboard|GetClipboardData|pyperclip|clipboard_get)\b", re.I),
@@ -123,10 +124,10 @@ STEAL_RULES = (
 
 # What only the person may do (grant an agent the right to capture keys), and
 # the files that record it. Matched against the command with quotes, carets,
-# backslashes and shell variables taken out, so allow""-agent and
-# a${x}llow-agent do not slip through. A speed bump, not a lock: the grant
-# itself is protected by a confirmation window the agent cannot answer
-# (see consent.py).
+# backslashes and shell variables taken out (STEAL_RULES are matched that way
+# too), so allow""-agent, sec""ret-tool and a${x}llow-agent do not slip through.
+# A SPEED BUMP, not a lock: it catches the plain and the lightly disguised
+# forms only. See consent.py for what protects the grant itself.
 CONSENT_RULES = (
     (re.compile(r"allow[-_]agent|agent[-_]consent|allowcmd|safeeasyapi\.(?:consent|capture)\b|"
                 r"(?:consent|capture)_mod\b|consent\.(?:grant|_save_grants)|capture\.grant", re.I),
@@ -142,12 +143,15 @@ def _squash(text: str) -> tuple[str, str]:
 
 
 def steals_key(text: str) -> str | None:
-    """What a shell command / path would do to a stored key, or None."""
+    """What a shell command / path would do to a stored key, or None. A speed
+    bump, not a lock: it reads the text of the call, and a program that builds
+    its command at run time gets past it."""
     flat = text.replace("\\", "/") if "safeeasyapi" in text else text
+    variants = (text, flat, *_squash(text))
     for rx, what in STEAL_RULES:
-        if rx.search(text) or (flat is not text and rx.search(flat)):
+        if any(rx.search(v) for v in variants):
             return what
-    for variant in _squash(text):
+    for variant in variants:
         for rx, what in CONSENT_RULES:
             if rx.search(variant):
                 return what

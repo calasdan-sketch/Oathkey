@@ -21,7 +21,8 @@
       "label": "token",
       "name": "key",
       "detect": "(gh[pousr]_|github_pat_)[A-Za-z0-9_.-]{20,255}",
-      "detect_confidence": "known"
+      "detect_confidence": "known",
+      "capture_accept": "^(gh[pousr]_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{22,255})\\Z"
     }
   ],
   "key_url": "https://github.com/settings/personal-access-tokens/new",

@@ -290,6 +290,14 @@ def as_text(payload: dict, catalog: dict, cwd: str | None = None) -> str:
 CAPTURE_ACTIONS = ("start", "status", "cancel")
 
 
+def _truthy(value) -> bool:
+    """A real boolean, or the words a client may send for one: the string
+    "false" is False (bool("false") is True)."""
+    if isinstance(value, str):
+        return value.strip().lower() in ("true", "1", "yes")
+    return value is True or (isinstance(value, int) and not isinstance(value, bool) and value == 1)
+
+
 def capture_key(args: dict, catalog: dict, cwd: str | None = None, manager=None) -> dict:
     """The agent-driven capture (capture.py, experimental). `action`: start
     (default), status or cancel. Returns state words and names only - never a
@@ -308,7 +316,7 @@ def capture_key(args: dict, catalog: dict, cwd: str | None = None, manager=None)
         return {"error": "action=start needs a service from list_services, like 'github'.",
                 "isError": True}
     out = manager.start(slug, recipe, cwd, args.get("timeout_seconds"),
-                        bool(args.get("replace")))
+                        _truthy(args.get("replace")))
     if out.get("state") == "waiting":
         out["browser"] = browser_steps(recipe)
         out["rules"] = list(CAPTURE_RULES)

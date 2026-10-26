@@ -12,6 +12,7 @@ never in a tool result, an error, a log, the chat or on screen.
 States an answer can carry (`state`):
   consent_needed   the person has not allowed this; no window could be shown
   consent_pending  a confirmation window is on the person's screen
+  consent_granted / replace_granted   the person said yes; call start (replace_granted: with replace=true)
   consent_denied   the person said no
   unavailable      no usable clipboard here (reason in the message)
   unsupported_gateless  the service has no documented key format to recognise
@@ -20,13 +21,16 @@ States an answer can carry (`state`):
   already_stored   a key exists; replace needs the person's separate yes
   waiting          armed: waiting for the Copy
   validating       a key was taken; the vendor is being asked
+  confirming       the key is valid; the person is asked, in a window, to confirm the account
   storing          valid; being written (cannot be cancelled now)
   stored           done
   failed / timeout / cancelled   nothing was saved
   idle             nothing has been started
 
-Guards: the person's yes (consent.py: a window of the OS, or a terminal
-command), built-in recipes with a key format only, one at a time, 10-180 s,
+Guards: the person's yes (a window of the OS, remembered in this server's
+memory for the session only; or the terminal command `allow-agent`, kept in a
+signed file that is advisory - see consent.py), then a second window that
+shows the account the key belongs to, built-in recipes with a key format only, one at a time, 10-180 s,
 six starts an hour, only a value that CHANGES the clipboard after arming and
 has the service's key format, a rejected or unstorable key is kept nowhere,
 and clipboard history (Windows) or an unknown state of it refuses.
@@ -114,6 +118,7 @@ class _Capture:
         self.length_classes: list[str] = []
         self.note = None
         self.account = None
+        self.account_confirmed = None
         self.history_note = None
         self.clipboard_warning = None
         self.stale_note = None
@@ -147,6 +152,8 @@ class _Capture:
             out["key_length"] = self.length_classes
             if self.account:
                 out["account"] = self.account
+            if self.account_confirmed is not None:
+                out["account_confirmed_by_person"] = self.account_confirmed
         if self.note:
             out["vendor_note"] = self.note
         for key, value in (("clipboard_history_warning", self.history_note),
@@ -162,10 +169,11 @@ class _Capture:
 class _Job:
     """A confirmation window shown to the person, answered off the main thread."""
 
-    def __init__(self, kind, root, slug):
+    def __init__(self, kind, root, slug, now=0.0):
         self.kind, self.root, self.slug = kind, root, slug
-        self.answer = None              # None while open, then True / False
+        self.answer = None              # True / False; None = open, or nobody could/did answer
         self.done = threading.Event()
+        self.finished = None            # self.now() when answered
 
 
 class Manager:
@@ -205,11 +213,17 @@ class Manager:
         self._dialogs: list[float] = []
         self._denied: dict = {}
         self._replace_ok: dict = {}
+        self._session: dict = {}        # consent given in a window: memory only, this session
         self._starts: list[float] = []
 
     # ---- consent helpers
 
     def _consent(self, root, slug):
+        """The grant for this project and service: the window's yes of this
+        session (memory), else the terminal grant in the signed file."""
+        mine = self._session.get((consent_mod.project_key(root), slug))
+        if mine is not None:
+            return mine
         return consent_mod.consent_for(root, slug, self.consent_file, self.secret_store)
 
     def _ask(self, kind, root, slug, recipe) -> dict:
@@ -230,15 +244,19 @@ class Manager:
         self._dialogs.append(t)
         job = _Job(kind, root, slug)
         self._job = job
-        display = recipes_mod.printable(recipe["display"], words=True)
-        where = recipes_mod.printable(root)
+        with self._lock:
+            if self._current is not None and self._current.done.is_set():
+                self._current = None            # the old result must not hide this question
+        display = dialog_mod.plain(recipes_mod.printable(recipe["display"], words=True), 60)
+        where = dialog_mod.short_path(recipes_mod.printable(root))
         if kind == "consent":
             title = "safeeasyapi: allow an AI agent to capture a key?"
             text = (f"An AI agent wants to connect {display} for the project:\n{where}\n\n"
                     f"If you allow it, the agent clicks Copy on {display}'s key page. "
                     f"safeeasyapi takes the key from your clipboard, empties it, tests it "
-                    f"and stores it as {recipe['env_var']}. The agent never sees the key.\n\n"
-                    f"Allow only if YOU asked the agent to do this.")
+                    f"and stores it as {dialog_mod.plain(recipe['env_var'], 60)}. The agent "
+                    f"never sees the key. This permission lasts until safeeasyapi's MCP "
+                    f"server stops.\n\nAllow only if YOU asked the agent to do this.")
         else:
             title = "safeeasyapi: replace the stored key?"
             text = (f"An AI agent wants to REPLACE the {display} key already stored for:\n"
@@ -247,12 +265,19 @@ class Manager:
 
         def run():
             try:
-                job.answer = bool(self.ask_person(title, text))
+                raw = self.ask_person(title, text)
+                job.answer = None if raw is None else bool(raw)
             except Exception:
                 job.answer = False
             try:
-                if job.answer and kind == "consent":
-                    consent_mod.grant(root, slug, False, self.consent_file, None, self.secret_store)
+                if job.answer is None:
+                    pass                        # no window / nobody answered: not a "no"; may be asked again
+                elif job.answer and kind == "consent":
+                    self._session[key[:2]] = {
+                        "project": os.path.realpath(root), "service": slug,
+                        "clipboard_history_ok": False, "via": "window",
+                        "granted": datetime.datetime.now(datetime.timezone.utc).replace(
+                            microsecond=0).isoformat()}
                 elif job.answer:
                     self._replace_ok[key] = self.now()
                 else:
@@ -260,6 +285,7 @@ class Manager:
             except Exception:
                 job.answer = False
             finally:
+                job.finished = self.now()
                 job.done.set()
         threading.Thread(target=run, daemon=True).start()
         return {"state": "consent_pending", "service": slug, "message": _PENDING}
@@ -291,13 +317,7 @@ class Manager:
         if grant_ is None:
             if self.window_available():
                 return self._ask("consent", root, slug, recipe)
-            return {"state": "consent_needed", "service": slug, "message": (
-                "The person has not allowed agent-driven key capture for this service in "
-                "this project, and no window can be shown here. Ask them, in plain words, "
-                "whether you may. If they agree they run, in their OWN terminal: "
-                "safeeasyapi allow-agent " + slug + " - then call capture_key again. (A "
-                "terminal grant is weaker than the window: a program can fake a terminal.) "
-                "Until then do not open the key page or click anything.")}
+            return _need_consent(slug)
         warning = None
         try:
             warning = self.history_fn()
@@ -359,6 +379,7 @@ class Manager:
             cap.history_note = warning
             cap.waiting_for = "the key" if len(fields) == 1 else f"the {fields[0]['label']}"
             self._current = cap
+            self._job = None
         try:
             # The "before" picture is taken HERE, before start() returns: a Copy
             # a moment later must count as new, not as old.
@@ -380,15 +401,17 @@ class Manager:
     def status(self, wait=None) -> dict:
         cap = self._current
         job = self._job
-        if cap is None:
-            if job is not None:
-                return _job_state(job, self._consent(job.root, job.slug))
-            return {"state": "idle", "message": "No capture has been started."}
         try:
             seconds = DEFAULT_STATUS_WAIT if wait is None else float(wait)
         except (TypeError, ValueError):
             seconds = DEFAULT_STATUS_WAIT
-        seconds = max(0.0, min(MAX_STATUS_WAIT, seconds))
+        seconds = max(0.0, min(MAX_STATUS_WAIT, seconds)) if seconds == seconds else DEFAULT_STATUS_WAIT
+        if job is not None and (cap is None or cap.done.is_set()):
+            if not job.done.is_set() and seconds:
+                job.done.wait(seconds)          # the person is answering: wait for it
+            return _job_state(job, self.now())
+        if cap is None:
+            return {"state": "idle", "message": "No capture has been started."}
         end = time.monotonic() + seconds
         with cap.cond:
             entry = cap.state
@@ -440,7 +463,7 @@ class Manager:
             cap.set("failed", "Capture failed unexpectedly. Nothing was saved.")
         finally:
             values.clear()
-            if cap.state in ("waiting", "validating", "storing"):
+            if cap.state in ("waiting", "validating", "confirming", "storing"):
                 cap.set("failed", "Capture failed unexpectedly. Nothing was saved.")
             cap.done.set()
 
@@ -476,7 +499,10 @@ class Manager:
                     if number is not None and number == last_seq:
                         continue
                     last_seq = number
-                current = (get() or "").strip()
+                try:
+                    current = (get() or "").strip()
+                except Exception:
+                    continue                    # unreadable this moment: look again
                 if current == seen:
                     continue
                 seen = current
@@ -530,6 +556,29 @@ class Manager:
             recipes_mod.printable(ok.note, words=True))
         identity = getattr(ok, "identity", None)
         cap.account = identity and scrub.text(recipes_mod.printable(identity))
+        if self.window_available():
+            cap.set("confirming", "The key is valid. A window asks the person to confirm "
+                                  "which account it belongs to.")
+            who = cap.account or "(this service did not report an account name)"
+            title = "safeeasyapi: store this key?"
+            text = (f"A valid {dialog_mod.plain(recipes_mod.printable(recipe['display'], words=True), 60)} "
+                    f"key was copied for the project:\n"
+                    f"{dialog_mod.short_path(recipes_mod.printable(cap.root))}\n\n"
+                    f"It belongs to the account: {dialog_mod.plain(who, 80)}\n\n"
+                    f"Store it? Choose Deny if that is not YOUR account.")
+            try:
+                raw = self.ask_person(title, text)
+            except Exception:
+                raw = False
+            cap.account_confirmed = raw is True
+            if raw is not True:
+                cap.set("failed", ("The person did not confirm the account in time. "
+                                   if raw is None else "The person did not confirm the account. ")
+                        + "The key was not stored. " + ORPHAN)
+                return
+            if cap.cancel.is_set():
+                cap.set("cancelled", "Cancelled before saving. The key was not stored. " + ORPHAN)
+                return
         cap.set("storing", "The key is valid. Saving it.")
         store_fn = (self.store_factory or _default_store)(recipe, cap.env_file, cap.store)
         saved = []
@@ -559,19 +608,41 @@ _PENDING = ("A confirmation window was put on the person's screen (it may be beh
             "or action=start. Do not open the key page yet.")
 
 
-def _job_state(job: _Job, granted) -> dict:
+STALE_AFTER = 600.0
+
+
+def _job_state(job: _Job, now: float) -> dict:
     if not job.done.is_set():
-        return {"state": "consent_pending", "message": _PENDING}
+        return {"state": "consent_pending", "service": job.slug, "message": _PENDING}
+    if job.finished is not None and now - job.finished > STALE_AFTER:
+        return {"state": "idle", "message": "The earlier question to the person is no longer current."}
+    if job.answer is None:
+        return _need_consent(job.slug)
     if job.answer:
-        return {"state": "consent_granted" if job.kind == "consent" else "replace_granted",
-                "message": "The person said yes. Call capture_key with action=start now."}
-    return {"state": "consent_denied", "message": "The person said no."}
+        if job.kind == "consent":
+            return {"state": "consent_granted", "service": job.slug,
+                    "message": "The person said yes. Call capture_key with action=start now."}
+        return {"state": "replace_granted", "service": job.slug,
+                "message": "The person said yes to replacing the key. Call capture_key with "
+                           "action=start AND replace=true now."}
+    return {"state": "consent_denied", "service": job.slug, "message": "The person said no."}
+
+
+def _need_consent(slug: str) -> dict:
+    return {"state": "consent_needed", "service": slug, "message": (
+        "The person has not allowed agent-driven key capture for this service in this "
+        "project, and no window could be answered here. Ask them, in plain words, whether you "
+        "may. If they agree they run, in their OWN terminal: safeeasyapi allow-agent " + slug
+        + " - then call capture_key again. (That terminal permission is weaker than the "
+        "window: a program can fake a terminal and it is kept in a file. A window only "
+        "counts for this session.) Until then do not open the key page or click anything.")}
 
 
 def _gate(field: dict):
-    """The key format a copied value must have: the recipe's accept pattern, or
-    its detect pattern when that is a documented ("known") shape; else None."""
-    return field.get("accept") or (field.get("detect")
+    """The key format a copied value must have: the recipe's STRICT capture
+    pattern, else its accept pattern, else its detect pattern when that is a
+    documented ("known") shape; else None."""
+    return field.get("capture_accept") or field.get("accept") or (field.get("detect")
                                    if field.get("detect_confidence") == "known" else None)
 
 

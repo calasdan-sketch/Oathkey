@@ -98,8 +98,17 @@ def cmd_allow_agent(args, catalog: dict, ask=input, terminal=_terminal, out=None
     if (answer or "").strip().lower() != "yes":
         out.write("  Nothing changed.\n")
         return 1
-    consent_mod.grant(root, args.service, args.allow_clipboard_history, consent_file,
-                      env_file, store)
-    out.write(f"  (Kept in {consent_mod.integrity()}.)\n")
+    try:
+        consent_mod.grant(root, args.service, args.allow_clipboard_history, consent_file,
+                          env_file, store)
+    except OSError as e:
+        out.write("error: the permission could NOT be saved "
+                  f"({recipes_mod.printable(getattr(e, 'strerror', None) or e)}). Nothing "
+                  "changed. Check the OS keyring and that ~/.safeeasyapi can be written.\n")
+        return 1
+    out.write(f"  (Kept in {consent_mod.integrity() if store is None else store.kind}. "
+              "This terminal permission is advisory: a program running as you could "
+              "read its signing secret or fake a terminal. The permission window is "
+              "stronger and lasts one session.)\n")
     out.write(f"  Allowed. Undo any time: safeeasyapi allow-agent {args.service} --revoke\n")
     return 0
