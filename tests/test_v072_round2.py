@@ -1398,5 +1398,114 @@ class TestMacKeychainSaveNotInArgv(unittest.TestCase):
         self.assertIn(secret.hex().encode(), kw["input"])
 
 
+class TestSilentNoVersusFailure(unittest.TestCase):
+    ENV = {"DISPLAY": ":0"}
+
+    def run_with(self, rc, err=b"", times=1):
+        calls = []
+
+        def run(argv, **kw):
+            calls.append(argv)
+            return types.SimpleNamespace(returncode=rc, stdout=b"", stderr=err)
+        run.calls = calls
+        return run
+
+    def which(self, name):
+        return lambda n: "/usr/bin/" + n if n == name else None
+
+    def test_exit_one_with_silence_is_a_no_for_both(self):
+        for tool in ("zenity", "kdialog"):
+            self.assertIs(dialog_mod.confirm("t", "m", "linux", self.ENV, self.which(tool),
+                                             self.run_with(1)), False, tool)
+
+    def test_exit_one_with_an_error_message_is_not_a_no(self):
+        for tool in ("zenity", "kdialog"):
+            for err in (b"Gtk-WARNING: cannot open display: \n", b"unknown option --x"):
+                self.assertIsNone(dialog_mod.confirm("t", "m", "linux", self.ENV, self.which(tool),
+                                                     self.run_with(1, err)), (tool, err))
+
+    def test_zenity_retries_when_exit_one_came_with_an_error(self):
+        answers = iter([types.SimpleNamespace(returncode=1, stdout=b"", stderr=b"unknown option"),
+                        types.SimpleNamespace(returncode=0, stdout=b"", stderr=b"")])
+        calls = []
+
+        def run(argv, **kw):
+            calls.append(argv)
+            return next(answers)
+        self.assertTrue(dialog_mod.confirm("t", "m", "linux", self.ENV, self.which("zenity"), run))
+        self.assertEqual(len(calls), 2)
+        self.assertNotIn("--no-markup", calls[1])
+
+    def test_whitespace_only_stderr_still_counts_as_silence(self):
+        self.assertIs(dialog_mod.confirm("t", "m", "linux", self.ENV, self.which("kdialog"),
+                                         self.run_with(1, b"  \n")), False)
+
+
+class TestKeychainThatStoresNothing(unittest.TestCase):
+    def test_a_security_stand_in_that_exits_zero_but_keeps_nothing(self):
+        def lying_run(argv, **kw):
+            return types.SimpleNamespace(returncode=0, stdout=b"", stderr=b"")   # save "worked"; lookup finds nothing
+        keychain = consent_mod.CommandSecret("keychain", lying_run, lambda n: "/usr/bin/" + n)
+        folder = _isolation.mktemp()
+        fallback = consent_mod.FileSecret(os.path.join(folder, "k"))
+        fallback.save(b"o" * 40)                         # an earlier fallback secret
+        chain = consent_mod.ChainSecret(keychain, fallback)
+        chain.save(b"n" * 40)
+        self.assertEqual(fallback.load(), b"n" * 40)     # kept - and now holds the new secret
+        self.assertIs(chain.used, fallback)
+        self.assertEqual(chain.load(), b"n" * 40)
+
+    def test_a_grant_still_works_and_verifies_through_the_fallback(self):
+        lying = consent_mod.CommandSecret("keychain", lambda argv, **kw: types.SimpleNamespace(
+            returncode=0, stdout=b"", stderr=b""), lambda n: "/usr/bin/" + n)
+        folder = _isolation.mktemp()
+        chain = consent_mod.ChainSecret(lying, consent_mod.FileSecret(os.path.join(folder, "k")))
+        proj, path = _isolation.mktemp(), os.path.join(folder, "c.json")
+        consent_mod.grant(proj, "github", False, path, None, chain)
+        self.assertIsNotNone(consent_mod.consent_for(proj, "github", path, chain))
+
+    def test_an_honest_keychain_still_deletes_the_fallback(self):
+        kept = {}
+
+        def honest_run(argv, **kw):
+            if argv[1] == "-i":
+                text = kw["input"].decode()
+                kept["hex"] = text.split("-w ")[1].strip()
+                return types.SimpleNamespace(returncode=0, stdout=b"", stderr=b"")
+            return types.SimpleNamespace(returncode=0, stdout=kept.get("hex", "").encode(), stderr=b"")
+        keychain = consent_mod.CommandSecret("keychain", honest_run, lambda n: "/usr/bin/" + n)
+        fallback = consent_mod.FileSecret(os.path.join(_isolation.mktemp(), "k"))
+        fallback.save(b"o" * 40)
+        chain = consent_mod.ChainSecret(keychain, fallback)
+        chain.save(b"n" * 40)
+        self.assertIsNone(fallback.load())
+        self.assertIs(chain.used, keychain)
+
+
+class TestFreshLockIsNotStolen(base.Base):
+    def test_a_lock_refreshed_between_look_and_rename_is_put_back(self):
+        folder = os.path.dirname(self.consent)
+        os.makedirs(folder, exist_ok=True)
+        lock = os.path.join(folder, ".lock")
+        with open(lock, "w"):
+            pass
+        old = time.time() - 10_000
+        os.utime(lock, (old, old))
+        real = os.rename
+        calls = []
+
+        def refresh_then_rename(a, b):
+            calls.append(a)
+            os.utime(a, None)                       # the owner touched/replaced it just now
+            return real(a, b)
+        with mock.patch.object(consent_mod._FolderLock, "WAIT", 0.3), \
+                mock.patch.object(consent_mod.os, "rename", refresh_then_rename):
+            with self.assertRaises(OSError):         # it backed off and gave up waiting
+                self.allow()
+        self.assertTrue(os.path.exists(lock))        # the fresh lock is back where it was
+        self.assertEqual([n for n in os.listdir(folder) if "stale" in n], [])
+        self.assertGreaterEqual(len(calls), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

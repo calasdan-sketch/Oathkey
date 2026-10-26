@@ -956,10 +956,14 @@ Rules that make this safe enough to allow:
   counter (an old copy of the file does not verify). The signing secret is in
   Windows DPAPI, the macOS keychain or the Linux Secret Service; where those work
   they are the authority and a file is never preferred over them; otherwise it is
-  a 0600 file. A program running as you can still read that secret or fake a
-  terminal, so this route proves little. A file that does not verify counts as
+  a 0600 file. Where the keychain is empty or absent, a file planted by a program
+  that can write files is accepted on this route, and a program running as you
+  can still read that secret or fake a terminal, so this route proves little.
+  An agent that can edit your MCP client's config can also set
+  `SAFEEASYAPI_NO_WINDOW=1` for the server, so that switch is a convenience, not a lock. A file that does not verify counts as
   no consent. The hook's rules about these files (including wildcards such as
-  `~/.safe*/*`) are a speed bump, not a lock.
+  `~/.safe*/*`) are a speed bump, not a lock; a known false positive is that a word such as
+  `ls .s*` is refused too, since it could expand to the folder.
 - Built-in services **that have a documented key format** only (GitHub,
   Stripe, Anthropic, AWS, Cloudflare, Replicate, Twilio, Vercel). Other
   services answer `unsupported_gateless`. One capture at a time; 10 to 180

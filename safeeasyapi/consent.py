@@ -229,7 +229,11 @@ class ChainSecret:
     returns nothing (unavailable, locked, no entry) - never because it holds a
     "newer" counter, or a program that can write files could take over by
     writing its own file and counter. When the keychain saves successfully the
-    fallback file is deleted, so no stale second authority is left behind."""
+    fallback file is deleted, so no stale second authority is left behind.
+
+    Known limit: where the keychain is empty or absent, a file planted by a
+    program that can write files is accepted. That is the no-window route,
+    which is advisory anyway (see the module docstring)."""
 
     def __init__(self, primary, fallback):
         self.primary, self.fallback, self.used = primary, fallback, primary
@@ -261,6 +265,10 @@ class ChainSecret:
     def save(self, secret: bytes) -> None:
         try:
             self.primary.save(secret)
+            # a keychain tool that exits 0 and stored nothing is a failed save:
+            # read it back before trusting it (and before deleting the file)
+            if self.primary.load() != secret:
+                raise OSError("the keychain did not keep the consent secret")
             self.used = self.primary
         except Exception:
             self.fallback.save(secret)
@@ -418,6 +426,7 @@ class _FolderLock:
     taken over by renaming it away first, so two waiters cannot both break it."""
 
     STALE_LOCK = 180
+    WAIT = 10
 
     def __init__(self, folder: str):
         self.path = os.path.join(folder, ".lock")
@@ -425,7 +434,7 @@ class _FolderLock:
     def __enter__(self):
         _LOCK.acquire()
         _private_dir(os.path.dirname(self.path))
-        end = time.monotonic() + 10
+        end = time.monotonic() + self.WAIT
         while True:
             try:
                 os.close(os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
@@ -435,6 +444,20 @@ class _FolderLock:
                     if time.time() - os.stat(self.path).st_mtime > self.STALE_LOCK:
                         aside = f"{self.path}.stale-{os.getpid()}-{time.monotonic_ns()}"
                         os.rename(self.path, aside)         # only one waiter wins the rename
+                        if time.time() - os.stat(aside).st_mtime <= self.STALE_LOCK:
+                            # what was renamed is a FRESH lock (it was replaced between our
+                            # look and our rename): put it back if the name is free, else
+                            # drop it, and back off either way
+                            try:
+                                os.link(aside, self.path)
+                            except OSError:
+                                pass
+                            try:
+                                os.unlink(aside)
+                            except OSError:
+                                pass
+                            time.sleep(0.02)
+                            continue
                         try:
                             os.unlink(aside)
                         except OSError:

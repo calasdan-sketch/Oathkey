@@ -150,7 +150,8 @@ def globs_to_our_folder(text: str) -> bool:
     """Does a path word in `text` use wildcards that could expand to the
     `.safeeasyapi` folder? (`~/.safe*/*`, `.s*/c*`, `.saf?easyapi/*`,
     `tar c ~/.safe*`.) A word that is only wildcards (`.*`) is left alone: that
-    would stop every `ls -a`."""
+    would stop every `ls -a`. Known false positive: `ls .s*` (and any `.s*`
+    style word) is refused, because it could expand to the folder."""
     for word in _DOT_TOKEN.findall(text):
         if not re.search(r"[*?\[]", word):
             continue

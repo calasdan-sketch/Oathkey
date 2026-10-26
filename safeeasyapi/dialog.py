@@ -33,6 +33,9 @@ TIMEOUT_SECONDS = 180
 def available(platform: str | None = None, env=None, which=safeexec.find) -> bool:
     platform = platform or sys.platform
     env = os.environ if env is None else env
+    # NOTE: this switch is read from the server's environment, which the MCP client's
+    # config sets; an agent that can edit that config can set it (and so fall back to
+    # the advisory terminal route). It is a convenience, not a lock.
     if env.get("SAFEEASYAPI_NO_WINDOW") == "1":
         return False                    # the person turned windows off for this server
     if platform == "win32":
@@ -120,8 +123,18 @@ def _message_box(title: str, message: str, seconds: int = TIMEOUT_SECONDS) -> bo
     return None if time.monotonic() - started >= seconds - 1 else False
 
 
-def _launch_failed(code: int) -> bool:
-    return code not in (0, 1, 5)
+def _launch_failed(code: int, err: bytes = b"") -> bool:
+    """Not an answer: an odd exit status, or exit 1 WITH an error message (the
+    display could not be opened, a flag is unknown ...). A real "No" is exit 1
+    and silence."""
+    return code not in (0, 1, 5) or (code == 1 and bool((err or b"").strip()))
+
+
+def _no_or_failure(done) -> bool | None:
+    """False only for an explicit No (exit 1, empty stderr); else None."""
+    if done.returncode == 1 and not (done.stderr or b"").strip():
+        return False
+    return None
 
 
 def confirm(title: str, message: str, platform: str | None = None, env=None,
@@ -157,7 +170,7 @@ def confirm(title: str, message: str, platform: str | None = None, env=None,
                     "--ok-label", "Allow", "--cancel-label", "Deny"]
             first = base + ["--no-markup", "--default-cancel", f"--timeout={TIMEOUT_SECONDS}"]
             done = run(first, capture_output=True, timeout=TIMEOUT_SECONDS + 10)
-            if _launch_failed(done.returncode):
+            if _launch_failed(done.returncode, done.stderr):
                 # an old zenity does not know --no-markup / --default-cancel: ask again
                 # without them, with the markup characters taken out of the text
                 again = list(base)
@@ -168,13 +181,13 @@ def confirm(title: str, message: str, platform: str | None = None, env=None,
                 return None
             if done.returncode == 0:
                 return True
-            return False if done.returncode == 1 else None
+            return _no_or_failure(done)
         done = run([which("kdialog"), "--title", title, "--yesno", markup_free(message),
                     "--yes-label", "Allow", "--no-label", "Deny"], capture_output=True,
                    timeout=TIMEOUT_SECONDS + 10)
         if done.returncode == 0:
             return True
-        return False if done.returncode == 1 else None
+        return _no_or_failure(done)
     except subprocess.TimeoutExpired:
         return None
     except Exception:
