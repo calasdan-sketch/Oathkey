@@ -21,6 +21,8 @@ import sys
 
 from . import __version__
 from . import agent as agent_mod
+from . import capture as capture_mod
+from . import dialog as dialog_mod
 from . import publicapis as pa_mod
 from . import recipes as recipes_mod
 
@@ -65,6 +67,7 @@ def _too_deep(text: str, limit: int = MAX_JSON_DEPTH) -> bool:
     return False
 
 
+SUPPORTED_PROTOCOLS = ("2024-11-05", "2025-03-26", "2025-06-18")
 _METHODS = ("initialize", "ping", "tools/list", "tools/call")
 
 
@@ -82,18 +85,50 @@ def _tool_defs() -> list[dict]:
                          "properties": {"service": {"type": "string"}},
                          "required": ["service"]}},
         {"name": "request_connect",
-         "description": ("Ask the PERSON to connect a service's API key. Returns "
-                         "only {service, env_var, status, instructions}: the "
-                         "status is present, missing or unknown. You never see "
-                         "the key; tell the person to run the command in the "
-                         "instructions in their own terminal. Never ask them to "
-                         "paste a key into chat."),
+         "description": ("Start connecting a service's API key. Returns only "
+                         "{service, env_var, status, instructions, browser, rules}: "
+                         "the status is present, missing or unknown. You never see "
+                         "the key. Prefer the capture_key tool (you drive the browser, "
+                         "safeeasyapi takes the key from the clipboard); ask the person "
+                         "to run `safeeasyapi connect` only if capture_key is "
+                         "unavailable. Never ask anyone to paste a key into chat."),
          "inputSchema": {"type": "object",
                          "properties": {
                              "service": {"type": "string"},
                              "open_key_page": {"type": "boolean",
                                                "description": "Also open the vendor's key page in the person's browser."}},
                          "required": ["service"]}},
+        {"name": "capture_key",
+         "description": ("EXPERIMENTAL. Get an API key into the project without anyone typing or "
+                         "pasting it. action=start arms a one-shot capture in this "
+                         "(local) server and returns the browser steps and rules; YOU "
+                         "then create the key in the browser and click the vendor's Copy "
+                         "button - never read, type or screenshot the key. This server "
+                         "takes it from the clipboard, empties the clipboard, tests it "
+                         "with the vendor and stores it. action=status waits up to 25 s by "
+                         "default (at most 45) and returns as soon as the state changes, "
+                         "with {state, env_vars, stored_in, account} - never the key. "
+                         "States: consent_pending, consent_needed, consent_expired (the window closed "
+                         "by itself: tell the person, they can ask again), consent_denied, "
+                         "consent_granted (then call start), replace_granted (then call "
+                         "start with replace=true), unavailable, unsupported_gateless, "
+                         "refused, busy, already_stored, waiting, validating, confirming "
+                         "(the person is confirming the account in a window), storing, "
+                         "stored, failed, timeout, cancelled, idle. The person is asked to allow it in a window (or with "
+                         "`safeeasyapi allow-agent`). Login, 2FA, CAPTCHA and password "
+                         "prompts are for the person to do in the browser."),
+         "inputSchema": {"type": "object",
+                         "properties": {
+                             "service": {"type": "string"},
+                             "action": {"type": "string", "enum": ["start", "status", "cancel"],
+                                        "description": "start (default; needs service), status or cancel."},
+                             "timeout_seconds": {"type": "integer",
+                                                 "description": "How long to wait for the Copy, 10 to 180 (default 120)."},
+                             "wait_seconds": {"type": "integer",
+                                              "description": "With action=status: wait up to this many seconds (default 25, at most 45); returns early when the state changes."},
+                             "replace": {"type": "boolean",
+                                         "description": "Capture even though a key is already stored (rotation, only when the person asked)."}},
+                         "required": []}},
         {"name": "needs_keys",
          "description": ("List the API keys a project uses (from safeeasyapi.json, "
                          ".env.example and variable names in the code) and which "
@@ -329,7 +364,10 @@ def _handle(request, catalog: dict[str, dict],
                    "Invalid params: 'params' must be an object")
 
     if method == "initialize":
-        return ok({"protocolVersion": "2024-11-05",
+        info = params.get("clientInfo")
+        dialog_mod.set_client(info.get("name") if isinstance(info, dict) else None)
+        wanted = params.get("protocolVersion")
+        return ok({"protocolVersion": wanted if wanted in SUPPORTED_PROTOCOLS else "2024-11-05",
                    "capabilities": {"tools": {}},
                    "serverInfo": SERVER_INFO})
     if method == "ping":
@@ -368,9 +406,10 @@ def _handle(request, catalog: dict[str, dict],
                         sorted(catalog),)})
                 return ok({"content": [{"type": "text", "text": err_text}],
                            "isError": True})
-            hint = ("\n\nTo complete the connection, run in a terminal: "
-                    f"`safeeasyapi connect {recipe['service']}` — it opens the key "
-                    "page, validates the key, and stores it securely. "
+            hint = ("\n\nTo complete the connection call the capture_key tool "
+                    f"(service={recipe['service']}) and click the vendor's Copy button; "
+                    "if it is unavailable, ask the person to run "
+                    f"`safeeasyapi connect {recipe['service']}` in a terminal. "
                     "Never ask the user to paste the key into chat.")
             return ok({"content": [{"type": "text",
                                     "text": json.dumps(
@@ -381,6 +420,13 @@ def _handle(request, catalog: dict[str, dict],
                 opener, cwd)
             failed = answer.pop("isError", False)
             result = {"content": [{"type": "text", "text": json.dumps(answer)}]}
+            if failed:
+                result["isError"] = True
+            return ok(result)
+        if name == "capture_key":
+            answer = agent_mod.capture_key(args, catalog, cwd)
+            failed = answer.pop("isError", False)
+            result = {"content": [{"type": "text", "text": agent_mod.as_text(answer, catalog, cwd)}]}
             if failed:
                 result["isError"] = True
             return ok(result)
@@ -448,6 +494,16 @@ def _handle(request, catalog: dict[str, dict],
 
 def serve(catalog: dict[str, dict] | None = None,
           pa_loader=None, stdin=None, stdout=None) -> int:
+    """Run the server; when it ends for any reason, stop an armed key capture
+    and leave nothing on the clipboard."""
+    try:
+        return _serve(catalog, pa_loader, stdin, stdout)
+    finally:
+        capture_mod.shutdown()
+
+
+def _serve(catalog: dict[str, dict] | None = None,
+           pa_loader=None, stdin=None, stdout=None) -> int:
     """Newline-delimited JSON-RPC over stdio. The wire is UTF-8 bytes
     whatever the console code page (Windows cp1252 included).
 

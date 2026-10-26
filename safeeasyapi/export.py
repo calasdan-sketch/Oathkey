@@ -25,6 +25,7 @@ import sys
 from . import keychain as keychain_mod
 from . import procs
 from . import recipes as recipes_mod
+from . import safeprompt
 from . import redact as redact_mod
 
 TARGETS = ("github", "vercel")
@@ -128,7 +129,7 @@ def send(argv: list[str], value: str, run=subprocess.run) -> tuple[bool, str]:
     return False, text or f"{argv[0]} exited with status {done.returncode}"
 
 
-def cmd_export(args, catalog: dict, ask=input, interactive=None, out=None,
+def cmd_export(args, catalog: dict, ask=None, interactive=None, out=None,
                which=None, run=subprocess.run, read_fn=None, backend=None) -> int:
     out = out or sys.stdout
     recipe = catalog.get(args.service)
@@ -184,11 +185,10 @@ def cmd_export(args, catalog: dict, ask=input, interactive=None, out=None,
             out.write("  There is no terminal to ask, so nothing was sent. Add --yes to agree.\n")
             values.clear()
             return 1
-        try:
-            answer = ask(f"  Send it to {where}? [y/N]: ")
-        except (EOFError, KeyboardInterrupt):
-            answer = ""
-        if (answer or "").strip().lower() not in ("y", "yes"):
+        if not safeprompt.ask(
+                f"  Send it to {where}? [y/N]: ", out, enter_means=False, reader=ask,
+                if_key="That looked like a key. Do not paste it here. "
+                       "Type y or n."):
             out.write("  cancelled - nothing was sent.\n")
             values.clear()
             return 1

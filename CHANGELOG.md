@@ -1,5 +1,188 @@
 # Changelog
 
+## 0.7.5
+
+After the owner said "my AI assistant" sounded fraudulent.
+
+- **The window names who is asking.** The MCP client's own name from `initialize`
+  (`clientInfo.name`) is shown: *Claude Code wants to connect GitHub for "my-shop".*
+  Known names get friendly forms (Claude Code, Claude, Cursor, Codex, Gemini CLI,
+  Windsurf, Cline, Zed, VS Code ...); an unknown name is shown cleaned (ASCII, 30
+  characters); none at all is "An AI program". It is what the program reports about
+  itself - said in the README and SKILL, not in the window.
+- **Line 1 says who made the tool:** *safeeasyapi (free key-safe tool, made by Calas
+  Automations, installed on this computer)*. New `safeeasyapi about` and a README
+  section on checking it is the real program (`pip show`, PyPI, GitHub).
+- **A dead stored key is not protected by a question.** Before the REPLACE window the
+  stored key is tested with the vendor; if the vendor rejects it, the replace question is
+  skipped (normal capture, `stored_key_note` tells the agent). Untestable keys still get
+  the replace window.
+- **A closed window is never a remembered No.** The No button is told apart from a
+  closed window where the platform allows it (macOS no longer has a cancel button; zenity
+  uses two extra buttons); where it cannot (kdialog, old zenity) a silent exit is passed
+  on as a No but is not remembered for 10 minutes. Expired and closed windows are
+  `consent_expired`.
+
+## 0.7.4
+
+A plain-words pass on the windows, after a real person used 0.7.3 on Windows.
+
+- **Wording.** Every window is at most five short lines, in everyday words, and says
+  what is going on first: *safeeasyapi (installed on this computer) asks: Your AI
+  assistant wants to connect GitHub for "my-shop". safeeasyapi will save the key
+  safely; the assistant never sees it. Did you ask your assistant to do this? No =
+  nothing is stored or changed.* The buttons are **Yes / No** on every platform (the
+  macOS, zenity and kdialog buttons are now labelled Yes / No too); "Allow" and
+  "Deny" are gone. The project is shown as its last folder name only.
+- **Account window** leads with the account: *GitHub account: octo-cat / Is this your
+  account?*
+- **One question per action.** Replacing a key with no earlier permission is ONE
+  window (not a permission window and then a replace window); asking again while a
+  window is open never opens another.
+- **Time.** Windows stay open 5 minutes (330 s) and say so. If one closes by itself
+  the next status is `consent_expired` (and the account window's failure says
+  "expired"): the agent is told to tell the person it expired and that they can simply
+  ask again. An expired window is not a "no".
+- **Windows:** the box is brought to the front and its taskbar button flashes, with the
+  system question sound (all best effort; it stays top-most).
+
+## 0.7.3
+
+Fixes from the independent verification of 0.7.2.
+
+- **The keychain is the authority.** `ChainSecret` reads the 0600 file only when the
+  keychain returns nothing - never because the file has a "newer" counter - and
+  deletes the file once the keychain saves, so a planted `consent.key` cannot take over.
+- **A window, when one can be shown, is the only consent.** A permission file on disk
+  (even a valid one) is ignored while a window is available; the terminal grant applies
+  only with no window, or when the server runs with `SAFEEASYAPI_NO_WINDOW=1`.
+- **A failing helper is not a "no".** Crashes, odd exit statuses and unsupported flags
+  give `None` (`consent_needed`, ask again); only an explicit Deny is remembered.
+  zenity is retried without `--no-markup` / `--default-cancel` on old versions; kdialog
+  text has `< > &` removed.
+- **Refusals are visible.** When a helper is on PATH but is not a trusted (root-owned)
+  install, the answer says where it found it and why it was refused. Trust is not widened,
+  clipboard tools included (the key passes through them).
+- **Hook:** wildcards that could expand to `.safeeasyapi` (`~/.safe*/*`, `.s*/c*`,
+  `.saf?easyapi/*`, `tar c ~/.safe*`) are refused; `.*`, `man security` and friends are not.
+- Lock: stale limit 180 s, stale locks are renamed away before removal; the consent
+  folder is created 0700. macOS: the keychain secret is passed to `security -i` on stdin,
+  not in argv. A start that fails as busy or rate-limited keeps the replace permission;
+  the window check-and-set is under the lock.
+
+## 0.7.2
+
+Fixes from the second review of 0.7.x.
+
+- **Helpers are trusted ones only.** `zenity`, `kdialog`, `osascript`, `security`,
+  `secret-tool` and the clipboard tools are looked up only in `/usr/bin`, `/bin`
+  and `/usr/local/bin`, only if root owns them and neither they nor their folder
+  are writable by others, and run with a fixed `PATH` and a minimal environment
+  (`safeexec.py`).
+- **Honest consent.** The window's yes is kept in the server's memory for the
+  session, never on disk. The terminal `allow-agent` grant in the signed file is
+  advisory (a same-user program can read the secret or fake a terminal); README,
+  SKILL.md and docstrings say so. The consent file carries a counter that is also
+  kept with the secret, so an old copy no longer verifies; no `.bak` copies; the
+  write is under a lock and the secret file is created with `O_EXCL`; a keyring
+  that cannot save falls back to the 0600 file; `allow-agent` reports a grant it
+  could not save.
+- **Second window.** After the vendor accepts the key, a window shows the account
+  (GitHub login, `[A-Za-z0-9-]{1,39}` only) and the person confirms before anything
+  is stored (`confirming`, `account_confirmed_by_person`).
+- **Windows.** The message box has a time limit (a timeout is not a "no" and can be
+  asked again); the clipboard getter raises when it cannot open the clipboard.
+- **Dialogs:** zenity `--no-markup`, ASCII-only text (look-alike letters become
+  `?`), the project path cut to its last 120 characters.
+- **Clipboard.** `clear_verified` is false when `clear()` reports failure or the
+  clipboard cannot be read back. Strict, anchored (`\Z`, documented length)
+  `capture_accept` gates for the services with a documented format.
+- **Status:** a pending question makes `status` wait for the answer; an old answer
+  expires; `replace_granted` says to pass `replace=true`; `bool("false")` is false.
+- **Hook:** the steal rules are also applied to the quote-squashed text; `consent.key`,
+  `agent-consent` and the `.safeeasyapi` folder by relative path are protected (speed
+  bump, not a lock).
+- **setup-agent / skill install:** line ends, BOM and UTF-8 kept; markers must be
+  paired and in order; a stale Codex entry is updated; non-text files are refused
+  with a reason; shell-correct quoting of the Claude Code command.
+- More tests: 94 new (helpers, dialogs, stores, replay, status wait, setup-agent).
+
+## 0.7.1
+
+Fixes from an independent review of 0.7.0 (security, correctness, architecture, tests).
+
+- **Hook:** a quote-split file name (`cat .e''nv`) is now refused like `.env`.
+- **Consent cannot be forged by a file edit.** The permission is asked in a window of
+  the operating system shown by the MCP server (`dialog.py`; terminal route as the
+  weaker fallback), and recorded in `~/.safeeasyapi/agent-consent.json` (home from the
+  user database) with an HMAC; the secret lives in DPAPI / the macOS keychain / the
+  Linux Secret Service, else a 0600 file marked advisory. A file that does not verify
+  is no consent. Corrupt files are kept as `.bak`, never overwritten silently.
+- Replacing a stored key needs its own yes in a window; the keychain case is checked
+  too; the result names the account (GitHub login).
+- Agent writes only the project's `.env` (or a file the grant names); one shared
+  `.env`-name rule for writer and hook; public/static/dist folders refused.
+- Services without a documented key format answer `unsupported_gateless`; per-field
+  gates for two-value services; a copied value must be one line without spaces;
+  only a stale value shaped like the service's key is wiped, other clipboard content
+  is left alone.
+- The clipboard is emptied and verified (`clipboard_warning` instead of a false
+  "emptied"), Windows uses the clipboard sequence number, xclip/wl-copy no longer stall.
+- States `validating` and `storing`; `status` waits ~25 s and returns on any change;
+  `cancel` is honest (`too_late`); a failed arm never leaves the manager busy; server
+  shutdown cancels and clears; clipboard-history check fails closed.
+- Hook: clipboard readers, and quote/variable-insensitive consent-file and
+  `allow-agent` mentions (a speed bump, not the lock).
+- Client-neutral rules; `setup-agent` for Claude Code/Desktop, Cursor, Codex, Gemini
+  (absolute Python path); `skill install --for cursor|codex|gemini|all`; README
+  "what is enforced where".
+
+## 0.7.0
+
+**Agent-driven key capture.** The person says "connect GitHub"; the agent opens
+the key page, makes the key and clicks the vendor's Copy button; safeeasyapi
+takes the key from the clipboard, empties it, tests it, stores it, and tells the
+agent only `stored`. Nobody opens a terminal, copies or pastes; the key is never
+in the chat or on screen.
+
+- New MCP tool `capture_key` (`start` / `status` / `cancel`), `safeeasyapi/capture.py`.
+  Background capture in the server process; one at a time; 10-180 s; six starts
+  an hour; built-in recipes only; only a *changed*, key-shaped (service-shaped
+  when the recipe has a format) clipboard value; the old clipboard is wiped; the
+  clipboard is emptied the moment a key is taken; a rejected or unstorable key is
+  kept nowhere; results hold state words, variable names, where stored and a
+  length class - never the key or a part of it.
+- New `safeeasyapi allow-agent <service>` (`--revoke`, `--list`,
+  `--allow-clipboard-history`): the person's one-time yes, typed in a terminal,
+  kept in `~/.safeeasyapi/agent-consent.json` (not in the project, where an
+  agent could edit it). The hook refuses an agent running it.
+- Windows clipboard history on: `capture_key` refuses unless the person accepted
+  it when granting; the answer says so.
+- `request_connect` now returns `browser` steps (from the recipe, least privilege,
+  short expiry) and `rules` (never read the key field, never type it, only click
+  Copy, never enter passwords/2FA/CAPTCHA - stop and ask the person). SKILL.md,
+  README and the hook messages now say: use `capture_key`; ask the person to run
+  `connect` only when capture is unavailable. `connect --clipboard` is unchanged.
+
+Not tested against a real Windows/macOS clipboard in CI: the tests use a fake
+clipboard and a fake vendor. See the README ("Agent-driven capture").
+
+## 0.6.3
+
+- **Security / UX.** The question after a key was taken from the clipboard
+  ("Is that the key?") echoed whatever was typed or pasted, and a person who
+  pasted the key there saw it on screen and had it accepted. Now:
+  - the question is read without echo (a password-style read; from a pipe it
+    shows nothing either), and the rest of a multi-line paste is discarded;
+  - only Enter, y and n answer it; anything long or key-shaped is refused with
+    "That looked like a key. Do not paste it here. Nothing was saved.", is not
+    kept, and the question is asked again (three tries, then cancelled);
+  - the wording says the key is already taken, hidden, and not to paste.
+  - the same reader is used for the y/N questions that can follow a key: the
+    plain-text `.env` fallback of `--store keychain`, `export`, and
+    `scan --validate`.
+  - the hidden paste prompt drops terminal paste markers and leftover lines.
+
 ## 0.6.2
 
 Fixes for what the test matrix (Linux, macOS, Windows; Python 3.10-3.14) found.

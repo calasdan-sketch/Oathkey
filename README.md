@@ -79,11 +79,16 @@ safeeasyapi export groq --to github      # copy a key into GitHub Actions secret
 safeeasyapi status            # which keys exist, where, how old; says when to rotate
 ```
 
-**AI agents.** Claude Code (or any MCP client) is told to *ask*, never to
-handle a key: the `request_connect` tool answers only
-`{service, env_var, status, instructions}`, and `needs_keys` lists which
-keys a project lacks. The instructions tell the person to run
-`safeeasyapi connect <service>` in their own terminal. No tool can return a
+**AI agents.** Claude Code (or any MCP client) never handles a key. The
+`capture_key` tool (0.7.0) lets the agent do the whole job: it drives the
+browser, makes the key and clicks the vendor's own Copy button; safeeasyapi
+takes the key from the clipboard, empties it, tests it and stores it, and the
+agent is told only `{state: "stored", env_vars, stored_in, key_length}`.
+`request_connect` answers `{service, env_var, status, instructions, browser,
+rules}`, and `needs_keys` lists which keys a project lacks. Only when
+`capture_key` is unavailable (no clipboard access, headless, or the person
+has not allowed it) is the person asked to run `safeeasyapi connect
+<service>` in their own terminal. No tool can return a
 secret value: answers are built from names and status words only, and a
 second filter blanks any secret the server can reach (a variable in its
 environment, a value in the project's `.env`), also in base64, hex and
@@ -377,6 +382,14 @@ safeeasyapi setup [service ...] [--dry-run]    # connect every missing service i
 safeeasyapi setup --env-file FILE | --no-browser | --clipboard | --allow-clipboard-history
 safeeasyapi status [--json] [--max-age DAYS] [--env-file FILE]   # where keys live, how old
 safeeasyapi export <service> --to github|vercel [--repo OWNER/REPO] [--environment NAME] [--overwrite] [--yes]
+safeeasyapi about                       # who made it and how to check it is the real one
+safeeasyapi allow-agent <service>       # your one-time yes (terminal route; the normal way is the window the server shows)
+safeeasyapi allow-agent <service> --env-file .env.local   # let the agent write to this .env-style file (default: .env only; terminal route only)
+safeeasyapi setup-agent claude-code|claude-desktop|cursor|codex|gemini [--write]   # the MCP entry, with this Python's absolute path
+safeeasyapi skill install --for cursor|codex|gemini|all   # the rules file for that client (marked block, never overwrites yours)
+safeeasyapi mcp --default-store keychain   # where agent-captured keys go (setup-agent sets it for clients without the .env hook)
+safeeasyapi allow-agent <service> --allow-clipboard-history   # ... and accept Windows' clipboard history (terminal route only; with a window, turn history off)
+safeeasyapi allow-agent --list | --revoke [service]   # what is allowed in this project / take it back
 safeeasyapi doctor-recipes [service ...] [--json] [--timeout S] [--my-recipes]   # have recipe addresses rotted?
 safeeasyapi connect <service> --allow-clipboard-history   # keep copy-and-go even if Windows keeps a history
 safeeasyapi rotate <service>            # replace a stored key
@@ -875,22 +888,152 @@ Add to Claude Code (`claude mcp add`) or `~/.claude.json`:
 
 (`python` is the Windows launcher's name; on macOS/Linux use whatever
 runs your Python 3.) Tools: `list_services`, `get_recipe`,
-`find_public_apis`, `get_public_api`, `request_connect` and `needs_keys` (the agent
-handshake, above). The recipe tells the agent the
-exact steps and ends with: run `safeeasyapi connect <service>` in a
-terminal — never ask the user to paste the key into chat. The server
-speaks JSON-RPC 2.0 properly: notifications (`notifications/cancelled`,
-`notifications/initialized`, anything without an `id`) are never
-answered, a non-object message gets `-32600 Invalid Request`, bad JSON
-(a hundred thousand open brackets included) `-32700 Parse error`, and `params` that is not an object (`null`, a list,
-a string…), `arguments` that is not an object, or a missing or wrongly
-typed required argument gets `-32602 Invalid params` — never a crash or
-`-32603` — after which the server simply carries on. (A tool-level miss,
-such as a service that has no recipe, is an ordinary result with
-`isError`.) If standard input or standard output is closed
-(`safeeasyapi mcp >&-`; `pythonw` on Windows) there is no client to talk
-to: one `error:` line on stderr and exit status 2, before any request is
-read, not a traceback.
+`find_public_apis`, `get_public_api`, `request_connect`, `capture_key` and
+`needs_keys` (the agent handshake, above). The recipe tells the agent the
+exact steps and ends with: call `capture_key` (or, if that is unavailable,
+ask the person to run `safeeasyapi connect <service>`) — never ask the user
+to paste the key into chat.
+
+### Agent-driven capture (`capture_key`, experimental)
+
+The person says "connect GitHub". The agent calls `capture_key` (`action`:
+`start`, `status`, `cancel`), opens the key page with its own browser tools,
+chooses the smallest permissions and a short expiry, and clicks **Copy**. The
+MCP server — a program running as you, on your computer — sees a new
+key-shaped value on the clipboard, takes it, **empties the clipboard and checks
+that it is empty**, asks the vendor whether it works (the same check as
+`connect`, including "real but limited"), and stores it in `.env` or the OS
+keychain. The agent gets back only the state, the variable name, where it was
+stored, a length class and — for GitHub — the account's login name, so you can
+see which account was connected. A key the vendor rejects is kept nowhere.
+
+**States** (`state`): `consent_pending` (a window is on your screen),
+`consent_needed` (no window possible: use `allow-agent`; or the window failed or timed
+out, which is not a refusal: ask again),
+`consent_expired` (the window closed by itself after 5 minutes: tell the person, they can ask
+again), `consent_denied`, `consent_granted` (then call `start`), `replace_granted` (then
+call `start` with `replace=true`), `confirming` (a window asks you to confirm the
+account), `unavailable` (no clipboard, SSH, WSL ...: the reason is
+given), `unsupported_gateless` (the service has no documented key format),
+`refused` (clipboard history, a recipe of your own, limits), `busy`,
+`already_stored`, `waiting`, `validating`, `storing`, `stored`, `failed`,
+`timeout`, `cancelled`, `idle`. `status` waits up to 25 seconds and returns as
+soon as the state changes. `cancel` during `storing` answers `cancel: too_late`.
+
+Rules that make this safe enough to allow:
+
+- **Your yes is asked in a window of the operating system** (a Windows
+  message box that stays open 5 minutes, macOS `osascript`, Linux `zenity`/`kdialog`)
+  shown by the server itself — not by anything the agent can type into. **When a
+  window can be shown, only that window counts**: any permission file on disk is
+  ignored, even a well-formed one, so a file an agent wrote cannot start a
+  capture. Your yes is kept in the server's memory for that session only (it
+  ends when the MCP server stops), never on disk. A window that fails to open,
+  crashes, or is not answered is **not** a "no": the agent is told to ask again
+  (only an explicit No is remembered, for 10 minutes). After the key is checked
+  a **second window** shows which account it belongs to (GitHub: the login name)
+  and asks you to confirm before anything is stored. Replacing a stored key needs
+  its own window.
+  - *What the window protects against:* an agent that works through chat, files
+    and shell commands and cannot run code as you — it cannot answer the window
+    and cannot plant a consent.
+  - *What it does not protect against:* an agent that can run programs as your
+    user (it can reach the same operating-system facilities: it could, for
+    example, drive the screen or tamper with this very program), one that controls
+    your screen and presses Yes, and a browser tool that reads the key field.
+- **Who is named, and who made the tool.** The window says which AI program is asking
+  ("Claude Code", "Cursor", "Codex" ...). That name is what the program **reports
+  about itself** when it connects (the MCP `clientInfo.name`); safeeasyapi cannot prove
+  it, so it is a label, not an identity check. An unknown name is shown cleaned (plain
+  letters, 30 characters) and a missing one as "An AI program". The first line of
+  every window says the tool is *free key-safe tool, made by Calas Automations,
+  installed on this computer*. To check that this really is the program you installed:
+  `safeeasyapi about`, `pip show safeeasyapi` (author Calas Automations Inc.), the
+  package page https://pypi.org/project/safeeasyapi/ and the source
+  https://github.com/calasdan-sketch/safeeasyapi.
+- **A closed window is not a No.** Only the No button, where the operating system lets
+  safeeasyapi tell (Windows, macOS, Linux zenity), counts as a refusal. A window that
+  closes by itself or is closed without choosing is reported as expired/closed and
+  can simply be asked again; on kdialog or an old zenity, where "No" and "closed" look
+  the same, the answer is passed on as a No but never remembered for 10 minutes.
+- **A dead stored key is not protected.** Before a REPLACE window is shown, the stored
+  key is tested with the vendor (never shown). If the vendor rejects it, no replace
+  question is asked - it is handled as a normal first capture and the agent is told the
+  stored key no longer works. If it can't be tested, the replace window is shown.
+- **Helper programs are trusted ones only.** `zenity`, `kdialog`, `osascript`,
+  `security`, `secret-tool` and the clipboard tools are looked up only in
+  `/usr/bin`, `/bin` and `/usr/local/bin`, only when root owns them and nobody
+  else can write to them or their folder, and they run with a fixed `PATH` and a
+  minimal environment. That is deliberate and not relaxed for the clipboard tools
+  either (the key passes through them). The cost: a Homebrew or Nix copy, which
+  your user owns, is refused — and the result **says so** (for example *found
+  xclip at /opt/homebrew/bin/xclip but it is not a trusted install ... use
+  `safeeasyapi connect`*) instead of failing quietly.
+- **`safeeasyapi allow-agent <service>`** in a terminal is the fallback **only
+  where no window can be shown** (SSH, headless), or when the server is started
+  with `SAFEEASYAPI_NO_WINDOW=1`. On a computer that can show a window the server
+  does not use it. It is **advisory**: it is kept in
+  `~/.safeeasyapi/agent-consent.json` (in a 0700 folder) with an HMAC and a
+  counter (an old copy of the file does not verify). The signing secret is in
+  Windows DPAPI, the macOS keychain or the Linux Secret Service; where those work
+  they are the authority and a file is never preferred over them; otherwise it is
+  a 0600 file. Where the keychain is empty or absent, a file planted by a program
+  that can write files is accepted on this route, and a program running as you
+  can still read that secret or fake a terminal, so this route proves little.
+  An agent that can edit your MCP client's config can also set
+  `SAFEEASYAPI_NO_WINDOW=1` for the server, so that switch is a convenience, not a lock. A file that does not verify counts as
+  no consent. The hook's rules about these files (including wildcards such as
+  `~/.safe*/*`) are a speed bump, not a lock; a known false positive is that a word such as
+  `ls .s*` is refused too, since it could expand to the folder.
+- Built-in services **that have a documented key format** only (GitHub,
+  Stripe, Anthropic, AWS, Cloudflare, Replicate, Twilio, Vercel). Other
+  services answer `unsupported_gateless`. One capture at a time; 10 to 180
+  seconds; six starts an hour.
+- The agent writes only to the project's `.env` (or the one file you named with
+  `--env-file`), never to a folder a web server publishes.
+- Only a value that *changes* the clipboard after arming and has the service's
+  key format — one line, no spaces — is taken. A stale copy shaped like that
+  key is removed and not used (said in the result); anything else on the
+  clipboard is left alone. A copy that is not that service's key is ignored and
+  counted.
+- **Clipboard history (Win+V)** keeps its own copy that nothing can remove.
+  While it is on, or cannot be checked, `capture_key` refuses (with a window: turn
+  history off; on the terminal route you may accept it with
+  `--allow-clipboard-history`). Clipboard-manager apps may do the
+  same and cannot be detected.
+- If the clipboard cannot be emptied the result says so (`clipboard_warning`)
+  and never claims it was.
+- The agent's rules (also in the skill): never look at the key; never type it;
+  only click Copy; never enter a password, 2FA code or CAPTCHA; with no browser
+  tool, stop and use `connect`.
+
+What still needs you: signing in, 2FA, CAPTCHAs and GitHub's "sudo mode"
+password prompt. If the agent's browser tools read the key field (page text, a
+screenshot), the agent sees the key — the rules forbid it and nothing here can
+stop a browser tool.
+
+The server speaks JSON-RPC 2.0 properly: notifications
+(`notifications/cancelled`, `notifications/initialized`, anything without an
+`id`) are never answered, a non-object message gets `-32600 Invalid Request`,
+bad JSON (a hundred thousand open brackets included) `-32700 Parse error`, and
+`params` that is not an object (`null`, a list, a string...), `arguments` that
+is not an object, or a missing or wrongly typed required argument gets
+`-32602 Invalid params` - never a crash or `-32603` - after which the server
+simply carries on. (A tool-level miss, such as a service that has no recipe, is
+an ordinary result with `isError`.) If standard input or standard output is
+closed (`safeeasyapi mcp >&-`; `pythonw` on Windows) there is no client to talk
+to: one `error:` line on stderr and exit status 2, before any request is read,
+not a traceback.
+
+### What is enforced where
+
+| | Claude Code | Claude Desktop, Cursor, Codex, Gemini |
+|---|---|---|
+| MCP tools never return a key | yes | yes |
+| Permission window (session only) and advisory signed terminal consent | yes | yes |
+| Hook blocks reading `.env`, clipboard readers, keychain readers | **yes** (`hook install`) | **no hook exists**: the agent can read a `.env` file |
+| Where keys go | `.env` (or keychain) | keychain by default (`setup-agent`) |
+| Rules file | `skill install` | `skill install --for cursor\|codex\|gemini` |
 
 ## Security model
 
@@ -986,7 +1129,7 @@ is UTF-8 bytes regardless of console code page, console output is
 reconfigured to replace unencodable characters instead of crashing, and
 every text file is opened as UTF-8.
 
-## Scope / limits (v0.6.2)
+## Scope / limits (v0.7.5)
 
 - `scan` finds keys by their shape. It misses a key with no recognisable
   prefix under a name that does not end in KEY, TOKEN, SECRET or PASSWORD, and

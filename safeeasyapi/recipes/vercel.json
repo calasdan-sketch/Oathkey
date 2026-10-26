@@ -48,7 +48,8 @@
       "label": "token",
       "name": "key",
       "detect": "vcp_[A-Za-z0-9_-]{16,}",
-      "detect_confidence": "known"
+      "detect_confidence": "known",
+      "capture_accept": "^vcp_[A-Za-z0-9_-]{16,300}\\Z"
     }
   ],
   "least_privilege": {

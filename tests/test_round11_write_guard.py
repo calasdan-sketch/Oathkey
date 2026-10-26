@@ -37,7 +37,7 @@ class TestWritesRefused(unittest.TestCase):
         _, out = hook_mod.check(call("Write", file_path="/app/.env", content="K=1"))
         reason = json.loads(out)["hookSpecificOutput"]["permissionDecisionReason"]
         self.assertIn("Claude can't write to '.env' - your keys stay out of the chat. "
-                      "Ask the safeeasyapi tool `request_connect`", reason)
+                      "Call the safeeasyapi tool `capture_key`", reason)
         self.assertIn("safeeasyapi connect <service>", reason)
 
     def test_reads_keep_the_read_message(self):

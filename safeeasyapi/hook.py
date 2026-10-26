@@ -33,6 +33,7 @@ import datetime
 import hashlib
 import json
 import os
+import fnmatch
 import re
 import shlex
 import shutil
@@ -75,25 +76,27 @@ REASON = (
     "safeeasyapi blocked this because {what} is a .env file, which holds "
     "secret API keys. Anything you read goes into your memory and the "
     "conversation log. Do not try another way to read it. If you need a key, call "
-    "the safeeasyapi tool `request_connect` (service name) - or `needs_keys` to "
-    "see which keys the project lacks - and tell the person the command it "
-    "gives (`safeeasyapi connect <service>`); never ask for the key in chat. "
+    "the safeeasyapi tool `capture_key` (service name): you click the vendor's "
+    "Copy button in the browser and safeeasyapi takes the key from the clipboard "
+    "without showing it to you (`needs_keys` lists which keys are missing). Only "
+    "if capture_key is unavailable, tell the person to run `safeeasyapi connect "
+    "<service>`; never ask for the key in chat. "
     "If a command needs the key to run, ask the person to run it themselves "
     "(`safeeasyapi run <service> -- <command>`) - do not run it for them. If "
     "you only need to know which variables exist, read .env.example instead.")
 
 WRITE_REASON = (
     "Claude can't write to {what} - your keys stay out of the chat. "
-    "Ask the safeeasyapi tool `request_connect` (or `needs_keys`) which key is "
-    "missing and tell the person to run: safeeasyapi connect <service>  "
-    "(or edit the file yourself).")
+    "Call the safeeasyapi tool `capture_key` (or `needs_keys` to see which key is "
+    "missing) - or, if capture is unavailable, tell the person to run: "
+    "safeeasyapi connect <service>  (or edit the file yourself).")
 
 
 STEAL_REASON = (
     "safeeasyapi blocked this because it would {what}. Stored keys must stay "
     "out of the chat. Do not try another way. Call the safeeasyapi tool "
-    "`request_connect` or `needs_keys` and ask the person to run the command "
-    "themselves.")
+    "`capture_key` (or `needs_keys`); if capture is unavailable, ask the person "
+    "to run the command themselves.")
 
 # Ways a shell can pull a stored key out, or print it unredacted. Each is
 # (regex, what it does). They are matched against the whole command text.
@@ -111,16 +114,72 @@ STEAL_RULES = (
      "read a password store"),
     (re.compile(r"\b(?:import|from)\s+keyring\b|\bkeyring\.get_password\b", re.I), "read the keyring from code"),
     (re.compile(r"/proc/[\w$*{}/-]*/environ", re.I), "read another program's environment"),
-    (re.compile(r"[/\\~]\.safeeasyapi(?![\w])", re.I), "read safeeasyapi's own store"),
+    (re.compile(r"(?:^|[\s/\\~=:;&|(<>])\.safeeasyapi(?![\w])", re.I), "read safeeasyapi's own store"),
+    (re.compile(r"consent\.key|agent-consent|\.safe\W*easy", re.I), "touch safeeasyapi's consent files"),
+    (re.compile(_SAFE + r"(?:pbpaste|wl-paste|Get-Clipboard|xclip\b[^\n;&|]*\s-(?:o\b|out\b)|xsel\b[^\n;&|]*\s(?:-o\b|--output\b))", re.I),
+     "read the clipboard"),
+    (re.compile(r"\b(?:Windows\.Forms\.Clipboard|GetClipboardData|pyperclip|clipboard_get)\b", re.I),
+     "read the clipboard from code"),
 )
 
 
+# What only the person may do (grant an agent the right to capture keys), and
+# the files that record it. Matched against the command with quotes, carets,
+# backslashes and shell variables taken out (STEAL_RULES are matched that way
+# too), so allow""-agent, sec""ret-tool and a${x}llow-agent do not slip through.
+# A SPEED BUMP, not a lock: it catches the plain and the lightly disguised
+# forms only. See consent.py for what protects the grant itself.
+CONSENT_RULES = (
+    (re.compile(r"allow[-_]agent|agent[-_]consent|allowcmd|safeeasyapi\.(?:consent|capture)\b|"
+                r"(?:consent|capture)_mod\b|consent\.(?:grant|_save_grants)|capture\.grant", re.I),
+     "give itself permission to capture keys (only the person may)"),
+)
+
+
+def _squash(text: str) -> tuple[str, str]:
+    """`text` without quotes, carets, backticks and backslashes; and also
+    without shell variables."""
+    plain = re.sub(r"[\'\"`^\\]", "", text)
+    return plain, re.sub(r"\$\{[^}]*\}|\$\w+|\$\(\)", "", plain)
+
+
+_DOT_TOKEN = re.compile(r"(?:^|[\s/\\~=:;&|(<>'\"`])(\.[^\s/\\;&|<>()'\"`=]*)")
+
+
+def globs_to_our_folder(text: str) -> bool:
+    """Does a path word in `text` use wildcards that could expand to the
+    `.safeeasyapi` folder? (`~/.safe*/*`, `.s*/c*`, `.saf?easyapi/*`,
+    `tar c ~/.safe*`.) A word that is only wildcards (`.*`) is left alone: that
+    would stop every `ls -a`. Known false positive: `ls .s*` (and any `.s*`
+    style word) is refused, because it could expand to the folder."""
+    for word in _DOT_TOKEN.findall(text):
+        if not re.search(r"[*?\[]", word):
+            continue
+        if not re.search(r"[A-Za-z]", re.sub(r"\[[^\]]*\]", "", word)):
+            continue                                 # no literal letter: too general to mean us
+        try:
+            if fnmatch.fnmatchcase(".safeeasyapi", word):
+                return True
+        except re.error:
+            continue
+    return False
+
+
 def steals_key(text: str) -> str | None:
-    """What a shell command / path would do to a stored key, or None."""
+    """What a shell command / path would do to a stored key, or None. A speed
+    bump, not a lock: it reads the text of the call, and a program that builds
+    its command at run time gets past it."""
     flat = text.replace("\\", "/") if "safeeasyapi" in text else text
+    variants = (text, flat, *_squash(text))
+    if any(globs_to_our_folder(v) for v in variants):
+        return "touch safeeasyapi's own store (a wildcard that matches its folder)"
     for rx, what in STEAL_RULES:
-        if rx.search(text) or (flat is not text and rx.search(flat)):
+        if any(rx.search(v) for v in variants):
             return what
+    for variant in variants:
+        for rx, what in CONSENT_RULES:
+            if rx.search(variant):
+                return what
     return None
 
 
@@ -192,6 +251,12 @@ def decide(payload) -> str | None:
         hits = find_env_files(text)
         if hits:
             return hits[0]
+        if re.search(r"[\'\"`^]", text):
+            # c''at .e''nv: the shell joins the pieces, so look at the joined text too
+            for variant in _squash(text):
+                hits = find_env_files(variant)
+                if hits:
+                    return hits[0]
     return None
 
 

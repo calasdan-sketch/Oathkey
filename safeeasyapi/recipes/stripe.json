@@ -9,7 +9,8 @@
       "name": "key",
       "accept": "^(sk|rk)_(test|live)_",
       "detect": "(sk|rk)_(test|live)_[A-Za-z0-9]{10,247}",
-      "detect_confidence": "known"
+      "detect_confidence": "known",
+      "capture_accept": "^(sk|rk)_(test|live)_[A-Za-z0-9]{10,247}\\Z"
     }
   ],
   "key_url": "https://dashboard.stripe.com/apikeys",

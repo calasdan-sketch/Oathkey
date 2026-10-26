@@ -19,6 +19,7 @@ import os
 import re
 import time
 
+from . import capture as capture_mod
 from . import clipboard as clipboard_mod
 from . import detect as detect_mod
 from . import manifest as manifest_mod
@@ -38,6 +39,38 @@ AGENT_RULE = ("Do not ask the person to paste a key into chat, and do not read o
               "write .env files or any file holding keys. Ask the person to run "
               "the command below in their own terminal; the key goes from the "
               "vendor page straight to the project without passing through you.")
+
+
+CAPTURE_RULES = (
+    "Never look at the key. Do not use any tool that returns page content, the DOM, an "
+    "accessibility tree, text or a screenshot of the page area that shows the key. Click the "
+    "vendor's own Copy button only; safeeasyapi takes the key from the clipboard.",
+    "Never type, paste or send the key anywhere; you do not need it.",
+    "Never enter a password, a 2FA code or solve a CAPTCHA. If the page asks for a login, "
+    "2FA, a CAPTCHA or a password prompt (for example GitHub's sudo mode), stop and ask the "
+    "person to do that step in the browser, then continue.",
+    "If you have no browser tool that can click, stop and use the human route: ask the "
+    "person to run `safeeasyapi connect <service>` in their own terminal.",
+    "Choose the smallest permissions that work, one project or repository only, and a "
+    "short expiry (30 to 90 days).",
+    "Do not copy anything else while capture is armed: the next key-shaped copy is taken.",
+)
+
+
+def browser_steps(recipe: dict) -> dict:
+    """What the agent does in the browser, from the recipe (plain text only)."""
+    steps = [recipes_mod.printable(x, words=True) for x in recipe.get("steps", [])]
+    out = {"open": recipe["key_url"], "steps": steps}
+    least = recipe.get("least_privilege")
+    if isinstance(least, dict) and least.get("summary"):
+        out["least_privilege"] = recipes_mod.printable(least["summary"], words=True)
+    if recipe.get("scopes"):
+        out["scopes"] = [recipes_mod.printable(x) for x in recipe["scopes"]]
+    return out
+
+
+AGENT_RULE_CAPTURE = ("Do not ask the person to paste a key into chat, and do not read or "
+                      "write .env files or any file holding keys.")
 
 
 def _secret_like(name: str, value: str) -> bool:
@@ -142,7 +175,7 @@ def request_connect(service, catalog: dict, open_key_page: bool = False,
     if recipe is None:
         return {"error": "no such service. Call list_services for the names I know.",
                 "isError": True}
-    root = cwd or os.getcwd()
+    root = manifest_mod.project_root(cwd)
     manifest = _project_manifest(root)
     store = "env"
     env_file = os.path.join(root, ".env")
@@ -164,11 +197,18 @@ def request_connect(service, catalog: dict, open_key_page: bool = False,
                                f"{recipe['env_var']} from the environment; do not read its value.")
         return out
     out["instructions"] = (
-        f"Ask the person to run, in their own terminal: safeeasyapi connect {slug}"
-        f"{' --store keychain' if store == 'keychain' else ''}. It opens the key page, "
-        f"takes the key safely and stores it as {recipe['env_var']}. "
-        f"Once it is stored, ask the person to start the program with `safeeasyapi run {slug} -- <command>`; "
-        f"do not run it with the key yourself, and do not print or transform the variable. " + AGENT_RULE)
+        f"Preferred: call capture_key with service={slug} (the person must have allowed it "
+        f"once with `safeeasyapi allow-agent {slug}`; capture_key tells you if not). Then "
+        f"you drive the browser steps below and click Copy; safeeasyapi takes the key from "
+        f"the clipboard, tests and stores it as {recipe['env_var']} and tells you only "
+        f"that it is stored. Only if capture_key says it is unavailable (no clipboard "
+        f"access, headless), ask the person to run, in their own terminal: "
+        f"safeeasyapi connect {slug}{' --store keychain' if store == 'keychain' else ''}. "
+        f"Once it is stored, ask the person to start the program with "
+        f"`safeeasyapi run {slug} -- <command>`; do not run it with the key yourself, and "
+        f"do not print or transform the variable. " + AGENT_RULE_CAPTURE)
+    out["browser"] = browser_steps(recipe)
+    out["rules"] = list(CAPTURE_RULES)
     out["key_page"] = recipe["key_url"]
     if open_key_page:
         if opener is None:
@@ -245,3 +285,39 @@ def needs_keys(project, catalog: dict, cwd: str | None = None) -> dict:
 def as_text(payload: dict, catalog: dict, cwd: str | None = None) -> str:
     """The JSON text of an answer, with reachable secrets blanked."""
     return guard_text(json.dumps(payload), catalog, cwd)
+
+
+CAPTURE_ACTIONS = ("start", "status", "cancel")
+
+
+def _truthy(value) -> bool:
+    """A real boolean, or the words a client may send for one: the string
+    "false" is False (bool("false") is True)."""
+    if isinstance(value, str):
+        return value.strip().lower() in ("true", "1", "yes")
+    return value is True or (isinstance(value, int) and not isinstance(value, bool) and value == 1)
+
+
+def capture_key(args: dict, catalog: dict, cwd: str | None = None, manager=None) -> dict:
+    """The agent-driven capture (capture.py, experimental). `action`: start
+    (default), status or cancel. Returns state words and names only - never a
+    value."""
+    manager = manager or capture_mod.default_manager()
+    action = args.get("action") or "start"
+    if action not in CAPTURE_ACTIONS:
+        return {"error": "action must be start, status or cancel", "isError": True}
+    if action == "status":
+        return manager.status(args.get("wait_seconds"))
+    if action == "cancel":
+        return manager.cancel()
+    slug = clean_slug(args.get("service"))
+    recipe = catalog.get(slug) if slug else None
+    if recipe is None:
+        return {"error": "action=start needs a service from list_services, like 'github'.",
+                "isError": True}
+    out = manager.start(slug, recipe, cwd, args.get("timeout_seconds"),
+                        _truthy(args.get("replace")))
+    if out.get("state") == "waiting":
+        out["browser"] = browser_steps(recipe)
+        out["rules"] = list(CAPTURE_RULES)
+    return out

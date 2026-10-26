@@ -58,6 +58,11 @@ Two different jobs for a key's shape, kept apart on purpose:
                                  #   only use a shape the vendor DOCUMENTS,
                                  #   and loosely, so a valid key is never
                                  #   refused. Leave it out when unsure.
+  "capture_accept": "^sk_(test|live)_[A-Za-z0-9]{10,247}\\Z"   # agent capture (capture_key) only:
+                                 #   STRICT - anchored with \\Z and the documented
+                                 #   length - because there a stray clipboard value
+                                 #   could otherwise be taken. A valid key it refuses
+                                 #   is captured with `connect` instead.
   "detect": "gsk_[A-Za-z0-9_-]{16,}"      # `scan` only: a commonly used shape
   "detect_confidence": "guess" | "known"  #   used as a HEURISTIC (default
                                           #   "guess" when only "detect").
@@ -287,7 +292,7 @@ def fields(recipe: dict) -> list[dict]:
     if not listed:
         return [{"name": DEFAULT_FIELD, "env_var": recipe["env_var"],
                  "label": "API key", "pattern": None, "accept": None,
-                 "detect": None, "detect_confidence": "known"}]
+                 "detect": None, "detect_confidence": "known", "capture_accept": None}]
     out = []
     for f in listed:
         accept = f.get("accept") or f.get("pattern")
@@ -299,6 +304,7 @@ def fields(recipe: dict) -> list[dict]:
         out.append({"name": f["name"], "env_var": f["env_var"],
                     "label": f.get("label") or f["name"],
                     "pattern": accept, "accept": accept, "detect": detect,
+                    "capture_accept": f.get("capture_accept"),
                     "detect_confidence": confidence})
     return out
 
@@ -378,7 +384,7 @@ def _check_fields(data: dict) -> None:
         label = f.get("label")
         if label is not None and not (isinstance(label, str) and label.strip()):
             raise RecipeError(f"field '{name}' label must be text")
-        for pkey in ("pattern", "accept", "detect"):
+        for pkey in ("pattern", "accept", "detect", "capture_accept"):
             pattern = f.get(pkey)
             if pattern is None:
                 continue

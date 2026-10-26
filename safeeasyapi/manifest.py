@@ -61,6 +61,17 @@ def _ours(path: str) -> bool:
         return False
 
 
+def project_root(start: str | None = None) -> str:
+    """THE project folder, one rule for every command and tool: the folder of
+    the nearest safeeasyapi.json (never above the git root), else the git
+    root, else `start` itself. Always a real path."""
+    here = os.path.realpath(start or os.getcwd())
+    found = find(here)
+    if found:
+        return os.path.realpath(os.path.dirname(found))
+    return os.path.realpath(_git_root(here) or here)
+
+
 def find(start: str | None = None) -> str | None:
     """The nearest safeeasyapi.json at or above `start` (default: here), but
     never above the project: the search stops at the git work tree's root,
@@ -82,6 +93,7 @@ def find(start: str | None = None) -> str | None:
     return None
 
 
+PUBLIC_DIRS = frozenset({"public", "static", "dist", "www", "build", "wwwroot", "public_html", "htdocs"})
 _WINDOWS_RESERVED = re.compile(r"^(con|prn|aux|nul|com\d|lpt\d)(\.|$)", re.I)
 
 
@@ -100,7 +112,12 @@ def env_file_problem(value) -> str | None:
     if any(p.lower() == ".git" or _WINDOWS_RESERVED.match(p) for p in parts):
         return "env_file must not point into .git or at a device name"
     name = parts[-1].lower()
-    if not (name.startswith(".env") or name.endswith(".env")) or name in (".envrc",):
+    if any(p.lower() in PUBLIC_DIRS for p in parts[:-1]):
+        return "env_file must not be inside a folder a web server publishes (public, static, dist ...)"
+    # ONE rule for what is a .env file, shared with the hook that protects it:
+    # a name the hook would not recognise (.envfoo) is not accepted here
+    from . import hook as hook_mod
+    if not hook_mod.is_env_name(parts[-1]) or name in (".envrc",):
         return "env_file must be a .env-style file name (.env, .env.local, prod.env)"
     if name.endswith((".json", ".md", ".py", ".js", ".ts", ".yml", ".yaml", ".toml", ".sh")):
         return "env_file must be a .env-style file name"

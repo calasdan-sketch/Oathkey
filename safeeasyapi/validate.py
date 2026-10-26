@@ -80,11 +80,12 @@ class Result:
     pass; `note` says which, in the recipe's own words). "invalid" is falsy.
     It never holds the key or any part of the vendor's answer."""
 
-    __slots__ = ("status", "note")
+    __slots__ = ("status", "note", "identity")
 
     def __init__(self, status: str, note: str | None = None):
         self.status = status
         self.note = note
+        self.identity = None    # a login name the vendor reports (not a secret), when the recipe asks
 
     def __bool__(self) -> bool:
         return self.status != "invalid"
@@ -565,7 +566,7 @@ def _validate_key(spec: dict, key, timeout: float = 10.0) -> Result:
         req = _build_request(spec, creds, bearer_token=token)
         scrubber = _CredentialScrubbingRedirectHandler(_credential_headers(spec),
                                                        follow=atype != "query")
-        wants_body = bool(spec.get("body_rules"))
+        wants_body = bool(spec.get("body_rules")) or bool(spec.get("identity"))
         status, body = _send(req, scrubber, timeout,
                              MAX_VERDICT_BODY if wants_body else 0)
     finally:
@@ -574,4 +575,22 @@ def _validate_key(spec: dict, key, timeout: float = 10.0) -> Result:
         skew = _skew(scrubber.server_date)
         if skew is not None and abs(skew) > MAX_SKEW_SECONDS:
             raise ClockSkew(int(abs(skew) // 60), skew > 0)
-    return _verdict(status, spec, body=body[:MAX_VERDICT_BODY])
+    result = _verdict(status, spec, body=body[:MAX_VERDICT_BODY])
+    if result and result.status == "valid" and spec.get("identity"):
+        result.identity = _identity(spec["identity"], body[:MAX_VERDICT_BODY])
+    return result
+
+
+_IDENTITY_OK = re.compile(r"[A-Za-z0-9-]{1,39}\Z")      # a GitHub-style login: nothing to mislead a person
+
+
+def _identity(field: str, body: bytes) -> str | None:
+    """The account's login name from the vendor's JSON answer (`validate.identity`
+    names the member, e.g. "login"). A login is not a secret; anything that is
+    not a short plain name is dropped."""
+    try:
+        data = json.loads(body.decode("utf-8", "replace"))
+    except (ValueError, RecursionError):
+        return None
+    value = data.get(field) if isinstance(data, dict) else None
+    return value if isinstance(value, str) and _IDENTITY_OK.match(value) else None

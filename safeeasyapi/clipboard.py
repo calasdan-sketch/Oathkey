@@ -21,10 +21,11 @@ and clipboard managers can keep their own copy; this cannot clear those.
 from __future__ import annotations
 
 import re
-import shutil
 import subprocess
 import sys
 import time
+
+from . import safeexec
 
 POLL_SECONDS = 0.3
 WAIT_SECONDS = 180
@@ -56,6 +57,8 @@ def _windows():
     kernel32.GlobalLock.restype = ctypes.c_void_p
     kernel32.GlobalLock.argtypes = [ctypes.c_void_p]
     kernel32.GlobalUnlock.argtypes = [ctypes.c_void_p]
+    user32.GetClipboardSequenceNumber.restype = wintypes.DWORD
+    user32.EmptyClipboard.restype = wintypes.BOOL
     cf_unicode = 13
 
     def opened(fn):
@@ -66,9 +69,11 @@ def _windows():
                 finally:
                     user32.CloseClipboard()
             time.sleep(0.05)
-        return None
+        raise OSError("the clipboard could not be opened")
 
     def get() -> str:
+        """The text, "" when the clipboard holds no text. Raises OSError when
+        it could not be opened: unreadable is not the same as empty."""
         def read():
             handle = user32.GetClipboardData(cf_unicode)
             if not handle:
@@ -82,44 +87,75 @@ def _windows():
                 kernel32.GlobalUnlock(handle)
         return opened(read) or ""
 
-    def clear() -> None:
-        opened(user32.EmptyClipboard)
+    def clear() -> bool:
+        try:
+            return bool(opened(user32.EmptyClipboard))
+        except OSError:
+            return False
 
+    def sequence() -> int:
+        """Changes whenever anything is copied (even the same text again):
+        a cheap check before opening the clipboard at all."""
+        return int(user32.GetClipboardSequenceNumber())
+
+    get.sequence = sequence
     return get, clear
 
 
-def _command(read: list[str], clear: list[str]):
+def _command(read: list[str], clear: list[str], run=safeexec.run):
     def get() -> str:
+        """The text; raises OSError when the tool failed (unreadable is not
+        the same as empty). An empty clipboard is "" with some tools'
+        non-zero exit, which is treated as empty only for no-selection."""
         try:
-            done = subprocess.run(read, capture_output=True, timeout=5)
-        except (OSError, subprocess.TimeoutExpired):
-            return ""
-        return done.stdout.decode("utf-8", "replace") if done.returncode == 0 else ""
+            done = run(read, capture_output=True, timeout=5)
+        except (OSError, subprocess.TimeoutExpired) as e:
+            raise OSError("the clipboard tool did not answer") from e
+        if done.returncode == 0:
+            return done.stdout.decode("utf-8", "replace")
+        if not (done.stdout or b"").strip() and done.returncode in (1, 2):
+            return ""                           # xclip / wl-paste: nothing on the clipboard
+        raise OSError("the clipboard tool failed")
 
-    def wipe() -> None:
+    def wipe() -> bool:
+        # no pipes to hold: xclip and wl-copy stay alive to serve the
+        # selection, and a captured pipe would make us wait for them
         try:
-            subprocess.run(clear, input=b"", capture_output=True, timeout=5)
+            done = run(clear, input=b"", stdout=subprocess.DEVNULL,
+                       stderr=subprocess.DEVNULL, timeout=5)
         except (OSError, subprocess.TimeoutExpired):
-            pass
+            return False
+        return done.returncode == 0
     return get, wipe
 
 
-def backend():
-    """(get, clear) functions for this system, or raise Unavailable."""
+def backend(find=safeexec.find):
+    """(get, clear) functions for this system, or raise Unavailable. The tools
+    are looked up in system folders only (safeexec.py)."""
     if sys.platform == "win32":
         try:
             return _windows()
         except (OSError, AttributeError) as e:
             raise Unavailable(f"Windows clipboard not reachable ({e})") from None
-    if sys.platform == "darwin" and shutil.which("pbpaste"):
-        return _command(["pbpaste"], ["pbcopy"])
-    if shutil.which("wl-paste") and shutil.which("wl-copy"):
-        return _command(["wl-paste", "--no-newline"], ["wl-copy", "--clear"])
-    if shutil.which("xclip"):
-        return _command(["xclip", "-selection", "clipboard", "-o"], ["xclip", "-selection", "clipboard", "-i"])
-    if shutil.which("xsel"):
-        return _command(["xsel", "--clipboard", "--output"], ["xsel", "--clipboard", "--clear"])
-    raise Unavailable("no clipboard tool found (install wl-clipboard, xclip or xsel)")
+    if sys.platform == "darwin" and find("pbpaste") and find("pbcopy"):
+        return _command([find("pbpaste")], [find("pbcopy")])
+    if find("wl-paste") and find("wl-copy"):
+        return _command([find("wl-paste"), "--no-newline"], [find("wl-copy"), "--clear"])
+    if find("xclip"):
+        x = find("xclip")
+        return _command([x, "-selection", "clipboard", "-o"], [x, "-selection", "clipboard", "-i"])
+    if find("xsel"):
+        x = find("xsel")
+        return _command([x, "--clipboard", "--output"], [x, "--clipboard", "--clear"])
+    for name in ("wl-paste", "xclip", "xsel"):
+        # Strict on purpose, for the clipboard tools too: the key passes through
+        # this program's output, so a user-owned copy earlier on PATH could read
+        # or replace it. The refusal is said out loud instead of failing quietly.
+        why = safeexec.explain(name)
+        if why:
+            raise Unavailable(why)
+    raise Unavailable("no clipboard tool found (install wl-clipboard, xclip or xsel in "
+                      "/usr/bin)")
 
 
 # ---- clipboard history -----------------------------------------------------
@@ -170,6 +206,10 @@ def looks_like(value: str, pattern: str | None) -> bool:
     value = value.strip()
     if not value or len(value) > MAX_LEN:
         return False
+    # one line, no spaces or control characters, whatever the pattern says:
+    # a gate that names only the start must not accept "sk-ant-x\nrm -rf"
+    if re.search(r"[\s\x00-\x1f\x7f]", value):
+        return False
     if re.match(r"https?://", value, re.IGNORECASE):
         return False                        # a copied link is never the key
     if pattern:
@@ -204,6 +244,13 @@ def wait_for_key(pattern: str | None, taken: set[str], get, clear,
     early); a generic-looking value from before is stale: it is emptied
     away (so copying the same key again counts as new). The clipboard is
     emptied as soon as a value is taken."""
+    raw_get = get
+
+    def get():
+        try:
+            return raw_get()
+        except Exception:
+            return ""                           # unreadable now: look again next time
     start = (get() or "").strip()
     if pattern and start not in taken and looks_like(start, pattern):
         clear()
@@ -226,3 +273,26 @@ def wait_for_key(pattern: str | None, taken: set[str], get, clear,
             clear()
             return current
     return None
+
+
+def clear_verified(get, clear, wait: float = 3.0, poll: float = 0.1,
+                   now=time.monotonic, sleep=time.sleep) -> bool:
+    """Empty the clipboard and make sure it is: clear, read it back, and try
+    again for up to `wait` seconds. False when it still holds something, when
+    clear() said it failed (returned False), or when the clipboard cannot be
+    read back (unreadable is NOT proof of empty)."""
+    deadline = now() + wait
+    while True:
+        cleared = True
+        try:
+            cleared = clear() is not False
+        except Exception:
+            cleared = False
+        try:
+            if cleared and not (get() or "").strip():
+                return True
+        except Exception:
+            pass
+        if now() >= deadline:
+            return False
+        sleep(poll)

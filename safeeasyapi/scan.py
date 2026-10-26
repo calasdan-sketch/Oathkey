@@ -51,6 +51,7 @@ from . import __version__
 from . import connect as connect_mod
 from . import validate as validate_mod
 from . import recipes as recipes_mod
+from . import safeprompt
 from .recipes import printable
 
 MAX_FILE_BYTES = 1024 * 1024       # a bigger file is skipped, never read
@@ -931,6 +932,14 @@ def plan_validation(findings: list[Finding], catalog: dict):
     return plan, impossible
 
 
+def _quiet(ask):
+    """The default terminal reader echoes what is typed: use the quiet one."""
+    return None if ask is _ask_stderr else ask
+
+
+_KEY_HERE = "That looked like a key. Do not paste it here. Type y or n."
+
+
 def _ask_stderr(prompt: str) -> str:
     sys.stderr.write(prompt)
     sys.stderr.flush()
@@ -1002,22 +1011,16 @@ def run_validation(findings: list[Finding], catalog: dict, *, yes: bool,
                 _mark(values, "unchecked", "not sent: no terminal to ask on")
             return refusal
     if builtin and not yes:
-        try:
-            answer = ask("  Send these keys to those hosts? [y/N]: ")
-        except (EOFError, KeyboardInterrupt):
-            answer = ""
-        if answer.strip().lower() not in ("y", "yes"):
+        if not safeprompt.ask("  Send these keys to those hosts? [y/N]: ", err,
+                              enter_means=False, reader=_quiet(ask), if_key=_KEY_HERE):
             err.write("  Nothing was sent.\n")
             for values in builtin.values():
                 _mark(values, "unchecked", "you chose not to send it")
             builtin = {}
     if custom:
-        try:
-            answer = ask("  The keys marked [from YOUR recipe] go to hosts that recipe "
-                         "chose, not safeeasyapi. Send them? [y/N]: ")
-        except (EOFError, KeyboardInterrupt):
-            answer = ""
-        if answer.strip().lower() not in ("y", "yes"):
+        if not safeprompt.ask("  The keys marked [from YOUR recipe] go to hosts that recipe "
+                              "chose, not safeeasyapi. Send them? [y/N]: ", err,
+                              enter_means=False, reader=_quiet(ask), if_key=_KEY_HERE):
             err.write("  Nothing was sent for your own recipes.\n")
             for values in custom.values():
                 _mark(values, "unchecked", "you chose not to send it")

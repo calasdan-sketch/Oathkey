@@ -9,7 +9,8 @@
       "name": "key",
       "accept": "^r8_.{37}$",
       "detect": "r8_[A-Za-z0-9]{37}",
-      "detect_confidence": "known"
+      "detect_confidence": "known",
+      "capture_accept": "^r8_[A-Za-z0-9]{37}\\Z"
     }
   ],
   "key_url": "https://replicate.com/account/api-tokens",
