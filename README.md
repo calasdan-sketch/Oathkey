@@ -382,6 +382,7 @@ safeeasyapi setup [service ...] [--dry-run]    # connect every missing service i
 safeeasyapi setup --env-file FILE | --no-browser | --clipboard | --allow-clipboard-history
 safeeasyapi status [--json] [--max-age DAYS] [--env-file FILE]   # where keys live, how old
 safeeasyapi export <service> --to github|vercel [--repo OWNER/REPO] [--environment NAME] [--overwrite] [--yes]
+safeeasyapi about                       # who made it and how to check it is the real one
 safeeasyapi allow-agent <service>       # your one-time yes (terminal route; the normal way is the window the server shows)
 safeeasyapi allow-agent <service> --env-file .env.local   # let the agent write to this .env-style file (default: .env only; terminal route only)
 safeeasyapi setup-agent claude-code|claude-desktop|cursor|codex|gemini [--write]   # the MCP entry, with this Python's absolute path
@@ -940,6 +941,25 @@ Rules that make this safe enough to allow:
     user (it can reach the same operating-system facilities: it could, for
     example, drive the screen or tamper with this very program), one that controls
     your screen and presses Yes, and a browser tool that reads the key field.
+- **Who is named, and who made the tool.** The window says which AI program is asking
+  ("Claude Code", "Cursor", "Codex" ...). That name is what the program **reports
+  about itself** when it connects (the MCP `clientInfo.name`); safeeasyapi cannot prove
+  it, so it is a label, not an identity check. An unknown name is shown cleaned (plain
+  letters, 30 characters) and a missing one as "An AI program". The first line of
+  every window says the tool is *free key-safe tool, made by Calas Automations,
+  installed on this computer*. To check that this really is the program you installed:
+  `safeeasyapi about`, `pip show safeeasyapi` (author Calas Automations Inc.), the
+  package page https://pypi.org/project/safeeasyapi/ and the source
+  https://github.com/calasdan-sketch/safeeasyapi.
+- **A closed window is not a No.** Only the No button, where the operating system lets
+  safeeasyapi tell (Windows, macOS, Linux zenity), counts as a refusal. A window that
+  closes by itself or is closed without choosing is reported as expired/closed and
+  can simply be asked again; on kdialog or an old zenity, where "No" and "closed" look
+  the same, the answer is passed on as a No but never remembered for 10 minutes.
+- **A dead stored key is not protected.** Before a REPLACE window is shown, the stored
+  key is tested with the vendor (never shown). If the vendor rejects it, no replace
+  question is asked - it is handled as a normal first capture and the agent is told the
+  stored key no longer works. If it can't be tested, the replace window is shown.
 - **Helper programs are trusted ones only.** `zenity`, `kdialog`, `osascript`,
   `security`, `secret-tool` and the clipboard tools are looked up only in
   `/usr/bin`, `/bin` and `/usr/local/bin`, only when root owns them and nobody
@@ -1109,7 +1129,7 @@ is UTF-8 bytes regardless of console code page, console output is
 reconfigured to replace unencodable characters instead of crashing, and
 every text file is opened as UTF-8.
 
-## Scope / limits (v0.7.4)
+## Scope / limits (v0.7.5)
 
 - `scan` finds keys by their shape. It misses a key with no recognisable
   prefix under a name that does not end in KEY, TOKEN, SECRET or PASSWORD, and

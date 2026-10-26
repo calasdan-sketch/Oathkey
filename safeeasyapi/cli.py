@@ -287,6 +287,8 @@ def _build_parser() -> argparse.ArgumentParser:
     sa.add_argument("--write", action="store_true",
                     help="Add the entry to the client's config file (other entries are kept).")
 
+    sub.add_parser("about", help="Who made safeeasyapi, and how to check this is the real one.")
+
     f = sub.add_parser("find", help="Find free public APIs for a task.")
     f.add_argument("query", help="What you need, e.g. 'weather', 'crypto price'.")
     f.add_argument("--auth", default=None,
@@ -757,6 +759,9 @@ def _main(argv: list[str] | None = None) -> int:
     if args.cmd == "allow-agent":
         from . import allowcmd
         return allowcmd.cmd_allow_agent(args, catalog)
+    if args.cmd == "about":
+        from . import aboutcmd
+        return aboutcmd.cmd_about()
     if args.cmd == "list":
         return _cmd_list(catalog)
     if args.cmd == "find":

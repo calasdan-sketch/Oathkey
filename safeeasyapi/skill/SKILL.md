@@ -27,11 +27,15 @@ the clipboard, tests it and stores it.
      refusal); if it says no window is possible, ask whether you may and they run
      `safeeasyapi allow-agent <service>` (you cannot). The window's
      yes lasts only until the safeeasyapi server stops.
+   - The windows name the AI program as it reported itself when it connected (a label,
+     not proof). If the person asks who made safeeasyapi: Calas Automations; they can
+     run `safeeasyapi about`.
    - `unavailable`, `unsupported_gateless`, `refused`: tell the person what it
      says and ask them to run `safeeasyapi connect <service>` themselves.
    - `already_stored`: do nothing, unless they asked for a new key (`replace: true`;
      they are asked in a window, then the state is `replace_granted`: call `start`
-     again with `replace: true`).
+     again with `replace: true`). If the stored key no longer works, the tool says so (`stored_key_note`):
+     tell the person, and carry on; there is no replace question.
    - `waiting`: you drive the browser (below), then call `action: "status"`. It
      waits up to 25 seconds and returns when the state changes: `validating`,
      `confirming` (the person confirms the account in a window), `storing` (wait again), then `stored` (done; `account` names the account),

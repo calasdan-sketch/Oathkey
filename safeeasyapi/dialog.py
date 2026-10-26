@@ -13,7 +13,7 @@ and shell commands and cannot run code as the same user as this server. It is
 NOT a gate against an agent that can run code as that user (it can drive the
 same OS interfaces) or that controls the screen and presses the button itself.
 
-Answers: True (Yes), False (No, or the window was closed), EXPIRED (nobody
+Answers: True (Yes), False (the No button, provably), SOFT_NO (No or closed: cannot tell), EXPIRED (nobody
 answered in time: not a refusal, ask again) and None (no window could be shown,
 or the helper failed: also not a refusal).
 """
@@ -45,6 +45,60 @@ class _Expired:
 
 
 EXPIRED = _Expired()
+
+
+class _SoftNo:
+    """The window went away with a "no" or with the close box and we cannot tell
+    which (kdialog, an old zenity, Esc on macOS). Treated as "not now" and never
+    remembered as the person's refusal."""
+
+    def __repr__(self) -> str:
+        return "SOFT_NO"
+
+    def __bool__(self) -> bool:
+        return False
+
+
+SOFT_NO = _SoftNo()
+
+# ------------------------------------------------------------ who is asking
+# The MCP client names itself in the `initialize` request (clientInfo.name). It is
+# what the program REPORTS about itself - not proof - and it is only used to make
+# the window say "Claude Code" instead of something vague.
+FRIENDLY = (
+    ("claude-code", "Claude Code"), ("claude-ai", "Claude"), ("claude-desktop", "Claude"),
+    ("claude", "Claude"), ("cursor", "Cursor"), ("codex", "Codex"), ("gemini", "Gemini CLI"),
+    ("windsurf", "Windsurf"), ("cline", "Cline"), ("zed", "Zed"),
+    ("visual-studio-code", "VS Code"), ("vscode", "VS Code"), ("roo", "Roo Code"),
+    ("continue", "Continue"), ("goose", "Goose"), ("opencode", "OpenCode"))
+UNKNOWN_SUBJECT, UNKNOWN_OBJECT = "An AI program", "the AI program"
+_CLIENT: list = [None]
+
+
+def set_client(name) -> None:
+    """Remember who connected (this server session). Anything but text clears it."""
+    _CLIENT[0] = name if isinstance(name, str) else None
+
+
+def current_client():
+    return _CLIENT[0]
+
+
+def client_label(name=None) -> tuple[str, str]:
+    """(how to say it at the start of a sentence, how to say it mid-sentence)."""
+    raw = current_client() if name is None else name
+    if isinstance(raw, str):
+        low = raw.strip().lower()
+        for key, nice in FRIENDLY:
+            if low == key or low.startswith(key + "-") or low.startswith(key + "_") \
+                    or low.startswith(key + " ") or low.startswith(key + "/"):
+                return nice, nice
+        cleaned = re.sub(r"[^\x20-\x7e]", "", raw)
+        cleaned = re.sub(r"[<>&\"`$\\]", "", cleaned)
+        cleaned = re.sub(r"\s+", " ", cleaned).strip()[:30].strip()
+        if re.search(r"[A-Za-z0-9]", cleaned):
+            return cleaned, cleaned
+    return UNKNOWN_SUBJECT, UNKNOWN_OBJECT
 
 
 def available(platform: str | None = None, env=None, which=safeexec.find) -> bool:
@@ -106,7 +160,7 @@ def markup_free(text: str) -> str:
 # (that is what the Windows box has, and the other platforms are made to match).
 
 TITLE = "safeeasyapi (installed on this computer)"
-FIRST = "safeeasyapi (installed on this computer) asks:"
+FIRST = "safeeasyapi (free key-safe tool, made by Calas Automations, installed on this computer)"
 
 
 def project_name(root: str) -> str:
@@ -115,23 +169,25 @@ def project_name(root: str) -> str:
     return plain(name, 40)
 
 
-def consent_window(display: str, root: str) -> tuple[str, str]:
+def consent_window(display: str, root: str, who: tuple[str, str] | None = None) -> tuple[str, str]:
     display, project = plain(display, 40), project_name(root)
+    subject, obj = who or client_label()
     return TITLE, "\n".join((
         FIRST,
-        f'Your AI assistant wants to connect {display} for "{project}".',
-        "safeeasyapi will save the key safely; the assistant never sees it.",
-        "Did you ask your assistant to do this?",
+        f'{subject} wants to connect {display} for "{project}".',
+        f"safeeasyapi will save the key safely; it is never shown to {obj}.",
+        f"Did you ask {obj} to do this?",
         "No = nothing is stored or changed. " + EXPIRES_TEXT))
 
 
-def replace_window(display: str, root: str) -> tuple[str, str]:
+def replace_window(display: str, root: str, who: tuple[str, str] | None = None) -> tuple[str, str]:
     display, project = plain(display, 40), project_name(root)
+    subject, obj = who or client_label()
     return TITLE, "\n".join((
         FIRST,
-        f'Your AI assistant wants to REPLACE your saved {display} key for "{project}".',
-        "The old key will be overwritten. The assistant never sees either key.",
-        "Did you ask your assistant to do this?",
+        f'{subject} wants to REPLACE your saved {display} key for "{project}".',
+        f"The old key will be overwritten. It is never shown to {obj}.",
+        f"Did you ask {obj} to do this?",
         "No = nothing is stored or changed. " + EXPIRES_TEXT))
 
 
@@ -218,19 +274,21 @@ def _launch_failed(code: int, err: bytes = b"") -> bool:
     return code not in (0, 1, 5) or (code == 1 and bool((err or b"").strip()))
 
 
-def _no_or_failure(done) -> bool | None:
-    """False only for an explicit No (exit 1, empty stderr); else None."""
+def _no_or_failure(done):
+    """SOFT_NO for exit 1 with empty stderr (a No button OR a closed window: the tool
+    cannot say which); else None (a failure)."""
     if done.returncode == 1 and not (done.stderr or b"").strip():
-        return False
+        return SOFT_NO
     return None
 
 
 def confirm(title: str, message: str, platform: str | None = None, env=None,
             which=safeexec.find, run=safeexec.run, message_box=_message_box) -> bool | None:
-    """True when the person pressed the allowing button, False ONLY when they
-    declined (or closed the window), None when no window can be shown, nobody
-    answered in time, or the helper failed (crash, unsupported flag, odd exit
-    status): a failure is never turned into the person's "no"."""
+    """True for the Yes button; False ONLY when the No button was pressed and the
+    tool can prove it (Windows, macOS, zenity with --switch); SOFT_NO when a No
+    and a closed window cannot be told apart; EXPIRED when nobody answered in
+    time; None when no window can be shown or the helper failed (crash, unsupported
+    flag, odd exit status). A failure or a close is never the person's "no"."""
     platform = platform or sys.platform
     if not available(platform, env, which):
         return None
@@ -242,7 +300,7 @@ def confirm(title: str, message: str, platform: str | None = None, env=None,
         if platform == "darwin":
             script = (f'display dialog "{_applescript_text(message)}" with title '
                       f'"{_applescript_text(title)}" buttons {{"No", "Yes"}} '
-                      f'default button "No" cancel button "No" with icon caution '
+                      f'default button "No" with icon caution '
                       f'giving up after {TIMEOUT_SECONDS}')
             done = run([which("osascript"), "-e", script], capture_output=True,
                        timeout=TIMEOUT_SECONDS + 10)
@@ -250,20 +308,37 @@ def confirm(title: str, message: str, platform: str | None = None, env=None,
             if b"gave up:true" in out:
                 return EXPIRED
             if done.returncode == 0:
-                return True if b"Yes" in out else None
-            # pressing No / Esc is "User canceled" (-128); anything else is a failure
-            return False if (b"-128" in err or b"User canceled" in err) else None
+                if b"Yes" in out:
+                    return True
+                return False if b"No" in out else None      # the No BUTTON, pressed
+            # Esc / Cmd-. is "User canceled" (-128): closed without choosing, not a "No"
+            return SOFT_NO if (b"-128" in err or b"User canceled" in err) else None
         if which("zenity"):
-            base = [which("zenity"), "--question", "--title", title, "--text", message,
+            zen = which("zenity")
+            limit = f"--timeout={TIMEOUT_SECONDS}"
+            # Best: two extra buttons, so the label of the one pressed is printed - then
+            # "No" (button) is told apart from the window being closed.
+            done = run([zen, "--question", "--switch", "--extra-button", "Yes",
+                        "--extra-button", "No", "--title", title, "--text", message,
+                        "--no-markup", limit], capture_output=True, timeout=TIMEOUT_SECONDS + 10)
+            if done.returncode == 5:
+                return EXPIRED
+            pressed = (done.stdout or b"").strip()
+            if not _launch_failed(done.returncode, done.stderr):
+                if pressed == b"Yes" or done.returncode == 0:
+                    return True
+                return False if pressed == b"No" else SOFT_NO      # nothing pressed: closed
+            # an old zenity without --switch: the plain two-button form; a close then looks
+            # like a No, so a silent exit 1 is only a SOFT_NO
+            base = [zen, "--question", "--title", title, "--text", message,
                     "--ok-label", "Yes", "--cancel-label", "No"]
-            first = base + ["--no-markup", "--default-cancel", f"--timeout={TIMEOUT_SECONDS}"]
-            done = run(first, capture_output=True, timeout=TIMEOUT_SECONDS + 10)
+            done = run(base + ["--no-markup", "--default-cancel", limit], capture_output=True,
+                       timeout=TIMEOUT_SECONDS + 10)
             if _launch_failed(done.returncode, done.stderr):
-                # an old zenity does not know --no-markup / --default-cancel: ask again
-                # without them, with the markup characters taken out of the text
+                # older still: without --no-markup / --default-cancel, markup characters removed
                 again = list(base)
                 again[again.index("--text") + 1] = markup_free(message)
-                again.append(f"--timeout={TIMEOUT_SECONDS}")
+                again.append(limit)
                 done = run(again, capture_output=True, timeout=TIMEOUT_SECONDS + 10)
             if done.returncode == 5:            # zenity: timed out
                 return EXPIRED

@@ -120,6 +120,7 @@ class _Capture:
         self.note = None
         self.account = None
         self.account_confirmed = None
+        self.stored_key_note = None
         self.history_note = None
         self.clipboard_warning = None
         self.stale_note = None
@@ -157,6 +158,8 @@ class _Capture:
                 out["account_confirmed_by_person"] = self.account_confirmed
         if self.note:
             out["vendor_note"] = self.note
+        if self.stored_key_note:
+            out["stored_key_note"] = self.stored_key_note
         for key, value in (("clipboard_history_warning", self.history_note),
                            ("clipboard_warning", self.clipboard_warning),
                            ("clipboard_note", self.stale_note)):
@@ -172,6 +175,8 @@ class _Job:
 
     def __init__(self, kind, root, slug, now=0.0):
         self.kind, self.root, self.slug = kind, root, slug
+        self.note = None                # extra words for the agent when the answer comes
+        self.soft = False               # a No that might have been a closed window
         self.expired = False            # the window closed by itself: nobody answered
         self.answer = None              # True / False; None = open, or nobody could/did answer
         self.done = threading.Event()
@@ -192,7 +197,7 @@ class Manager:
                  record_fn=ledger_mod.record, ask_person=dialog_mod.confirm,
                  window_available=dialog_mod.available, env_problem=environment_problem,
                  default_store: str = "env", clear_wait: float = 3.0,
-                 window_note=dialog_mod.why_unavailable):
+                 window_note=dialog_mod.why_unavailable, client_name=None):
         self.backend = backend
         self.validate_fn = validate_fn
         self.history_fn = history_fn
@@ -211,6 +216,7 @@ class Manager:
         self.default_store = default_store
         self.clear_wait = clear_wait
         self.window_note = window_note
+        self.client_name = client_name         # None: whoever said hello in `initialize`
         self._lock = threading.Lock()
         self._current: _Capture | None = None
         self._job: _Job | None = None
@@ -221,6 +227,40 @@ class Manager:
         self._starts: list[float] = []
 
     # ---- consent helpers
+
+    def _who(self):
+        return dialog_mod.client_label(self.client_name)
+
+    def _stored_status(self, recipe, env_file, store, slug) -> str:
+        """Does the key stored now still work? "dead" only when the vendor
+        itself rejects it; "ok" when it works; "unknown" for everything else
+        (no validator, can't read it, vendor unreachable). The key is read and
+        sent to the vendor, never shown or kept."""
+        spec = recipe.get("validate")
+        if not spec:
+            return "unknown"
+        values = {}
+        try:
+            for field in recipes_mod.fields(recipe):
+                if store == "keychain":
+                    from . import keychain as keychain_mod
+                    value = keychain_mod.read(slug, field["env_var"])
+                else:
+                    value = store_mod.load_env(env_file).get(field["env_var"])
+                if not value:
+                    return "unknown"
+                values[field["name"]] = value
+            single = len(values) == 1 and recipes_mod.DEFAULT_FIELD in values
+            verdict = self.validate_fn(spec, values[recipes_mod.DEFAULT_FIELD] if single else dict(values),
+                                       timeout=6.0)
+        except Exception:
+            return "unknown"
+        finally:
+            values.clear()
+        status = getattr(verdict, "status", None)
+        if status == "invalid":
+            return "dead"
+        return "ok" if verdict else "unknown"
 
     def _note(self):
         try:
@@ -241,7 +281,7 @@ class Manager:
             return None
         return consent_mod.consent_for(root, slug, self.consent_file, self.secret_store)
 
-    def _ask(self, kind, root, slug, recipe) -> dict:
+    def _ask(self, kind, root, slug, recipe, note=None) -> dict:
         """Put a window in front of the person (once; not again right after a
         'no'); the answer is recorded by this server, never by the agent."""
         key = (consent_mod.project_key(root), slug, kind)
@@ -259,20 +299,23 @@ class Manager:
                         "message": "Too many permission windows were shown in the last hour."}
             self._dialogs.append(t)
             job = _Job(kind, root, slug)
+            job.note = note
             self._job = job
             if self._current is not None and self._current.done.is_set():
                 self._current = None            # the old result must not hide this question
         display = recipes_mod.printable(recipe["display"], words=True)
         if kind == "consent":
-            title, text = dialog_mod.consent_window(display, root)
+            title, text = dialog_mod.consent_window(display, root, self._who())
         else:                                   # "replace" and "replace_all" are one question
-            title, text = dialog_mod.replace_window(display, root)
+            title, text = dialog_mod.replace_window(display, root, self._who())
 
         def run():
             try:
                 raw = self.ask_person(title, text)
                 if raw is dialog_mod.EXPIRED:
                     job.expired = True
+                if raw is dialog_mod.SOFT_NO:
+                    job.soft = True             # told "no" for now, but never remembered
                 job.answer = None if (raw is None or raw is dialog_mod.EXPIRED) else bool(raw)
             except Exception:
                 job.answer = None               # a helper that failed is not the person's "no"
@@ -289,6 +332,8 @@ class Manager:
                             microsecond=0).isoformat()}
                 elif job.answer:
                     self._replace_ok[key] = self.now()
+                elif job.soft:
+                    pass                        # maybe just closed: do not shut the door for 10 minutes
                 else:
                     self._denied[key] = self.now()
                     if kind == "replace_all":
@@ -327,13 +372,16 @@ class Manager:
         grant_ = self._consent(root, slug)
         if grant_ is None:
             if self.window_available():
-                kind = "consent"
+                kind, note = "consent", None
                 if replace:
                     # one question, not two: the person is asked once about REPLACING
                     env_file0, store0 = _where(root, slug, {}, self.default_store)
                     if env_file0 is not None and _present(recipe, env_file0, store0, slug):
-                        kind = "replace_all"
-                return self._ask(kind, root, slug, recipe)
+                        if self._stored_status(recipe, env_file0, store0, slug) == "dead":
+                            note = DEAD_KEY
+                        else:
+                            kind = "replace_all"
+                return self._ask(kind, root, slug, recipe, note if replace else None)
             return _need_consent(slug, self._note())
         warning = None
         try:
@@ -362,6 +410,7 @@ class Manager:
                 return _refused(f"the key file cannot be used ({e.strerror or 'refused'}); "
                                 "nothing was started. Ask the person to look at it.")
         replace_key = None
+        dead_note = None
         present = _present(recipe, env_file, store, slug)
         if present:
             key = (consent_mod.project_key(root), slug, "replace")
@@ -372,7 +421,10 @@ class Manager:
                             "A key is already stored. Do not capture another unless the "
                             "person asked to replace it (then pass replace=true and they "
                             "will be asked in a window).")}
-            if self.now() - self._replace_ok.get(key, -1e9) > REPLACE_WINDOW:
+            if self._stored_status(recipe, env_file, store, slug) == "dead":
+                dead_note = DEAD_KEY            # nothing to protect: no replace question
+                replace_key = None
+            elif self.now() - self._replace_ok.get(key, -1e9) > REPLACE_WINDOW:
                 if self.window_available():
                     return self._ask("replace", root, slug, recipe)
                 return _refused("replacing a stored key needs the person's yes in a window, "
@@ -398,6 +450,7 @@ class Manager:
             self._starts.append(t)
             cap = _Capture(slug, recipe, root, env_file, store, seconds, t)
             cap.history_note = warning
+            cap.stored_key_note = dead_note
             cap.waiting_for = "the key" if len(fields) == 1 else f"the {fields[0]['label']}"
             self._current = cap
             self._job = None
@@ -591,9 +644,11 @@ class Manager:
             cap.account_confirmed = raw is True
             if raw is not True:
                 cap.set("failed", (
-                    "The account window closed by itself because nobody answered. TELL THE "
+                    "The account window closed without an answer. TELL THE "
                     "PERSON it expired and that they can simply ask you again. "
                     if raw is dialog_mod.EXPIRED else
+                    "The account window was closed without a clear answer; nothing is stored. "
+                    "Tell the person they can ask again. " if raw is dialog_mod.SOFT_NO else
                     "The person did not confirm the account (or the window could not be "
                     "shown). " if raw is None else "The person said this is not their account. ")
                     + "The key was NOT stored. " + ORPHAN)
@@ -631,6 +686,8 @@ _PENDING = ("A confirmation window was put on the person's screen (it may be beh
 
 
 STALE_AFTER = 600.0
+DEAD_KEY = ("The key stored now no longer works (the vendor rejects it), so nothing valuable is "
+            "being replaced. Tell the person that.")
 
 
 def _job_state(job: _Job, now: float, note: str | None = None) -> dict:
@@ -642,21 +699,27 @@ def _job_state(job: _Job, now: float, note: str | None = None) -> dict:
         return _expired(job.slug)
     if job.answer is None:
         return _need_consent(job.slug, note, window_failed=True)
+    extra = (" " + job.note) if getattr(job, "note", None) else ""
     if job.answer:
         if job.kind == "consent":
             return {"state": "consent_granted", "service": job.slug,
-                    "message": "The person said yes. Call capture_key with action=start now."}
+                    "message": "The person said yes. Call capture_key with action=start"
+                               + (" and replace=true" if extra else "") + " now." + extra}
         return {"state": "replace_granted", "service": job.slug,
                 "message": "The person said yes to replacing the key. Call capture_key with "
                            "action=start AND replace=true now."}
+    if job.soft:
+        return {"state": "consent_denied", "service": job.slug, "message": (
+            "The window went away with a No - or the person closed it; the tool cannot tell "
+            "which. Nothing was changed. Do not ask again unless the person brings it up.")}
     return {"state": "consent_denied", "service": job.slug, "message": "The person said no."}
 
 
 def _expired(slug: str) -> dict:
     return {"state": "consent_expired", "service": slug, "message": (
-        "The permission window closed by itself because nobody answered (it stays open for "
-        "5 minutes). That is not a refusal and nothing was changed. TELL THE PERSON the "
-        "window expired and that they can simply ask you again; then call capture_key with "
+        "The permission window closed without an answer (it stays open for 5 minutes, or the "
+        "person closed it without choosing). That is not a refusal and nothing was changed. "
+        "TELL THE PERSON the window expired and that they can simply ask you again; then call capture_key with "
         "action=start when they do. Do not open the key page or click anything yet.")}
 
 

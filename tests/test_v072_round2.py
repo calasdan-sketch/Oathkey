@@ -136,7 +136,8 @@ class TestDialogBranches(unittest.TestCase):
     def test_osascript_allow_deny_and_gave_up(self):
         w = self.which("osascript")
         for out, rc, err, want in ((b"button returned:Yes", 0, b"", True),
-                                   (b"", 1, b"execution error: User canceled. (-128)", False),
+                                   (b"button returned:No", 0, b"", False),
+                                   (b"", 1, b"execution error: User canceled. (-128)", dialog_mod.SOFT_NO),
                                    (b"button returned:Yes, gave up:true", 0, b"", dialog_mod.EXPIRED),
                                    (b"", 1, b"syntax error", None), (b"", 0, b"", None)):
             run = self.runner(rc, out, err)
@@ -151,8 +152,12 @@ class TestDialogBranches(unittest.TestCase):
         argv = run.calls[0][0]
         self.assertEqual(argv[0], "/usr/bin/zenity")
         self.assertIn("--no-markup", argv)
-        self.assertIn("--default-cancel", argv)
-        self.assertFalse(dialog_mod.confirm("t", "m", "linux", self.ENV, w, self.runner(1)))
+        self.assertIn("--switch", argv)
+        # closed without pressing anything: not a provable No
+        self.assertIs(dialog_mod.confirm("t", "m", "linux", self.ENV, w, self.runner(1)), dialog_mod.SOFT_NO)
+        # the No button was pressed: its label is printed
+        self.assertIs(dialog_mod.confirm("t", "m", "linux", self.ENV, w, self.runner(1, b"No\n")), False)
+        self.assertIs(dialog_mod.confirm("t", "m", "linux", self.ENV, w, self.runner(1, b"Yes\n")), True)
         self.assertIs(dialog_mod.confirm("t", "m", "linux", self.ENV, w, self.runner(5)), dialog_mod.EXPIRED)
 
     def test_kdialog_and_its_timeout(self):
@@ -610,7 +615,7 @@ class TestAccountConfirmation(base.Base):
         self.clip.copy(GH_KEY)
         done = until(mgr)
         self.assertEqual(done["state"], "failed")
-        self.assertIn("closed by itself", done["message"])
+        self.assertIn("without an answer", done["message"])
         self.assertIn("TELL THE PERSON", done["message"])
         self.assertIn("ask you again", done["message"])
         self.assertEqual(self.env_text(), "")
@@ -1189,9 +1194,11 @@ class TestHelperFailuresAreNotNos(base.Base):
         return run
 
     def test_an_old_zenity_is_asked_again_without_the_new_flags(self):
-        run = self.seq(255, 0)
+        run = self.seq(255, 255, 0)
         self.assertTrue(dialog_mod.confirm("t", "a <b> & c", "linux", self.ENV, self.which("zenity"), run))
-        first, second = run.calls
+        switch, first, second = run.calls
+        self.assertIn("--switch", switch)
+        self.assertNotIn("--switch", first)
         self.assertIn("--no-markup", first)
         self.assertNotIn("--no-markup", second)
         self.assertNotIn("--default-cancel", second)
@@ -1199,13 +1206,15 @@ class TestHelperFailuresAreNotNos(base.Base):
         self.assertTrue(not any(c in text for c in "<>&"))
 
     def test_zenity_failing_twice_is_none_and_an_explicit_no_is_false(self):
-        self.assertIsNone(dialog_mod.confirm("t", "m", "linux", self.ENV, self.which("zenity"), self.seq(2, 2)))
-        self.assertIs(dialog_mod.confirm("t", "m", "linux", self.ENV, self.which("zenity"), self.seq(1)), False)
+        self.assertIsNone(dialog_mod.confirm("t", "m", "linux", self.ENV, self.which("zenity"), self.seq(2, 2, 2)))
+        self.assertIs(dialog_mod.confirm("t", "m", "linux", self.ENV, self.which("zenity"), self.seq(1)),
+                      dialog_mod.SOFT_NO)
         self.assertEqual(len(self.seq(1).calls), 0)
 
     def test_an_odd_exit_status_from_kdialog_is_none(self):
         self.assertIsNone(dialog_mod.confirm("t", "m", "linux", self.ENV, self.which("kdialog"), self.seq(127)))
-        self.assertIs(dialog_mod.confirm("t", "m", "linux", self.ENV, self.which("kdialog"), self.seq(1)), False)
+        self.assertIs(dialog_mod.confirm("t", "m", "linux", self.ENV, self.which("kdialog"), self.seq(1)),
+                      dialog_mod.SOFT_NO)
 
     def test_kdialog_text_has_no_markup(self):
         run = self.seq(0)
@@ -1434,10 +1443,10 @@ class TestSilentNoVersusFailure(unittest.TestCase):
     def which(self, name):
         return lambda n: "/usr/bin/" + n if n == name else None
 
-    def test_exit_one_with_silence_is_a_no_for_both(self):
+    def test_exit_one_with_silence_is_a_soft_no_for_both(self):
         for tool in ("zenity", "kdialog"):
             self.assertIs(dialog_mod.confirm("t", "m", "linux", self.ENV, self.which(tool),
-                                             self.run_with(1)), False, tool)
+                                             self.run_with(1)), dialog_mod.SOFT_NO, tool)
 
     def test_exit_one_with_an_error_message_is_not_a_no(self):
         for tool in ("zenity", "kdialog"):
@@ -1447,6 +1456,7 @@ class TestSilentNoVersusFailure(unittest.TestCase):
 
     def test_zenity_retries_when_exit_one_came_with_an_error(self):
         answers = iter([types.SimpleNamespace(returncode=1, stdout=b"", stderr=b"unknown option"),
+                        types.SimpleNamespace(returncode=1, stdout=b"", stderr=b"unknown option"),
                         types.SimpleNamespace(returncode=0, stdout=b"", stderr=b"")])
         calls = []
 
@@ -1454,12 +1464,12 @@ class TestSilentNoVersusFailure(unittest.TestCase):
             calls.append(argv)
             return next(answers)
         self.assertTrue(dialog_mod.confirm("t", "m", "linux", self.ENV, self.which("zenity"), run))
-        self.assertEqual(len(calls), 2)
-        self.assertNotIn("--no-markup", calls[1])
+        self.assertEqual(len(calls), 3)
+        self.assertNotIn("--no-markup", calls[2])
 
     def test_whitespace_only_stderr_still_counts_as_silence(self):
         self.assertIs(dialog_mod.confirm("t", "m", "linux", self.ENV, self.which("kdialog"),
-                                         self.run_with(1, b"  \n")), False)
+                                         self.run_with(1, b"  \n")), dialog_mod.SOFT_NO)
 
 
 class TestKeychainThatStoresNothing(unittest.TestCase):
@@ -1539,18 +1549,20 @@ class TestWindowWording(unittest.TestCase):
 
     def test_exact_final_wording(self):
         w = self.windows()
+        first = ("safeeasyapi (free key-safe tool, made by Calas Automations, "
+                 "installed on this computer)")
         self.assertEqual(w["consent"], (
             "safeeasyapi (installed on this computer)",
-            "safeeasyapi (installed on this computer) asks:\n"
-            'Your AI assistant wants to connect GitHub for "my-shop".\n'
-            "safeeasyapi will save the key safely; the assistant never sees it.\n"
-            "Did you ask your assistant to do this?\n"
+            first + "\n"
+            'An AI program wants to connect GitHub for "my-shop".\n'
+            "safeeasyapi will save the key safely; it is never shown to the AI program.\n"
+            "Did you ask the AI program to do this?\n"
             "No = nothing is stored or changed. This window closes by itself in 5 minutes (same as No)."))
         self.assertEqual(w["replace"][1],
-            "safeeasyapi (installed on this computer) asks:\n"
-            'Your AI assistant wants to REPLACE your saved GitHub key for "my-shop".\n'
-            "The old key will be overwritten. The assistant never sees either key.\n"
-            "Did you ask your assistant to do this?\n"
+            first + "\n"
+            'An AI program wants to REPLACE your saved GitHub key for "my-shop".\n'
+            "The old key will be overwritten. It is never shown to the AI program.\n"
+            "Did you ask the AI program to do this?\n"
             "No = nothing is stored or changed. This window closes by itself in 5 minutes (same as No).")
         self.assertEqual(w["account"][1],
             "GitHub account: octo-cat\n"
@@ -1558,18 +1570,31 @@ class TestWindowWording(unittest.TestCase):
             'Yes = save the key for "my-shop". No = nothing is stored.\n'
             "This window closes by itself in 5 minutes (same as No).")
 
+    def test_the_real_program_name_is_used_when_the_client_reported_one(self):
+        dialog_mod.set_client("claude-code")
+        try:
+            root = os.path.join(os.sep, "home", "dan", "my-shop")
+            text = dialog_mod.consent_window("GitHub", root)[1]
+            self.assertIn('Claude Code wants to connect GitHub for "my-shop".', text)
+            self.assertIn("never shown to Claude Code.", text)
+            self.assertIn("Did you ask Claude Code to do this?", text)
+            text = dialog_mod.replace_window("GitHub", root)[1]
+            self.assertIn('Claude Code wants to REPLACE your saved GitHub key for "my-shop".', text)
+        finally:
+            dialog_mod.set_client(None)
+
     def test_short_plain_and_never_allow_deny(self):
         for name, (title, text) in self.windows().items():
             self.assertLessEqual(len(text.splitlines()), 5, name)
             for banned in ("Allow", "Deny", "allow", "deny", "HMAC", "clipboard", "MCP", "session"):
                 self.assertNotIn(banned, title + text, (name, banned))
             self.assertIn("5 minutes", text, name)
-            self.assertTrue(all(len(line) < 100 for line in text.splitlines()), name)
+            self.assertTrue(all(len(line) < 110 for line in text.splitlines()), name)
         for name in ("consent", "replace"):
             title, text = self.windows()[name]
             self.assertIn("safeeasyapi", title)
             self.assertIn("installed on this computer", title)
-            self.assertTrue(text.splitlines()[0].startswith("safeeasyapi (installed on this computer)"))
+            self.assertTrue(text.splitlines()[0].startswith("safeeasyapi (free key-safe tool, made by Calas Automations"))
             self.assertIn("nothing is stored or changed", text)
         self.assertTrue(self.windows()["account"][1].startswith("GitHub account: octo-cat"))
 
@@ -1583,7 +1608,7 @@ class TestWindowWording(unittest.TestCase):
     def test_the_helpers_are_given_yes_and_no_buttons(self):
         ENV = {"DISPLAY": ":0"}
         which = lambda n: "/usr/bin/" + n
-        for tool, flag in (("zenity", "--ok-label"), ("kdialog", "--yes-label")):
+        for tool, flag in (("zenity", "--extra-button"), ("kdialog", "--yes-label")):
             seen = []
 
             def run(argv, **kw):

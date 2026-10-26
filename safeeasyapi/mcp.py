@@ -22,6 +22,7 @@ import sys
 from . import __version__
 from . import agent as agent_mod
 from . import capture as capture_mod
+from . import dialog as dialog_mod
 from . import publicapis as pa_mod
 from . import recipes as recipes_mod
 
@@ -363,6 +364,8 @@ def _handle(request, catalog: dict[str, dict],
                    "Invalid params: 'params' must be an object")
 
     if method == "initialize":
+        info = params.get("clientInfo")
+        dialog_mod.set_client(info.get("name") if isinstance(info, dict) else None)
         wanted = params.get("protocolVersion")
         return ok({"protocolVersion": wanted if wanted in SUPPORTED_PROTOCOLS else "2024-11-05",
                    "capabilities": {"tools": {}},

@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.7.5
+
+After the owner said "my AI assistant" sounded fraudulent.
+
+- **The window names who is asking.** The MCP client's own name from `initialize`
+  (`clientInfo.name`) is shown: *Claude Code wants to connect GitHub for "my-shop".*
+  Known names get friendly forms (Claude Code, Claude, Cursor, Codex, Gemini CLI,
+  Windsurf, Cline, Zed, VS Code ...); an unknown name is shown cleaned (ASCII, 30
+  characters); none at all is "An AI program". It is what the program reports about
+  itself - said in the README and SKILL, not in the window.
+- **Line 1 says who made the tool:** *safeeasyapi (free key-safe tool, made by Calas
+  Automations, installed on this computer)*. New `safeeasyapi about` and a README
+  section on checking it is the real program (`pip show`, PyPI, GitHub).
+- **A dead stored key is not protected by a question.** Before the REPLACE window the
+  stored key is tested with the vendor; if the vendor rejects it, the replace question is
+  skipped (normal capture, `stored_key_note` tells the agent). Untestable keys still get
+  the replace window.
+- **A closed window is never a remembered No.** The No button is told apart from a
+  closed window where the platform allows it (macOS no longer has a cancel button; zenity
+  uses two extra buttons); where it cannot (kdialog, old zenity) a silent exit is passed
+  on as a No but is not remembered for 10 minutes. Expired and closed windows are
+  `consent_expired`.
+
 ## 0.7.4
 
 A plain-words pass on the windows, after a real person used 0.7.3 on Windows.
