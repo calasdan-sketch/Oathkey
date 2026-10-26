@@ -131,6 +131,12 @@ class Base(unittest.TestCase):
     def allow(self, service="github", history_ok=False):
         consent_mod.grant(self.proj, service, history_ok, self.consent, None, self.secret)
 
+    def session_grant(self, mgr, service="github", project=None):
+        """What a 'yes' in the permission window leaves in the server's memory."""
+        root = os.path.realpath(project or self.proj)
+        mgr._session[(consent_mod.project_key(root), service)] = {
+            "project": root, "service": service, "clipboard_history_ok": False, "via": "window"}
+
     def start(self, mgr, service="github", **kw):
         return mgr.start(service, CATALOG[service], self.proj, **kw)
 
@@ -323,6 +329,7 @@ class TestCapture(Base):
         asked = []
         mgr2 = self.manager(window_available=lambda: True,
                             ask_person=lambda title, text: asked.append(text) or True)
+        self.session_grant(mgr2)
         self.assertEqual(self.start(mgr2, replace=True)["state"], "consent_pending")
         self.assertTrue(wait_for(lambda: mgr2.status(0)["state"] != "consent_pending"))
         self.assertEqual(mgr2.status(0)["state"], "replace_granted")

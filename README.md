@@ -383,11 +383,11 @@ safeeasyapi setup --env-file FILE | --no-browser | --clipboard | --allow-clipboa
 safeeasyapi status [--json] [--max-age DAYS] [--env-file FILE]   # where keys live, how old
 safeeasyapi export <service> --to github|vercel [--repo OWNER/REPO] [--environment NAME] [--overwrite] [--yes]
 safeeasyapi allow-agent <service>       # your one-time yes (terminal route; the normal way is the window the server shows)
-safeeasyapi allow-agent <service> --env-file .env.local   # let the agent write to this .env-style file (default: .env only)
+safeeasyapi allow-agent <service> --env-file .env.local   # let the agent write to this .env-style file (default: .env only; terminal route only)
 safeeasyapi setup-agent claude-code|claude-desktop|cursor|codex|gemini [--write]   # the MCP entry, with this Python's absolute path
 safeeasyapi skill install --for cursor|codex|gemini|all   # the rules file for that client (marked block, never overwrites yours)
 safeeasyapi mcp --default-store keychain   # where agent-captured keys go (setup-agent sets it for clients without the .env hook)
-safeeasyapi allow-agent <service> --allow-clipboard-history   # ... and accept Windows' clipboard history
+safeeasyapi allow-agent <service> --allow-clipboard-history   # ... and accept Windows' clipboard history (terminal route only; with a window, turn history off)
 safeeasyapi allow-agent --list | --revoke [service]   # what is allowed in this project / take it back
 safeeasyapi doctor-recipes [service ...] [--json] [--timeout S] [--my-recipes]   # have recipe addresses rotted?
 safeeasyapi connect <service> --allow-clipboard-history   # keep copy-and-go even if Windows keeps a history
@@ -907,7 +907,8 @@ stored, a length class and — for GitHub — the account's login name, so you c
 see which account was connected. A key the vendor rejects is kept nowhere.
 
 **States** (`state`): `consent_pending` (a window is on your screen),
-`consent_needed` (no window possible or nobody answered: use `allow-agent`),
+`consent_needed` (no window possible: use `allow-agent`; or the window failed or timed
+out, which is not a refusal: ask again),
 `consent_denied`, `consent_granted` (then call `start`), `replace_granted` (then
 call `start` with `replace=true`), `confirming` (a window asks you to confirm the
 account), `unavailable` (no clipboard, SSH, WSL ...: the reason is
@@ -921,25 +922,44 @@ Rules that make this safe enough to allow:
 
 - **Your yes is asked in a window of the operating system** (a Windows
   message box with a time limit, macOS `osascript`, Linux `zenity`/`kdialog`)
-  shown by the server itself — not by anything the agent can type into. The
-  helper programs are looked up only in `/usr/bin`, `/bin` and `/usr/local/bin`,
-  only when root owns them and nobody else can write to them or their folder,
-  and they run with a fixed `PATH` and a minimal environment. Your yes is kept
-  **in the server's memory for that session only** (it ends when the MCP server
-  stops) and is never written to disk. After the key is checked a **second
-  window** shows which account it belongs to (GitHub: the login name) and asks
-  you to confirm before anything is stored. Replacing a stored key needs its own
-  window. Be honest about what this is: **a real gate only against an agent that
-  cannot run code as you** (one that works through files and chat). An agent
-  that can run programs as your user can reach the same operating-system
-  facilities, and one that controls your screen can press the button.
-- **`safeeasyapi allow-agent <service>`** in a terminal is the fallback when no
-  window is possible (SSH, headless). It is **advisory**: it is kept in
-  `~/.safeeasyapi/agent-consent.json` with an HMAC (counter inside, so an old
-  copy of the file does not verify; secret in Windows DPAPI, the macOS keychain
-  or the Linux Secret Service, else a 0600 file), and a program running as you
-  can read that secret or fake a terminal. A file that does not verify counts as
-  no consent. The hook's rules about these files are a speed bump, not a lock.
+  shown by the server itself — not by anything the agent can type into. **When a
+  window can be shown, only that window counts**: any permission file on disk is
+  ignored, even a well-formed one, so a file an agent wrote cannot start a
+  capture. Your yes is kept in the server's memory for that session only (it
+  ends when the MCP server stops), never on disk. A window that fails to open,
+  crashes, or is not answered is **not** a "no": the agent is told to ask again
+  (only an explicit Deny is remembered, for 10 minutes). After the key is checked
+  a **second window** shows which account it belongs to (GitHub: the login name)
+  and asks you to confirm before anything is stored. Replacing a stored key needs
+  its own window.
+  - *What the window protects against:* an agent that works through chat, files
+    and shell commands and cannot run code as you — it cannot answer the window
+    and cannot plant a consent.
+  - *What it does not protect against:* an agent that can run programs as your
+    user (it can reach the same operating-system facilities: it could, for
+    example, drive the screen or tamper with this very program), one that controls
+    your screen and presses Allow, and a browser tool that reads the key field.
+- **Helper programs are trusted ones only.** `zenity`, `kdialog`, `osascript`,
+  `security`, `secret-tool` and the clipboard tools are looked up only in
+  `/usr/bin`, `/bin` and `/usr/local/bin`, only when root owns them and nobody
+  else can write to them or their folder, and they run with a fixed `PATH` and a
+  minimal environment. That is deliberate and not relaxed for the clipboard tools
+  either (the key passes through them). The cost: a Homebrew or Nix copy, which
+  your user owns, is refused — and the result **says so** (for example *found
+  xclip at /opt/homebrew/bin/xclip but it is not a trusted install ... use
+  `safeeasyapi connect`*) instead of failing quietly.
+- **`safeeasyapi allow-agent <service>`** in a terminal is the fallback **only
+  where no window can be shown** (SSH, headless), or when the server is started
+  with `SAFEEASYAPI_NO_WINDOW=1`. On a computer that can show a window the server
+  does not use it. It is **advisory**: it is kept in
+  `~/.safeeasyapi/agent-consent.json` (in a 0700 folder) with an HMAC and a
+  counter (an old copy of the file does not verify). The signing secret is in
+  Windows DPAPI, the macOS keychain or the Linux Secret Service; where those work
+  they are the authority and a file is never preferred over them; otherwise it is
+  a 0600 file. A program running as you can still read that secret or fake a
+  terminal, so this route proves little. A file that does not verify counts as
+  no consent. The hook's rules about these files (including wildcards such as
+  `~/.safe*/*`) are a speed bump, not a lock.
 - Built-in services **that have a documented key format** only (GitHub,
   Stripe, Anthropic, AWS, Cloudflare, Replicate, Twilio, Vercel). Other
   services answer `unsupported_gateless`. One capture at a time; 10 to 180
@@ -952,8 +972,9 @@ Rules that make this safe enough to allow:
   clipboard is left alone. A copy that is not that service's key is ignored and
   counted.
 - **Clipboard history (Win+V)** keeps its own copy that nothing can remove.
-  While it is on, or cannot be checked, `capture_key` refuses unless you
-  granted with `--allow-clipboard-history`. Clipboard-manager apps may do the
+  While it is on, or cannot be checked, `capture_key` refuses (with a window: turn
+  history off; on the terminal route you may accept it with
+  `--allow-clipboard-history`). Clipboard-manager apps may do the
   same and cannot be detected.
 - If the clipboard cannot be emptied the result says so (`clipboard_warning`)
   and never claims it was.
@@ -1083,7 +1104,7 @@ is UTF-8 bytes regardless of console code page, console output is
 reconfigured to replace unencodable characters instead of crashing, and
 every text file is opened as UTF-8.
 
-## Scope / limits (v0.7.2)
+## Scope / limits (v0.7.3)
 
 - `scan` finds keys by their shape. It misses a key with no recognisable
   prefix under a name that does not end in KEY, TOKEN, SECRET or PASSWORD, and

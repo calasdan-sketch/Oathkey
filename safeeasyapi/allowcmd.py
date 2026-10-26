@@ -110,5 +110,11 @@ def cmd_allow_agent(args, catalog: dict, ask=input, terminal=_terminal, out=None
               "This terminal permission is advisory: a program running as you could "
               "read its signing secret or fake a terminal. The permission window is "
               "stronger and lasts one session.)\n")
+    from . import dialog as dialog_mod
+    if dialog_mod.available():
+        out.write("  Note: a permission window can be shown on this computer, so the server "
+                  "asks you in that window and does NOT use this terminal permission. It "
+                  "is used only where no window is possible (SSH, headless) or when the "
+                  "server runs with SAFEEASYAPI_NO_WINDOW=1.\n")
     out.write(f"  Allowed. Undo any time: safeeasyapi allow-agent {args.service} --revoke\n")
     return 0

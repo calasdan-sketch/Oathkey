@@ -20,8 +20,10 @@ the clipboard, tests it and stores it.
    `state` tells you what to do:
    - `consent_pending`: a window is on the person's screen; call `action: "status"`
      (it waits) until they answer. `consent_granted`: call `start` again.
-     `consent_denied`: stop, do not ask again. `consent_needed`: ask whether you
-     may; they run `safeeasyapi allow-agent <service>` (you cannot). The window's
+     `consent_denied`: stop, do not ask again. `consent_needed`: if the message says the
+     window failed or was not answered, call `start` again to re-ask (it is not a
+     refusal); if it says no window is possible, ask whether you may and they run
+     `safeeasyapi allow-agent <service>` (you cannot). The window's
      yes lasts only until the safeeasyapi server stops.
    - `unavailable`, `unsupported_gateless`, `refused`: tell the person what it
      says and ask them to run `safeeasyapi connect <service>` themselves.

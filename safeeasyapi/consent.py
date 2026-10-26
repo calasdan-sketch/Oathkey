@@ -85,8 +85,24 @@ class FileSecret:
 
     def save(self, secret: bytes) -> None:
         path = self._p()
-        os.makedirs(os.path.dirname(path), exist_ok=True)
+        _private_dir(os.path.dirname(path))
         _write_private(path, secret)
+
+    def delete(self) -> None:
+        try:
+            os.unlink(self._p())
+        except FileNotFoundError:
+            pass
+
+
+def _private_dir(path: str) -> None:
+    """The consent folder, created owner-only (0700)."""
+    if not os.path.isdir(path):
+        os.makedirs(path, mode=0o700, exist_ok=True)
+        try:
+            os.chmod(path, 0o700)
+        except OSError:
+            pass
 
 
 def _write_private(path: str, data: bytes) -> None:
@@ -152,7 +168,7 @@ class DpapiSecret(FileSecret):
 
     def save(self, secret: bytes) -> None:
         path = self._p()
-        os.makedirs(os.path.dirname(path), exist_ok=True)
+        _private_dir(os.path.dirname(path))
         _write_private(path, self._crypt(secret, True))
 
 
@@ -168,9 +184,10 @@ class CommandSecret:
         self.find = find
 
     def _tool(self) -> str:
-        path = self.find("security" if self.kind == "keychain" else "secret-tool")
+        name = "security" if self.kind == "keychain" else "secret-tool"
+        path = self.find(name)
         if not path:
-            raise OSError("the keychain tool is not available in a trusted place")
+            raise OSError(safeexec.explain(name) or "the keychain tool is not available in a trusted place")
         return path
 
     def load(self) -> bytes | None:
@@ -193,8 +210,10 @@ class CommandSecret:
         text = secret.hex()
         tool = self._tool()
         if self.kind == "keychain":
-            argv, data = [tool, "add-generic-password", "-U", "-a", LABEL, "-s", LABEL,
-                          "-w", text], None
+            # `security -i` reads its commands from stdin, so the secret never
+            # appears in the argument list of a process anyone can list (ps)
+            argv, data = [tool, "-i"], (
+                f"add-generic-password -U -a {LABEL} -s {LABEL} -w {text}\n").encode("ascii")
         else:
             argv, data = [tool, "store", "--label=" + LABEL, "service", LABEL,
                           "kind", "consent"], text.encode("ascii")
@@ -204,9 +223,13 @@ class CommandSecret:
 
 
 class ChainSecret:
-    """A keychain first; when it cannot save (locked, no session bus, refused)
-    the 0600 file is used instead, so a grant never fails for want of a
-    keyring. Of the two readings the NEWER (higher counter) wins."""
+    """A keychain first; the 0600 file only where the keychain does not work.
+
+    The keychain is the authority. The file is read ONLY when the keychain
+    returns nothing (unavailable, locked, no entry) - never because it holds a
+    "newer" counter, or a program that can write files could take over by
+    writing its own file and counter. When the keychain saves successfully the
+    fallback file is deleted, so no stale second authority is left behind."""
 
     def __init__(self, primary, fallback):
         self.primary, self.fallback, self.used = primary, fallback, primary
@@ -220,16 +243,20 @@ class ChainSecret:
         return self.used.advisory
 
     def load(self) -> bytes | None:
-        best, store = None, self.primary
-        for candidate in (self.primary, self.fallback):
-            try:
-                blob = candidate.load()
-            except Exception:
-                blob = None
-            if blob and (best is None or split(blob)[1] > split(best)[1]):
-                best, store = blob, candidate
-        self.used = store
-        return best
+        try:
+            blob = self.primary.load()
+        except Exception:
+            blob = None
+        if blob:
+            self.used = self.primary
+            return blob
+        try:
+            blob = self.fallback.load()
+        except Exception:
+            blob = None
+        if blob:
+            self.used = self.fallback
+        return blob
 
     def save(self, secret: bytes) -> None:
         try:
@@ -238,6 +265,11 @@ class ChainSecret:
         except Exception:
             self.fallback.save(secret)
             self.used = self.fallback
+            return
+        try:
+            self.fallback.delete()
+        except Exception:
+            pass
 
 
 def pick_secret_store(platform: str | None = None, which=safeexec.find):
@@ -337,7 +369,7 @@ def _replace(src: str, dst: str) -> None:
 
 def _write(grants: list, path: str, key: bytes, counter: int) -> None:
     folder = os.path.dirname(path)
-    os.makedirs(folder, exist_ok=True)
+    _private_dir(folder)
     fd, tmp = tempfile.mkstemp(dir=folder, prefix=".consent-")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
@@ -381,14 +413,18 @@ _LOCK = threading.RLock()
 
 class _FolderLock:
     """One writer at a time, across threads and processes: an O_EXCL lock
-    file next to the consent file (stale after 30 seconds)."""
+    file next to the consent file. A lock is stale after STALE_LOCK seconds
+    (longer than two keychain calls at their 30 s limit each); a stale lock is
+    taken over by renaming it away first, so two waiters cannot both break it."""
+
+    STALE_LOCK = 180
 
     def __init__(self, folder: str):
         self.path = os.path.join(folder, ".lock")
 
     def __enter__(self):
         _LOCK.acquire()
-        os.makedirs(os.path.dirname(self.path), exist_ok=True)
+        _private_dir(os.path.dirname(self.path))
         end = time.monotonic() + 10
         while True:
             try:
@@ -396,8 +432,13 @@ class _FolderLock:
                 return self
             except FileExistsError:
                 try:
-                    if time.time() - os.stat(self.path).st_mtime > 30:
-                        os.unlink(self.path)
+                    if time.time() - os.stat(self.path).st_mtime > self.STALE_LOCK:
+                        aside = f"{self.path}.stale-{os.getpid()}-{time.monotonic_ns()}"
+                        os.rename(self.path, aside)         # only one waiter wins the rename
+                        try:
+                            os.unlink(aside)
+                        except OSError:
+                            pass
                         continue
                 except OSError:
                     pass

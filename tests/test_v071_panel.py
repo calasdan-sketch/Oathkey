@@ -392,12 +392,13 @@ class TestTheWindowRoute(base.Base):
         self.assertEqual(self.clip.reads, 0)
         self.assertIsNone(consent_mod.consent_for(self.proj, "github", self.consent, self.secret))
 
-    def test_a_window_that_crashes_counts_as_no(self):
+    def test_a_window_that_crashes_is_not_a_no_and_can_be_asked_again(self):
         def broken(title, text):
             raise RuntimeError("no display")
         mgr = self.manager(window_available=lambda: True, ask_person=broken)
         self.start(mgr)
-        self.assertTrue(wait_for(lambda: mgr.status(0)["state"] == "consent_denied"))
+        self.assertTrue(wait_for(lambda: mgr.status(0)["state"] == "consent_needed"))
+        self.assertEqual(self.start(mgr)["state"], "consent_pending")
 
     def test_the_window_text_is_plain_and_names_project_and_service(self):
         mgr, asked = self.window_manager(False)

@@ -13,6 +13,7 @@ On Windows nothing here is used (the helpers are ctypes calls).
 from __future__ import annotations
 
 import os
+import shutil
 import stat
 import subprocess
 
@@ -49,6 +50,24 @@ def find(name: str, dirs=SYSTEM_DIRS, statfn=os.stat) -> str | None:
         if _trusted(path, statfn):
             return path
     return None
+
+
+def explain(name: str, dirs=SYSTEM_DIRS, statfn=os.stat, which=None) -> str | None:
+    """None when a trusted `name` exists or none exists anywhere. When a copy
+    is on the person's PATH but was refused, WHY (so the failure is visible
+    instead of capture quietly not working). The rule is not relaxed: a tool
+    that is not root-owned could be replaced by any program of the same user."""
+    if find(name, dirs, statfn):
+        return None
+    try:
+        found = (which or shutil.which)(name)
+    except Exception:
+        found = None
+    if not found:
+        return None
+    return (f"found {name} at {found} but it is not a trusted install (it must be owned by "
+            f"root, not writable by others, in {', '.join(dirs)}); capture needs a "
+            f"root-owned {name} there - or use `safeeasyapi connect`.")
 
 
 def env(source=None) -> dict:

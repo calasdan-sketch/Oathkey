@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.7.3
+
+Fixes from the independent verification of 0.7.2.
+
+- **The keychain is the authority.** `ChainSecret` reads the 0600 file only when the
+  keychain returns nothing - never because the file has a "newer" counter - and
+  deletes the file once the keychain saves, so a planted `consent.key` cannot take over.
+- **A window, when one can be shown, is the only consent.** A permission file on disk
+  (even a valid one) is ignored while a window is available; the terminal grant applies
+  only with no window, or when the server runs with `SAFEEASYAPI_NO_WINDOW=1`.
+- **A failing helper is not a "no".** Crashes, odd exit statuses and unsupported flags
+  give `None` (`consent_needed`, ask again); only an explicit Deny is remembered.
+  zenity is retried without `--no-markup` / `--default-cancel` on old versions; kdialog
+  text has `< > &` removed.
+- **Refusals are visible.** When a helper is on PATH but is not a trusted (root-owned)
+  install, the answer says where it found it and why it was refused. Trust is not widened,
+  clipboard tools included (the key passes through them).
+- **Hook:** wildcards that could expand to `.safeeasyapi` (`~/.safe*/*`, `.s*/c*`,
+  `.saf?easyapi/*`, `tar c ~/.safe*`) are refused; `.*`, `man security` and friends are not.
+- Lock: stale limit 180 s, stale locks are renamed away before removal; the consent
+  folder is created 0700. macOS: the keychain secret is passed to `security -i` on stdin,
+  not in argv. A start that fails as busy or rate-limited keeps the replace permission;
+  the window check-and-set is under the lock.
+
 ## 0.7.2
 
 Fixes from the second review of 0.7.x.

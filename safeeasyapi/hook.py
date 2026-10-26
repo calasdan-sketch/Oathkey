@@ -33,6 +33,7 @@ import datetime
 import hashlib
 import json
 import os
+import fnmatch
 import re
 import shlex
 import shutil
@@ -142,12 +143,35 @@ def _squash(text: str) -> tuple[str, str]:
     return plain, re.sub(r"\$\{[^}]*\}|\$\w+|\$\(\)", "", plain)
 
 
+_DOT_TOKEN = re.compile(r"(?:^|[\s/\\~=:;&|(<>'\"`])(\.[^\s/\\;&|<>()'\"`=]*)")
+
+
+def globs_to_our_folder(text: str) -> bool:
+    """Does a path word in `text` use wildcards that could expand to the
+    `.safeeasyapi` folder? (`~/.safe*/*`, `.s*/c*`, `.saf?easyapi/*`,
+    `tar c ~/.safe*`.) A word that is only wildcards (`.*`) is left alone: that
+    would stop every `ls -a`."""
+    for word in _DOT_TOKEN.findall(text):
+        if not re.search(r"[*?\[]", word):
+            continue
+        if not re.search(r"[A-Za-z]", re.sub(r"\[[^\]]*\]", "", word)):
+            continue                                 # no literal letter: too general to mean us
+        try:
+            if fnmatch.fnmatchcase(".safeeasyapi", word):
+                return True
+        except re.error:
+            continue
+    return False
+
+
 def steals_key(text: str) -> str | None:
     """What a shell command / path would do to a stored key, or None. A speed
     bump, not a lock: it reads the text of the call, and a program that builds
     its command at run time gets past it."""
     flat = text.replace("\\", "/") if "safeeasyapi" in text else text
     variants = (text, flat, *_squash(text))
+    if any(globs_to_our_folder(v) for v in variants):
+        return "touch safeeasyapi's own store (a wildcard that matches its folder)"
     for rx, what in STEAL_RULES:
         if any(rx.search(v) for v in variants):
             return what

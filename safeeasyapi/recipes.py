@@ -59,7 +59,7 @@ Two different jobs for a key's shape, kept apart on purpose:
                                  #   and loosely, so a valid key is never
                                  #   refused. Leave it out when unsure.
   "capture_accept": "^sk_(test|live)_[A-Za-z0-9]{10,247}\\Z"   # agent capture (capture_key) only:
-                                 #   STRICT - anchored with \Z and the documented
+                                 #   STRICT - anchored with \\Z and the documented
                                  #   length - because there a stray clipboard value
                                  #   could otherwise be taken. A valid key it refuses
                                  #   is captured with `connect` instead.

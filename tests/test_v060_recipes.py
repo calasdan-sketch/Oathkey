@@ -409,8 +409,8 @@ class TestConnectShowsTheNewFields(unittest.TestCase):
         self.assertIn("STRIPE_SECRET_KEY=sk_live_ABCDEFGHIJKLMN", open(env).read())
         self.assertNotIn("sk_live_ABCDEFGHIJKLMN", out.getvalue())
 
-    def test_the_version_is_072(self):
-        self.assertEqual(safeeasyapi.__version__, "0.7.2")
+    def test_the_version_is_073(self):
+        self.assertEqual(safeeasyapi.__version__, "0.7.3")
 
 
 if __name__ == "__main__":

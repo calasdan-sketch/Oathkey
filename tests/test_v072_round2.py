@@ -122,22 +122,24 @@ class TestDialogBranches(unittest.TestCase):
     def which(self, *have):
         return lambda name: "/usr/bin/" + name if name in have else None
 
-    def runner(self, returncode=0, stdout=b"", boom=None):
+    def runner(self, returncode=0, stdout=b"", stderr=b"", boom=None):
         calls = []
 
         def run(argv, **kw):
             calls.append((argv, kw))
             if boom:
                 raise boom
-            return types.SimpleNamespace(returncode=returncode, stdout=stdout, stderr=b"")
+            return types.SimpleNamespace(returncode=returncode, stdout=stdout, stderr=stderr)
         run.calls = calls
         return run
 
     def test_osascript_allow_deny_and_gave_up(self):
         w = self.which("osascript")
-        for out, rc, want in ((b"button returned:Allow", 0, True), (b"button returned:Deny", 0, False),
-                              (b"button returned:Allow, gave up:true", 0, None), (b"", 1, False)):
-            run = self.runner(rc, out)
+        for out, rc, err, want in ((b"button returned:Allow", 0, b"", True),
+                                   (b"", 1, b"execution error: User canceled. (-128)", False),
+                                   (b"button returned:Allow, gave up:true", 0, b"", None),
+                                   (b"", 1, b"syntax error", None), (b"", 0, b"", None)):
+            run = self.runner(rc, out, err)
             self.assertIs(dialog_mod.confirm("t", "m", "darwin", {}, w, run), want, out)
             self.assertEqual(run.calls[0][0][0], "/usr/bin/osascript")
         self.assertEqual(run.calls[0][0][1], "-e")
@@ -162,10 +164,10 @@ class TestDialogBranches(unittest.TestCase):
         slow = self.runner(boom=subprocess.TimeoutExpired("kdialog", 1))
         self.assertIsNone(dialog_mod.confirm("t", "m", "linux", self.ENV, w, slow))
 
-    def test_a_crash_is_a_no_never_a_yes(self):
+    def test_a_crash_is_neither_a_yes_nor_a_no(self):
         w = self.which("zenity")
-        self.assertIs(dialog_mod.confirm("t", "m", "linux", self.ENV, w,
-                                         self.runner(boom=OSError("x"))), False)
+        self.assertIsNone(dialog_mod.confirm("t", "m", "linux", self.ENV, w,
+                                             self.runner(boom=OSError("x"))))
 
     def test_no_window_means_none(self):
         self.assertIsNone(dialog_mod.confirm("t", "m", "linux", {}, self.which("zenity"), self.runner()))
@@ -354,7 +356,10 @@ class TestSecretStoreChoice(unittest.TestCase):
         self.assertEqual(s.load(), b"ab")
         s.save(b"xy")
         self.assertEqual(log[0][0][0], "/usr/bin/security")
-        self.assertEqual(log[1][0][:2], ["/usr/bin/security", "add-generic-password"])
+        self.assertEqual(log[1][0], ["/usr/bin/security", "-i"])       # commands come on stdin
+        self.assertIn(b"add-generic-password", log[1][1]["input"])
+        self.assertIn(b"7879", log[1][1]["input"])
+        self.assertNotIn("7879", " ".join(log[1][0]))                 # the secret is not in argv
         t = consent_mod.CommandSecret("secret-tool", self.fake_run(0, b"6162", log), self.find("secret-tool"))
         self.assertEqual(t.load(), b"ab")
         t.save(b"xy")
@@ -385,12 +390,44 @@ class TestSecretStoreChoice(unittest.TestCase):
         self.assertEqual(chain.kind, "file")
         self.assertTrue(chain.advisory)
 
-    def test_the_newer_of_two_readings_wins(self):
+    def test_the_keychain_wins_even_when_the_file_has_a_higher_counter(self):
         a, b = base.MemorySecret(), base.MemorySecret()
-        a.secret = consent_mod.pack(b"k" * 32, 5)
-        b.secret = consent_mod.pack(b"k" * 32, 9)
+        a.secret = consent_mod.pack(b"k" * 32, 5)            # the keychain
+        b.secret = consent_mod.pack(b"x" * 32, 99)           # an agent's own file
         chain = consent_mod.ChainSecret(a, b)
-        self.assertEqual(consent_mod.split(chain.load())[1], 9)
+        self.assertEqual(chain.load(), a.secret)
+        self.assertIs(chain.used, a)
+
+    def test_the_file_is_read_only_when_the_keychain_gives_nothing(self):
+        a, b = base.MemorySecret(), base.MemorySecret()
+        b.secret = consent_mod.pack(b"k" * 32, 3)
+        chain = consent_mod.ChainSecret(a, b)
+        self.assertEqual(chain.load(), b.secret)
+        class Boom(base.MemorySecret):
+            def load(self):
+                raise OSError("locked")
+        self.assertEqual(consent_mod.ChainSecret(Boom(), b).load(), b.secret)
+
+    def test_a_planted_file_cannot_take_over_a_working_keychain(self):
+        folder = _isolation.mktemp()
+        keychain = base.MemorySecret()
+        fallback = consent_mod.FileSecret(os.path.join(folder, "k"))
+        chain = consent_mod.ChainSecret(keychain, fallback)
+        path, proj = os.path.join(folder, "consent.json"), _isolation.mktemp()
+        consent_mod.grant(proj, "github", False, path, None, chain)
+        # an agent writes its own secret file and a consent file signed with it
+        evil_store = base.MemorySecret()
+        consent_mod.grant(proj, "stripe", False, os.path.join(folder, "evil.json"), None, evil_store)
+        fallback.save(evil_store.secret)
+        os.replace(os.path.join(folder, "evil.json"), path)
+        self.assertIsNone(consent_mod.consent_for(proj, "stripe", path, chain))
+
+    def test_a_successful_keychain_save_removes_the_fallback_file(self):
+        folder = _isolation.mktemp()
+        fallback = consent_mod.FileSecret(os.path.join(folder, "k"))
+        fallback.save(b"o" * 40)
+        consent_mod.ChainSecret(base.MemorySecret(), fallback).save(b"n" * 40)
+        self.assertIsNone(fallback.load())
 
     def test_file_and_blob_helpers(self):
         key, counter = consent_mod.split(consent_mod.pack(b"k" * 32, 7))
@@ -510,7 +547,7 @@ class TestWindowConsentLifecycle(base.Base):
         mgr = self.mgr_with(w)
         with open(os.path.join(self.proj, ".env"), "w") as f:
             f.write("GITHUB_TOKEN=already-there-12345\n")
-        self.allow()
+        self.session_grant(mgr)
         self.assertEqual(self.start(mgr, replace=True)["state"], "consent_pending")
         self.assertTrue(wait_for(lambda: mgr.status(0)["state"] == "replace_granted"))
         self.assertIn("replace=true", mgr.status(0)["message"])
@@ -530,7 +567,6 @@ class TestWindowConsentLifecycle(base.Base):
 class TestAccountConfirmation(base.Base):
     def setUp(self):
         super().setUp()
-        self.allow()
         self.window = Window(True)
         self.addCleanup(self.window.release.set)
         result = validate_mod.Result("valid")
@@ -538,7 +574,9 @@ class TestAccountConfirmation(base.Base):
         self.vendor.answer = result
 
     def mgr(self):
-        return self.manager(window_available=lambda: True, ask_person=self.window)
+        m = self.manager(window_available=lambda: True, ask_person=self.window)
+        self.session_grant(m)
+        return m
 
     def test_the_person_sees_the_account_and_says_yes(self):
         mgr = self.mgr()
@@ -585,6 +623,7 @@ class TestAccountConfirmation(base.Base):
         self.assertEqual(until(mgr)["state"], "stored")
 
     def test_without_a_window_the_account_is_not_confirmed_and_it_says_so(self):
+        self.allow()                                # no window: the terminal grant applies
         mgr = self.manager()                        # window_available False
         self.start(mgr)
         self.clip.copy(GH_KEY)
@@ -1070,6 +1109,293 @@ class TestSkillInstallFor(unittest.TestCase):
         with mock.patch("sys.stdout", io.StringIO()):
             self.assertEqual(cli_mod.main(["skill", "install", "--for", "codex", "--project"]), 0)
         self.assertTrue(os.path.isfile(os.path.join(d, "AGENTS.md")))
+
+
+# ------------------------------------------------------------------ round 3
+
+class TestFileGrantIgnoredWhenAWindowCanBeShown(base.Base):
+    def test_a_good_looking_file_does_not_start_a_capture_when_a_window_is_available(self):
+        self.allow()                                # a perfectly signed terminal grant
+        w = Window(True)
+        w.hold = True
+        self.addCleanup(w.release.set)
+        mgr = self.manager(window_available=lambda: True, ask_person=w)
+        out = self.start(mgr)
+        self.assertEqual(out["state"], "consent_pending")     # the window is asked anyway
+        self.assertEqual(self.clip.reads, 0)
+        self.assertTrue(wait_for(lambda: len(w.asked) == 1))
+
+    def test_a_forged_file_with_a_stolen_secret_does_not_either(self):
+        evil = base.MemorySecret()
+        consent_mod.grant(self.proj, "github", False, self.consent, None, evil)
+        mgr = self.manager(secret_store=evil, window_available=lambda: True,
+                           ask_person=Window(False))
+        self.assertNotEqual(self.start(mgr)["state"], "waiting")
+
+    def test_without_a_window_the_file_grant_is_used(self):
+        self.allow()
+        self.assertEqual(self.start(self.manager(window_available=lambda: False))["state"], "waiting")
+
+    def test_the_off_switch_for_windows(self):
+        self.assertFalse(dialog_mod.available("linux", {"DISPLAY": ":0", "SAFEEASYAPI_NO_WINDOW": "1"},
+                                              lambda n: "/usr/bin/" + n))
+        self.assertTrue(dialog_mod.available("linux", {"DISPLAY": ":0"}, lambda n: "/usr/bin/" + n))
+
+    def test_allow_agent_says_the_terminal_grant_is_not_used_where_a_window_exists(self):
+        args = type("A", (), dict(service="github", revoke=False, list=False,
+                                  allow_clipboard_history=False))()
+        out = io.StringIO()
+        with mock.patch.object(dialog_mod, "available", lambda *a, **k: True):
+            allowcmd.cmd_allow_agent(args, CATALOG, ask=lambda p: "yes", terminal=lambda: True,
+                                     out=out, consent_file=self.consent, cwd=self.proj, store=self.secret)
+        self.assertIn("does NOT use this terminal permission", out.getvalue())
+
+
+class TestHelperFailuresAreNotNos(base.Base):
+    ENV = {"DISPLAY": ":0"}
+
+    def which(self, *have):
+        return lambda name: "/usr/bin/" + name if name in have else None
+
+    def seq(self, *codes):
+        calls = []
+        it = iter(codes)
+
+        def run(argv, **kw):
+            calls.append(argv)
+            return types.SimpleNamespace(returncode=next(it), stdout=b"", stderr=b"")
+        run.calls = calls
+        return run
+
+    def test_an_old_zenity_is_asked_again_without_the_new_flags(self):
+        run = self.seq(255, 0)
+        self.assertTrue(dialog_mod.confirm("t", "a <b> & c", "linux", self.ENV, self.which("zenity"), run))
+        first, second = run.calls
+        self.assertIn("--no-markup", first)
+        self.assertNotIn("--no-markup", second)
+        self.assertNotIn("--default-cancel", second)
+        text = second[second.index("--text") + 1]
+        self.assertTrue(not any(c in text for c in "<>&"))
+
+    def test_zenity_failing_twice_is_none_and_an_explicit_no_is_false(self):
+        self.assertIsNone(dialog_mod.confirm("t", "m", "linux", self.ENV, self.which("zenity"), self.seq(2, 2)))
+        self.assertIs(dialog_mod.confirm("t", "m", "linux", self.ENV, self.which("zenity"), self.seq(1)), False)
+        self.assertEqual(len(self.seq(1).calls), 0)
+
+    def test_an_odd_exit_status_from_kdialog_is_none(self):
+        self.assertIsNone(dialog_mod.confirm("t", "m", "linux", self.ENV, self.which("kdialog"), self.seq(127)))
+        self.assertIs(dialog_mod.confirm("t", "m", "linux", self.ENV, self.which("kdialog"), self.seq(1)), False)
+
+    def test_kdialog_text_has_no_markup(self):
+        run = self.seq(0)
+        dialog_mod.confirm("t", "<b>x</b> & <i>y</i>", "linux", self.ENV, self.which("kdialog"), run)
+        argv = run.calls[0]
+        text = argv[argv.index("--yesno") + 1]
+        self.assertTrue(not any(c in text for c in "<>&"))
+
+    def test_a_failing_helper_does_not_start_the_ten_minute_silence(self):
+        calls = []
+        mgr = self.manager(window_available=lambda: True,
+                           ask_person=lambda t, x: calls.append(1) if not calls else True)
+        # the first call returns None (a helper that failed), the second answers yes
+        self.assertEqual(self.start(mgr)["state"], "consent_pending")
+        self.assertTrue(wait_for(lambda: mgr.status(0)["state"] == "consent_needed"))
+        self.assertIn("not a refusal", mgr.status(0)["message"])
+        self.assertEqual(self.start(mgr)["state"], "consent_pending")
+        self.assertTrue(wait_for(lambda: mgr.status(0)["state"] == "consent_granted"))
+
+    def test_only_an_explicit_no_is_remembered(self):
+        mgr = self.manager(window_available=lambda: True, ask_person=lambda t, x: False)
+        self.start(mgr)
+        self.assertTrue(wait_for(lambda: mgr.status(0)["state"] == "consent_denied"))
+        self.assertEqual(self.start(mgr)["state"], "consent_denied")
+
+
+class TestRefusalsAreVisible(base.Base):
+    def test_explain_names_the_tool_and_the_path_and_never_widens_trust(self):
+        why = safeexec.explain("xclip", statfn=lambda p: (_ for _ in ()).throw(FileNotFoundError(p)),
+                               which=lambda n: "/opt/homebrew/bin/xclip")
+        self.assertIn("xclip", why)
+        self.assertIn("/opt/homebrew/bin/xclip", why)
+        self.assertIn("root", why)
+        self.assertIn("connect", why)
+        self.assertIsNone(safeexec.explain("xclip", statfn=lambda p: (_ for _ in ()).throw(FileNotFoundError(p)),
+                                           which=lambda n: None))
+
+    @unittest.skipIf(os.name == "nt", "POSIX ownership rules")
+    def test_a_trusted_tool_needs_no_explanation(self):
+        table = {"/usr/bin/xclip": st(), "/usr/bin": st(0, 0o040755)}
+        self.assertIsNone(safeexec.explain("xclip", statfn=lambda p: table[p],
+                                           which=lambda n: "/home/u/bin/xclip"))
+
+    def test_the_clipboard_says_why_when_a_tool_was_refused(self):
+        with mock.patch.object(sys, "platform", "linux"), \
+                mock.patch.object(safeexec, "find", lambda *a, **k: None), \
+                mock.patch.object(safeexec.shutil, "which", lambda n: "/home/u/.nix-profile/bin/" + n
+                                  if n == "xclip" else None):
+            with self.assertRaises(clip_mod.Unavailable) as caught:
+                clip_mod.backend(find=lambda n: None)
+        self.assertIn("/home/u/.nix-profile/bin/xclip", str(caught.exception))
+
+    def test_the_dialog_says_why_when_a_helper_was_refused(self):
+        why = dialog_mod.why_unavailable("linux", {}, explain=lambda n: "found zenity at /x/zenity but ..." if n == "zenity" else None)
+        self.assertIn("/x/zenity", why)
+        self.assertIsNone(dialog_mod.why_unavailable("linux", {}, explain=lambda n: None))
+        self.assertIn("osascript", dialog_mod.why_unavailable("darwin", {}, explain=lambda n: n))
+        self.assertIsNone(dialog_mod.why_unavailable("win32", {}, explain=lambda n: n))
+
+    def test_capture_start_passes_it_on(self):
+        mgr = self.manager(window_note=lambda: "found zenity at /x/zenity but it is not a trusted install")
+        out = self.start(mgr)
+        self.assertEqual(out["state"], "consent_needed")
+        self.assertIn("found zenity at /x/zenity", out["message"])
+
+    def test_a_refused_keychain_tool_says_why(self):
+        s = consent_mod.CommandSecret("secret-tool", find=lambda n: None)
+        with mock.patch.object(safeexec, "find", lambda *a, **k: None), \
+                mock.patch.object(safeexec.shutil, "which", lambda n: "/home/u/bin/secret-tool"):
+            with self.assertRaises(OSError) as caught:
+                s.save(b"x")
+        self.assertIn("/home/u/bin/secret-tool", str(caught.exception))
+
+
+class TestHookGlobs(unittest.TestCase):
+    def denied(self, cmd):
+        status, out = hook_mod.check(json.dumps({"hook_event_name": "PreToolUse", "tool_name": "Bash",
+                                                 "tool_input": {"command": cmd}}))
+        return bool(out)
+
+    def test_wildcards_that_reach_the_folder_are_refused(self):
+        for cmd in ("cat ~/.safe*/*", "cat ~/.safe*/c*", "cat ~/.s*/c*", "cat .saf?easyapi/*",
+                    "tar c ~/.safe*", "cat ~/.[s]afe*/x", "cp -r ~/.safeeas* /tmp",
+                    "cat '~/.saf'e*/x", "cat $HOME/.sa?e*/*", "type .\\safe*\\*"):
+            self.assertTrue(self.denied(cmd), cmd)
+
+    def test_ordinary_commands_are_left_alone(self):
+        for cmd in ("safeeasyapi list", "git commit -m 'update xclip docs'", "man security",
+                    "ls -a .*", "rm -rf .git*", "cat .sh*", "ls .config/*", "git add .",
+                    "echo done *", "grep -r security docs/*"):
+            self.assertFalse(self.denied(cmd), cmd)
+
+    def test_the_word_test(self):
+        self.assertTrue(hook_mod.globs_to_our_folder("x ~/.s*/y"))
+        self.assertFalse(hook_mod.globs_to_our_folder("x ~/.q*/y"))
+        self.assertFalse(hook_mod.globs_to_our_folder("x .*"))
+
+
+class TestLockAndFolder(base.Base):
+    def test_the_stale_limit_is_longer_than_two_keychain_calls(self):
+        self.assertGreater(consent_mod._FolderLock.STALE_LOCK, 2 * 30 + 30)
+
+    def test_a_young_lock_is_not_broken_and_an_old_one_is_renamed_away_first(self):
+        folder = os.path.dirname(self.consent)
+        os.makedirs(folder, exist_ok=True)
+        lock = os.path.join(folder, ".lock")
+        with open(lock, "w"):
+            pass
+        old = time.time() - consent_mod._FolderLock.STALE_LOCK - 5
+        os.utime(lock, (old, old))
+        renamed = []
+        real = os.rename
+
+        def spy(a, b):
+            renamed.append((a, b))
+            return real(a, b)
+        with mock.patch.object(consent_mod.os, "rename", spy):
+            self.allow()
+        self.assertEqual(len(renamed), 1)
+        self.assertEqual(renamed[0][0], lock)
+        self.assertIn(".stale-", renamed[0][1])
+        self.assertEqual([n for n in os.listdir(folder) if "stale" in n], [])
+
+    def test_losing_the_race_to_break_a_stale_lock_is_harmless(self):
+        folder = os.path.dirname(self.consent)
+        os.makedirs(folder, exist_ok=True)
+        lock = os.path.join(folder, ".lock")
+        with open(lock, "w"):
+            pass
+        old = time.time() - 10_000
+        os.utime(lock, (old, old))
+
+        def lose(a, b):
+            os.unlink(a)                              # somebody else got there first
+            raise FileNotFoundError(a)
+        with mock.patch.object(consent_mod.os, "rename", lose):
+            self.allow()
+        self.assertIsNotNone(consent_mod.consent_for(self.proj, "github", self.consent, self.secret))
+
+    @unittest.skipIf(os.name == "nt", "POSIX modes")
+    def test_the_consent_folder_is_private(self):
+        folder = os.path.join(_isolation.mktemp(), ".safeeasyapi")
+        consent_mod.grant(self.proj, "github", False, os.path.join(folder, "c.json"), None, self.secret)
+        self.assertEqual(oct(os.stat(folder).st_mode & 0o777), "0o700")
+        consent_mod.FileSecret(os.path.join(_isolation.mktemp(), "sub", "k")).save(b"z" * 40)
+
+
+class TestReplacePermissionAndDialogRace(base.Base):
+    def setUp(self):
+        super().setUp()
+        with open(os.path.join(self.proj, ".env"), "w") as f:
+            f.write("GITHUB_TOKEN=already-there-12345\n")
+
+    def prime(self, mgr):
+        self.session_grant(mgr)
+        key = (consent_mod.project_key(self.proj), "github", "replace")
+        mgr._replace_ok[key] = mgr.now()
+        return key
+
+    def test_a_busy_start_does_not_use_up_the_permission(self):
+        mgr = self.manager()
+        key = self.prime(mgr)
+        other = _isolation.mktemp()
+        self.session_grant(mgr, project=other)
+        self.assertEqual(mgr.start("github", CATALOG["github"], other, timeout=30)["state"], "waiting")
+        self.assertEqual(self.start(mgr, replace=True)["state"], "busy")
+        self.assertIn(key, mgr._replace_ok)
+        mgr.cancel()
+        self.assertEqual(self.start(mgr, replace=True, timeout=30)["state"], "waiting")
+        self.assertNotIn(key, mgr._replace_ok)             # used up once armed
+
+    def test_a_rate_limited_start_does_not_use_it_up_either(self):
+        mgr = self.manager(starts_per_hour=0)
+        key = self.prime(mgr)
+        self.assertEqual(self.start(mgr, replace=True)["state"], "refused")
+        self.assertIn(key, mgr._replace_ok)
+
+    def test_many_asks_at_once_show_one_window(self):
+        w = Window(True)
+        w.hold = True
+        self.addCleanup(w.release.set)
+        mgr = self.manager(window_available=lambda: True, ask_person=w)
+        states, gate = [], threading.Barrier(8)
+
+        def go():
+            gate.wait(10)
+            states.append(self.start(mgr)["state"])
+        threads = [threading.Thread(target=go) for _ in range(8)]
+        for th in threads:
+            th.start()
+        for th in threads:
+            th.join(20)
+        self.assertEqual(states.count("consent_pending"), 8)
+        self.assertTrue(wait_for(lambda: len(w.asked) >= 1))
+        self.assertEqual(len(w.asked), 1)
+
+
+class TestMacKeychainSaveNotInArgv(unittest.TestCase):
+    def test_the_secret_goes_on_stdin(self):
+        log = []
+
+        def run(argv, **kw):
+            log.append((argv, kw))
+            return types.SimpleNamespace(returncode=0, stdout=b"", stderr=b"")
+        s = consent_mod.CommandSecret("keychain", run, lambda n: "/usr/bin/" + n)
+        secret = bytes(range(40))
+        s.save(secret)
+        argv, kw = log[0]
+        self.assertEqual(argv, ["/usr/bin/security", "-i"])
+        self.assertNotIn(secret.hex(), " ".join(argv))
+        self.assertIn(secret.hex().encode(), kw["input"])
 
 
 if __name__ == "__main__":

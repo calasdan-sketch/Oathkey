@@ -147,7 +147,15 @@ def backend(find=safeexec.find):
     if find("xsel"):
         x = find("xsel")
         return _command([x, "--clipboard", "--output"], [x, "--clipboard", "--clear"])
-    raise Unavailable("no clipboard tool found (install wl-clipboard, xclip or xsel)")
+    for name in ("wl-paste", "xclip", "xsel"):
+        # Strict on purpose, for the clipboard tools too: the key passes through
+        # this program's output, so a user-owned copy earlier on PATH could read
+        # or replace it. The refusal is said out loud instead of failing quietly.
+        why = safeexec.explain(name)
+        if why:
+            raise Unavailable(why)
+    raise Unavailable("no clipboard tool found (install wl-clipboard, xclip or xsel in "
+                      "/usr/bin)")
 
 
 # ---- clipboard history -----------------------------------------------------

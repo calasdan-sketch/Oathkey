@@ -189,7 +189,8 @@ class Manager:
                  starts_per_hour: int = STARTS_PER_HOUR, store_factory=None,
                  record_fn=ledger_mod.record, ask_person=dialog_mod.confirm,
                  window_available=dialog_mod.available, env_problem=environment_problem,
-                 default_store: str = "env", clear_wait: float = 3.0):
+                 default_store: str = "env", clear_wait: float = 3.0,
+                 window_note=dialog_mod.why_unavailable):
         self.backend = backend
         self.validate_fn = validate_fn
         self.history_fn = history_fn
@@ -207,6 +208,7 @@ class Manager:
         self.env_problem = env_problem
         self.default_store = default_store
         self.clear_wait = clear_wait
+        self.window_note = window_note
         self._lock = threading.Lock()
         self._current: _Capture | None = None
         self._job: _Job | None = None
@@ -218,33 +220,44 @@ class Manager:
 
     # ---- consent helpers
 
+    def _note(self):
+        try:
+            return self.window_note()
+        except Exception:
+            return None
+
     def _consent(self, root, slug):
-        """The grant for this project and service: the window's yes of this
-        session (memory), else the terminal grant in the signed file."""
+        """The grant for this project and service. When a window can be shown
+        ONLY the window's yes of this session counts (memory): a file on disk -
+        even a well-formed one - is ignored, because a file is exactly what an
+        agent that can write files could forge. The terminal grant in the signed
+        file applies only where no window can be shown (SSH, headless)."""
         mine = self._session.get((consent_mod.project_key(root), slug))
         if mine is not None:
             return mine
+        if self.window_available():
+            return None
         return consent_mod.consent_for(root, slug, self.consent_file, self.secret_store)
 
     def _ask(self, kind, root, slug, recipe) -> dict:
         """Put a window in front of the person (once; not again right after a
         'no'); the answer is recorded by this server, never by the agent."""
         key = (consent_mod.project_key(root), slug, kind)
-        t = self.now()
-        job = self._job
-        if job is not None and not job.done.is_set():
-            return {"state": "consent_pending", "service": slug, "message": _PENDING}
-        if t - self._denied.get(key, -1e9) < 600:
-            return {"state": "consent_denied", "service": slug, "message": (
-                "The person said no. Do not ask again unless they bring it up.")}
-        self._dialogs[:] = [d for d in self._dialogs if t - d < 3600]
-        if len(self._dialogs) >= DIALOGS_PER_HOUR:
-            return {"state": "refused", "service": slug,
-                    "message": "Too many permission windows were shown in the last hour."}
-        self._dialogs.append(t)
-        job = _Job(kind, root, slug)
-        self._job = job
-        with self._lock:
+        with self._lock:                        # check and set as one step: one window at a time
+            t = self.now()
+            job = self._job
+            if job is not None and not job.done.is_set():
+                return {"state": "consent_pending", "service": slug, "message": _PENDING}
+            if t - self._denied.get(key, -1e9) < 600:
+                return {"state": "consent_denied", "service": slug, "message": (
+                    "The person said no. Do not ask again unless they bring it up.")}
+            self._dialogs[:] = [d for d in self._dialogs if t - d < 3600]
+            if len(self._dialogs) >= DIALOGS_PER_HOUR:
+                return {"state": "refused", "service": slug,
+                        "message": "Too many permission windows were shown in the last hour."}
+            self._dialogs.append(t)
+            job = _Job(kind, root, slug)
+            self._job = job
             if self._current is not None and self._current.done.is_set():
                 self._current = None            # the old result must not hide this question
         display = dialog_mod.plain(recipes_mod.printable(recipe["display"], words=True), 60)
@@ -268,7 +281,7 @@ class Manager:
                 raw = self.ask_person(title, text)
                 job.answer = None if raw is None else bool(raw)
             except Exception:
-                job.answer = False
+                job.answer = None               # a helper that failed is not the person's "no"
             try:
                 if job.answer is None:
                     pass                        # no window / nobody answered: not a "no"; may be asked again
@@ -283,7 +296,7 @@ class Manager:
                 else:
                     self._denied[key] = self.now()
             except Exception:
-                job.answer = False
+                job.answer = None
             finally:
                 job.finished = self.now()
                 job.done.set()
@@ -317,7 +330,7 @@ class Manager:
         if grant_ is None:
             if self.window_available():
                 return self._ask("consent", root, slug, recipe)
-            return _need_consent(slug)
+            return _need_consent(slug, self._note())
         warning = None
         try:
             warning = self.history_fn()
@@ -330,8 +343,10 @@ class Manager:
                         "copy of the key after the clipboard is emptied, and nothing can "
                         "remove that copy. Nothing was started. Tell the person: either turn "
                         "clipboard history off (Settings > System > Clipboard) and ask again, "
-                        "or - if they accept the risk - run in their own terminal: "
-                        "safeeasyapi allow-agent " + slug + " --allow-clipboard-history")}
+                        "or - if they accept the risk and no window can be shown here - run in "
+                        "their own terminal: safeeasyapi allow-agent " + slug
+                        + " --allow-clipboard-history (that terminal grant is not "
+                        "used while a window can be shown)")}
         env_file, store = _where(root, slug, grant_, self.default_store)
         if env_file is None:
             return _refused("the key file for this project is not allowed; ask the person "
@@ -342,16 +357,18 @@ class Manager:
             except OSError as e:
                 return _refused(f"the key file cannot be used ({e.strerror or 'refused'}); "
                                 "nothing was started. Ask the person to look at it.")
+        replace_key = None
         present = _present(recipe, env_file, store, slug)
         if present:
             key = (consent_mod.project_key(root), slug, "replace")
+            replace_key = key
             if not replace:
                 return {"state": "already_stored", "service": slug,
                         "env_vars": recipes_mod.env_vars(recipe), "message": (
                             "A key is already stored. Do not capture another unless the "
                             "person asked to replace it (then pass replace=true and they "
                             "will be asked in a window).")}
-            if self.now() - self._replace_ok.pop(key, -1e9) > REPLACE_WINDOW:
+            if self.now() - self._replace_ok.get(key, -1e9) > REPLACE_WINDOW:
                 if self.window_available():
                     return self._ask("replace", root, slug, recipe)
                 return _refused("replacing a stored key needs the person's yes in a window, "
@@ -380,6 +397,8 @@ class Manager:
             cap.waiting_for = "the key" if len(fields) == 1 else f"the {fields[0]['label']}"
             self._current = cap
             self._job = None
+            if replace_key is not None:
+                self._replace_ok.pop(replace_key, None)     # used up only now that it is armed
         try:
             # The "before" picture is taken HERE, before start() returns: a Copy
             # a moment later must count as new, not as old.
@@ -409,7 +428,7 @@ class Manager:
         if job is not None and (cap is None or cap.done.is_set()):
             if not job.done.is_set() and seconds:
                 job.done.wait(seconds)          # the person is answering: wait for it
-            return _job_state(job, self.now())
+            return _job_state(job, self.now(), self._note())
         if cap is None:
             return {"state": "idle", "message": "No capture has been started."}
         end = time.monotonic() + seconds
@@ -569,7 +588,7 @@ class Manager:
             try:
                 raw = self.ask_person(title, text)
             except Exception:
-                raw = False
+                raw = None
             cap.account_confirmed = raw is True
             if raw is not True:
                 cap.set("failed", ("The person did not confirm the account in time. "
@@ -611,13 +630,13 @@ _PENDING = ("A confirmation window was put on the person's screen (it may be beh
 STALE_AFTER = 600.0
 
 
-def _job_state(job: _Job, now: float) -> dict:
+def _job_state(job: _Job, now: float, note: str | None = None) -> dict:
     if not job.done.is_set():
         return {"state": "consent_pending", "service": job.slug, "message": _PENDING}
     if job.finished is not None and now - job.finished > STALE_AFTER:
         return {"state": "idle", "message": "The earlier question to the person is no longer current."}
     if job.answer is None:
-        return _need_consent(job.slug)
+        return _need_consent(job.slug, note, window_failed=True)
     if job.answer:
         if job.kind == "consent":
             return {"state": "consent_granted", "service": job.slug,
@@ -628,14 +647,22 @@ def _job_state(job: _Job, now: float) -> dict:
     return {"state": "consent_denied", "service": job.slug, "message": "The person said no."}
 
 
-def _need_consent(slug: str) -> dict:
-    return {"state": "consent_needed", "service": slug, "message": (
+def _need_consent(slug: str, note: str | None = None, window_failed: bool = False) -> dict:
+    if window_failed:
+        return {"state": "consent_needed", "service": slug, "message": (
+            "The permission window could not be shown or was not answered in time. That is "
+            "not a refusal: call capture_key with action=start to ask again. A terminal "
+            "`allow-agent` grant is NOT used while a window can be shown. If the window keeps "
+            "failing, the person can restart the safeeasyapi server with the environment "
+            "variable SAFEEASYAPI_NO_WINDOW=1 to use the terminal route instead. Until then do "
+            "not open the key page or click anything.")}
+    return {"state": "consent_needed", "service": slug, "message": ((note + " " if note else "") + (
         "The person has not allowed agent-driven key capture for this service in this "
         "project, and no window could be answered here. Ask them, in plain words, whether you "
         "may. If they agree they run, in their OWN terminal: safeeasyapi allow-agent " + slug
         + " - then call capture_key again. (That terminal permission is weaker than the "
         "window: a program can fake a terminal and it is kept in a file. A window only "
-        "counts for this session.) Until then do not open the key page or click anything.")}
+        "counts for this session.) Until then do not open the key page or click anything."))}
 
 
 def _gate(field: dict):

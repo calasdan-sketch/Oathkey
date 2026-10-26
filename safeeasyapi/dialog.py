@@ -33,6 +33,8 @@ TIMEOUT_SECONDS = 180
 def available(platform: str | None = None, env=None, which=safeexec.find) -> bool:
     platform = platform or sys.platform
     env = os.environ if env is None else env
+    if env.get("SAFEEASYAPI_NO_WINDOW") == "1":
+        return False                    # the person turned windows off for this server
     if platform == "win32":
         return True
     if platform == "darwin":
@@ -59,6 +61,24 @@ def short_path(path: str, limit: int = MAX_PATH) -> str:
     """The END of a path (where the project is), plain, at most `limit` long."""
     path = plain(path, 10_000)
     return path if len(path) <= limit else "..." + path[-(limit - 3):]
+
+
+def why_unavailable(platform: str | None = None, env=None, explain=safeexec.explain) -> str | None:
+    """When the only reason there is no window is that a helper program was
+    REFUSED (not root-owned ...), say so; else None."""
+    platform = platform or sys.platform
+    names = ("osascript",) if platform == "darwin" else (
+        () if platform == "win32" else ("zenity", "kdialog"))
+    for name in names:
+        why = explain(name)
+        if why:
+            return why
+    return None
+
+
+def markup_free(text: str) -> str:
+    """No characters a rich-text widget could read as markup."""
+    return re.sub(r"[<>&]", "?", text)
 
 
 def _applescript_text(text: str) -> str:
@@ -100,11 +120,16 @@ def _message_box(title: str, message: str, seconds: int = TIMEOUT_SECONDS) -> bo
     return None if time.monotonic() - started >= seconds - 1 else False
 
 
+def _launch_failed(code: int) -> bool:
+    return code not in (0, 1, 5)
+
+
 def confirm(title: str, message: str, platform: str | None = None, env=None,
             which=safeexec.find, run=safeexec.run, message_box=_message_box) -> bool | None:
-    """True when the person pressed the allowing button, False when they
-    declined or closed the window, None when no window can be shown or nobody
-    answered in time."""
+    """True when the person pressed the allowing button, False ONLY when they
+    declined (or closed the window), None when no window can be shown, nobody
+    answered in time, or the helper failed (crash, unsupported flag, odd exit
+    status): a failure is never turned into the person's "no"."""
     platform = platform or sys.platform
     if not available(platform, env, which):
         return None
@@ -120,23 +145,37 @@ def confirm(title: str, message: str, platform: str | None = None, env=None,
                       f'giving up after {TIMEOUT_SECONDS}')
             done = run([which("osascript"), "-e", script], capture_output=True,
                        timeout=TIMEOUT_SECONDS + 10)
-            out = done.stdout or b""
+            out, err = done.stdout or b"", done.stderr or b""
             if b"gave up:true" in out:
                 return None
-            return done.returncode == 0 and b"Allow" in out
+            if done.returncode == 0:
+                return True if b"Allow" in out else None
+            # pressing Deny / Esc is "User canceled" (-128); anything else is a failure
+            return False if (b"-128" in err or b"User canceled" in err) else None
         if which("zenity"):
-            done = run([which("zenity"), "--question", "--no-markup", "--title", title,
-                        "--text", message, "--ok-label", "Allow", "--cancel-label", "Deny",
-                        "--default-cancel", f"--timeout={TIMEOUT_SECONDS}"],
-                       capture_output=True, timeout=TIMEOUT_SECONDS + 10)
+            base = [which("zenity"), "--question", "--title", title, "--text", message,
+                    "--ok-label", "Allow", "--cancel-label", "Deny"]
+            first = base + ["--no-markup", "--default-cancel", f"--timeout={TIMEOUT_SECONDS}"]
+            done = run(first, capture_output=True, timeout=TIMEOUT_SECONDS + 10)
+            if _launch_failed(done.returncode):
+                # an old zenity does not know --no-markup / --default-cancel: ask again
+                # without them, with the markup characters taken out of the text
+                again = list(base)
+                again[again.index("--text") + 1] = markup_free(message)
+                again.append(f"--timeout={TIMEOUT_SECONDS}")
+                done = run(again, capture_output=True, timeout=TIMEOUT_SECONDS + 10)
             if done.returncode == 5:            # zenity: timed out
                 return None
-            return done.returncode == 0
-        done = run([which("kdialog"), "--title", title, "--yesno", message, "--yes-label",
-                    "Allow", "--no-label", "Deny"], capture_output=True,
+            if done.returncode == 0:
+                return True
+            return False if done.returncode == 1 else None
+        done = run([which("kdialog"), "--title", title, "--yesno", markup_free(message),
+                    "--yes-label", "Allow", "--no-label", "Deny"], capture_output=True,
                    timeout=TIMEOUT_SECONDS + 10)
-        return done.returncode == 0
+        if done.returncode == 0:
+            return True
+        return False if done.returncode == 1 else None
     except subprocess.TimeoutExpired:
         return None
     except Exception:
-        return False        # a window that failed is a "no", never a "yes"
+        return None
