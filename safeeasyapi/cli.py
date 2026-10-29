@@ -82,7 +82,7 @@ def _build_parser() -> argparse.ArgumentParser:
     r = sub.add_parser("run", help="Run a command with a keychain-stored key "
                                    "in its environment (never printed).")
     r.add_argument("service", help="Service slug.")
-    r.add_argument("command", nargs=argparse.REMAINDER,
+    r.add_argument("command", nargs="*",
                    help="command after -- : safeeasyapi run stripe -- python app.py")
 
     rm = sub.add_parser("remote", help="Use a stored key on another machine over "
@@ -95,8 +95,25 @@ def _build_parser() -> argparse.ArgumentParser:
                     help="Read the key from this .env file if the keychain has none.")
     rm.add_argument("--ssh-arg", action="append", default=[],
                     help="Extra ssh argument, e.g. --ssh-arg=-i --ssh-arg=~/.ssh/key")
-    rm.add_argument("command", nargs=argparse.REMAINDER,
+    rm.add_argument("command", nargs="*",
                     help="command after -- : safeeasyapi remote github root@host -- git pull")
+
+    ts = sub.add_parser("trust-server", help="Make a server trust this PC (makes an ssh "
+                                             "key, installs it, proves it works).")
+    ts.add_argument("host", help="user@host")
+
+    dp = sub.add_parser("deploy", help="One step: trust the server, send the key, "
+                                       "git pull, optionally restart.")
+    dp.add_argument("host", help="user@host")
+    dp.add_argument("--service", default="github", help="Key to use (default github).")
+    dp.add_argument("--dir", required=True, help="Repository folder on the server.")
+    dp.add_argument("--as", dest="run_as", default=None,
+                    help="Run git as this user on the server (needs root login).")
+    dp.add_argument("--then", default=None,
+                    help="A command line to run on the server afterwards, e.g. "
+                         "'systemctl restart myapp'.")
+    dp.add_argument("--env-file", default=".env",
+                    help="Read the key from this .env file if the keychain has none.")
 
     sub.add_parser("mcp", help="Run the MCP server on stdio (for Claude Code).")
 
@@ -485,7 +502,15 @@ def main(argv: list[str] | None = None) -> int:
 def _main(argv: list[str] | None = None) -> int:
     _harden_streams()
     parser = _build_parser()
+    argv = list(sys.argv[1:] if argv is None else argv)
+    tail: list[str] = []
+    # everything after the first "--" is the command to run, never an option
+    if argv and argv[0] in ("remote", "run") and "--" in argv:
+        i = argv.index("--")
+        argv, tail = argv[:i], argv[i + 1:]
     args = parser.parse_args(argv)
+    if args.cmd in ("remote", "run"):
+        args.command = tail
     catalog = recipes_mod.load_recipes()
 
     if args.cmd == "list":
@@ -496,6 +521,30 @@ def _main(argv: list[str] | None = None) -> int:
         return _cmd_add(args.recipes_dir)
     if args.cmd == "mcp":
         return mcp_mod.serve(catalog)
+    if args.cmd in ("trust-server", "deploy"):
+        from . import remote as remote_mod
+        try:
+            if args.cmd == "trust-server":
+                remote_mod.ensure_ssh_access(args.host)
+                return 0
+            recipe = catalog.get(args.service)
+            if not recipe:
+                print(f"unknown service '{args.service}'.")
+                return 1
+            remote_mod.ensure_ssh_access(args.host)
+            code = remote_mod.run_remote(
+                recipe, args.host, ["git", "-C", args.dir, "pull", "--ff-only"],
+                env_file=args.env_file, run_as=args.run_as)
+            if code == 0 and args.then:
+                import subprocess
+                key = remote_mod.key_for(args.host)
+                ident = ["-i", key, "-o", "IdentitiesOnly=yes"] if key else []
+                code = subprocess.run(["ssh", "-T", *ident, "-o", "BatchMode=yes",
+                                       "--", args.host, args.then]).returncode
+            return code
+        except remote_mod.RemoteError as e:
+            print(f"error: {e}", file=sys.stderr)
+            return e.code
     if args.cmd in ("connect", "rotate", "run", "forget", "remote"):
         recipe = catalog.get(args.service)
         if not recipe:
