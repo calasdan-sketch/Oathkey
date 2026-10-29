@@ -85,6 +85,19 @@ def _build_parser() -> argparse.ArgumentParser:
     r.add_argument("command", nargs=argparse.REMAINDER,
                    help="command after -- : safeeasyapi run stripe -- python app.py")
 
+    rm = sub.add_parser("remote", help="Use a stored key on another machine over "
+                                        "ssh (key goes over stdin, never on a command line).")
+    rm.add_argument("service", help="Service slug.")
+    rm.add_argument("host", help="user@host to ssh into (key-based login).")
+    rm.add_argument("--as", dest="run_as", default=None,
+                    help="Run the command as this user on the far side (runuser).")
+    rm.add_argument("--env-file", default=".env",
+                    help="Read the key from this .env file if the keychain has none.")
+    rm.add_argument("--ssh-arg", action="append", default=[],
+                    help="Extra ssh argument, e.g. --ssh-arg=-i --ssh-arg=~/.ssh/key")
+    rm.add_argument("command", nargs=argparse.REMAINDER,
+                    help="command after -- : safeeasyapi remote github root@host -- git pull")
+
     sub.add_parser("mcp", help="Run the MCP server on stdio (for Claude Code).")
 
     f = sub.add_parser("find", help="Find free public APIs for a task.")
@@ -483,12 +496,21 @@ def _main(argv: list[str] | None = None) -> int:
         return _cmd_add(args.recipes_dir)
     if args.cmd == "mcp":
         return mcp_mod.serve(catalog)
-    if args.cmd in ("connect", "rotate", "run", "forget"):
+    if args.cmd in ("connect", "rotate", "run", "forget", "remote"):
         recipe = catalog.get(args.service)
         if not recipe:
             print(f"unknown service '{args.service}'.")
             _cmd_list(catalog)
             return 1
+        if args.cmd == "remote":
+            from . import remote as remote_mod
+            try:
+                return remote_mod.run_remote(recipe, args.host, args.command,
+                                             env_file=args.env_file, run_as=args.run_as,
+                                             ssh_args=args.ssh_arg)
+            except remote_mod.RemoteError as e:
+                print(f"error: {e}", file=sys.stderr)
+                return e.code
         if args.cmd == "run":
             return _cmd_run(recipe, args.command)
         if args.cmd == "forget":
