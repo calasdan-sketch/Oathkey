@@ -98,6 +98,16 @@ def _build_parser() -> argparse.ArgumentParser:
     rm.add_argument("command", nargs="*",
                     help="command after -- : safeeasyapi remote github root@host -- git pull")
 
+    sc = sub.add_parser("scan", help="Look for API keys lying around where an AI (or a "
+                                     "thief) can read them. Never prints a key.")
+    sc.add_argument("paths", nargs="*", default=["."], help="Folders/files (default: here).")
+    sc.add_argument("--no-home", action="store_true",
+                    help="Do not check shell history and AI-tool settings in your home folder.")
+    sc.add_argument("--json", action="store_true", help="Machine-readable output.")
+
+    dc = sub.add_parser("doctor", help="Check this computer is ready (keychain, ssh, git).")
+    dc.add_argument("--json", action="store_true", help="Machine-readable output.")
+
     ts = sub.add_parser("trust-server", help="Make a server trust this PC (makes an ssh "
                                              "key, installs it, proves it works).")
     ts.add_argument("host", help="user@host")
@@ -521,6 +531,16 @@ def _main(argv: list[str] | None = None) -> int:
         return _cmd_add(args.recipes_dir)
     if args.cmd == "mcp":
         return mcp_mod.serve(catalog)
+    if args.cmd in ("scan", "doctor"):
+        import json as _json
+        from . import scan as scan_mod
+        if args.cmd == "scan":
+            res = scan_mod.scan(args.paths, include_home=not args.no_home)
+            print(_json.dumps(res, indent=2) if args.json else scan_mod.format_report(res))
+            return 1 if res["findings"] else 0
+        res = scan_mod.doctor()
+        print(_json.dumps(res, indent=2) if args.json else scan_mod.format_doctor(res))
+        return 0 if res["ok"] else 1
     if args.cmd in ("trust-server", "deploy"):
         from . import remote as remote_mod
         try:
