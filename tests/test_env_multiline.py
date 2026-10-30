@@ -217,7 +217,7 @@ class TestMixedLineEndings(unittest.TestCase):
 
 class TestReadmeSaysSo(unittest.TestCase):
     def test_the_env_paragraph(self):
-        with open(os.path.join(_isolation.REPO, "README.md"),
+        with open(os.path.join(_isolation.REPO, "docs", "guide.md"),
                   encoding="utf-8") as f:
             flat = " ".join(f.read().split())
         for phrase in ("runs over several lines",):

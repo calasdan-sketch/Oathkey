@@ -801,7 +801,7 @@ class TestHookRound2(unittest.TestCase):
 
     def test_the_consent_files_by_bare_name_and_relative_path(self):
         for cmd in ("cat consent.key", "cat agent-consent.json", "ls .oathkey",
-                    "type .\\oathkey\\x", "cat .s''afeeasyapi/x", "cat ../.oathkey/consent.key"):
+                    "type .\\.oathkey\\x", "cat .o''athkey/x", "cat ../.oathkey/consent.key"):
             self.assertTrue(self.denied(cmd), cmd)
 
     def test_writing_there_with_a_relative_path_is_refused(self):
@@ -1163,7 +1163,7 @@ class TestFileGrantIgnoredWhenAWindowCanBeShown(base.Base):
         self.assertEqual(self.start(self.manager(window_available=lambda: False))["state"], "waiting")
 
     def test_the_off_switch_for_windows(self):
-        self.assertFalse(dialog_mod.available("linux", {"DISPLAY": ":0", "SAFEEASYAPI_NO_WINDOW": "1"},
+        self.assertFalse(dialog_mod.available("linux", {"DISPLAY": ":0", "OATHKEY_NO_WINDOW": "1"},
                                               lambda n: "/usr/bin/" + n))
         self.assertTrue(dialog_mod.available("linux", {"DISPLAY": ":0"}, lambda n: "/usr/bin/" + n))
 
@@ -1296,9 +1296,9 @@ class TestHookGlobs(unittest.TestCase):
         return bool(out)
 
     def test_wildcards_that_reach_the_folder_are_refused(self):
-        for cmd in ("cat ~/.safe*/*", "cat ~/.safe*/c*", "cat ~/.s*/c*", "cat .saf?easyapi/*",
-                    "tar c ~/.safe*", "cat ~/.[s]afe*/x", "cp -r ~/.safeeas* /tmp",
-                    "cat '~/.saf'e*/x", "cat $HOME/.sa?e*/*", "type .\\safe*\\*"):
+        for cmd in ("cat ~/.oath*/*", "cat ~/.oath*/c*", "cat ~/.o*/c*", "cat .oath?ey/*",
+                    "tar c ~/.oath*", "cat ~/.[o]ath*/x", "cp -r ~/.oathk* /tmp",
+                    "cat '~/.oat'h*/x", "cat $HOME/.oa?h*/*", "type .\\oath*\\*"):
             self.assertTrue(self.denied(cmd), cmd)
 
     def test_ordinary_commands_are_left_alone(self):
@@ -1308,7 +1308,7 @@ class TestHookGlobs(unittest.TestCase):
             self.assertFalse(self.denied(cmd), cmd)
 
     def test_the_word_test(self):
-        self.assertTrue(hook_mod.globs_to_our_folder("x ~/.s*/y"))
+        self.assertTrue(hook_mod.globs_to_our_folder("x ~/.o*/y"))
         self.assertFalse(hook_mod.globs_to_our_folder("x ~/.q*/y"))
         self.assertFalse(hook_mod.globs_to_our_folder("x .*"))
 

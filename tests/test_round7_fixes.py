@@ -41,7 +41,7 @@ REPO = _isolation.REPO
 
 def readme_text():
     """The README as one line of single-spaced text (CRLF or LF alike)."""
-    with open(os.path.join(REPO, "README.md"), encoding="utf-8") as f:
+    with open(os.path.join(REPO, "docs", "guide.md"), encoding="utf-8") as f:
         return " ".join(f.read().split())
 
 
@@ -727,7 +727,7 @@ class TestTheReadmeNamesThisVersion(unittest.TestCase):
     and in the heading of the README's limits."""
 
     def test_the_limits_heading_has_the_package_version(self):
-        with open(os.path.join(REPO, "README.md"), encoding="utf-8") as f:
+        with open(os.path.join(REPO, "docs", "guide.md"), encoding="utf-8") as f:
             found = re.search(r"^## Scope / limits \(v([0-9][0-9.]*)\)",
                               f.read(), re.M)
         self.assertTrue(found, "no 'Scope / limits (vX.Y.Z)' heading")

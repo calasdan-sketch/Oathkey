@@ -115,6 +115,6 @@ def cmd_allow_agent(args, catalog: dict, ask=input, terminal=_terminal, out=None
         out.write("  Note: a permission window can be shown on this computer, so the server "
                   "asks you in that window and does NOT use this terminal permission. It "
                   "is used only where no window is possible (SSH, headless) or when the "
-                  "server runs with SAFEEASYAPI_NO_WINDOW=1.\n")
+                  "server runs with OATHKEY_NO_WINDOW=1.\n")
     out.write(f"  Allowed. Undo any time: oathkey allow-agent {args.service} --revoke\n")
     return 0

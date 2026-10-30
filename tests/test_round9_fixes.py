@@ -157,7 +157,10 @@ class TestUserRecipeReplacingABuiltin(unittest.TestCase):
         self.user = recipes_mod.user_recipes_dir()
         os.makedirs(self.user, exist_ok=True)
         self.path = os.path.join(self.user, "openai.json")
-        mine = dict(recipe(), service="openai", display="My OpenAI")
+        builtin = {k: v for k, v in recipes_mod.load_recipes()["openai"].items()
+                   if not k.startswith("_")}
+        mine = dict(builtin, display="My OpenAI")   # same server: allowed
+
         with open(self.path, "w", encoding="utf-8") as f:
             json.dump(mine, f)
         self.addCleanup(lambda: os.path.exists(self.path) and os.remove(self.path))

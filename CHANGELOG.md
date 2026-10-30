@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.8.0
+
+oathkey joins two lines of work: the key-capture line (0.7.x: `capture_key`,
+`allow-agent`, the consent window, the Claude Code hook, `oathkey.json`) and the
+call-broker line.
+
+- **New: your AI can use a key without holding it.** `oathkey call`, the MCP
+  `call_api` tool and `oathkey serve` make the request for the AI: the real
+  address only (https, public servers only, no redirects), the key added by
+  oathkey, any trace of the key removed from the answer. Writes wait for your click.
+- **New: tamper-evident activity log** (`audit verify|show|reset`).
+- **New: `oathkey selftest`**: 73 simulated attacks against oathkey's own rules.
+  It does not test the live network layer and is not a security audit.
+- **New: `install` / `uninstall`** into Claude Desktop, Cursor, Claude Code and VS Code,
+  plus `remote`, `trust-server`, `deploy`, `start`, `overview`.
+- **New: `scan-git`** (git history and a pre-commit hook). `scan` is unchanged.
+- **Changed names:** the product is `oathkey`; `status` is the project key report
+  and the connection summary is `overview`.
+- **Changed:** a custom recipe may replace a built-in one only if it talks to the
+  same server; otherwise it is ignored with a message.
+- No independent security review has been done yet.
+
 ## 0.7.5
 
 After the owner said "my AI assistant" sounded fraudulent.
@@ -55,7 +77,7 @@ Fixes from the independent verification of 0.7.2.
   deletes the file once the keychain saves, so a planted `consent.key` cannot take over.
 - **A window, when one can be shown, is the only consent.** A permission file on disk
   (even a valid one) is ignored while a window is available; the terminal grant applies
-  only with no window, or when the server runs with `SAFEEASYAPI_NO_WINDOW=1`.
+  only with no window, or when the server runs with `OATHKEY_NO_WINDOW=1`.
 - **A failing helper is not a "no".** Crashes, odd exit statuses and unsupported flags
   give `None` (`consent_needed`, ask again); only an explicit Deny is remembered.
   zenity is retried without `--no-markup` / `--default-cancel` on old versions; kdialog
@@ -310,7 +332,7 @@ touches a key.
   (`.env.example` ...) stay writable. The agent is told "Claude can't write to
   .env - your keys stay out of the chat. Run: oathkey connect <service>
   (or edit the file yourself)."
-- `SAFEEASYAPI_HOOK_ALLOW_WRITE=1` (in Claude Code's environment) allows
+- `OATHKEY_HOOK_ALLOW_WRITE=1` (in Claude Code's environment) allows
   those writes; reads stay refused.
 - `hook install` upgrades an older install's matcher in place (only our own
   entry); `hook status` says OUTDATED when the matcher is the old one.

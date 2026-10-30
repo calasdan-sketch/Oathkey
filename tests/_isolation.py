@@ -114,10 +114,10 @@ def _cleanup() -> None:
 
 
 _TEMP_DIRS: list = []
-FAKE_HOME = os.environ.get("SAFEEASYAPI_TEST_HOME") or tempfile.mkdtemp(prefix="seh")
+FAKE_HOME = os.environ.get("OATHKEY_TEST_HOME") or tempfile.mkdtemp(prefix="seh")
 for _var in ENV_VARS:
     os.environ[_var] = FAKE_HOME
-os.environ["SAFEEASYAPI_TEST_HOME"] = FAKE_HOME  # subprocesses share it
+os.environ["OATHKEY_TEST_HOME"] = FAKE_HOME  # subprocesses share it
 atexit.register(_cleanup)
 
 # the consent folder comes from the system's user database, not from $HOME:

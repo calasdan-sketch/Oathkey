@@ -730,7 +730,7 @@ def _need_consent(slug: str, note: str | None = None, window_failed: bool = Fals
             "not a refusal: call capture_key with action=start to ask again. A terminal "
             "`allow-agent` grant is NOT used while a window can be shown. If the window keeps "
             "failing, the person can restart the oathkey server with the environment "
-            "variable SAFEEASYAPI_NO_WINDOW=1 to use the terminal route instead. Until then do "
+            "variable OATHKEY_NO_WINDOW=1 to use the terminal route instead. Until then do "
             "not open the key page or click anything.")}
     return {"state": "consent_needed", "service": slug, "message": ((note + " " if note else "") + (
         "The person has not allowed agent-driven key capture for this service in this "

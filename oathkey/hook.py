@@ -52,11 +52,11 @@ from . import recipes as recipes_mod
 #   Edit, Write, MultiEdit, NotebookEdit - refused for a real .env file, because
 #   a key typed by the agent has passed through the agent, and a Write can
 #   overwrite the person's keys. Templates (.env.example) stay writable, and
-#   SAFEEASYAPI_HOOK_ALLOW_WRITE=1 turns the write check off. Glob (names
+#   OATHKEY_HOOK_ALLOW_WRITE=1 turns the write check off. Glob (names
 #   only) is not matched.
 MATCHER = "Read|Grep|Bash|PowerShell|Monitor|Edit|Write|MultiEdit|NotebookEdit"
 WRITE_TOOLS = frozenset({"Edit", "Write", "MultiEdit", "NotebookEdit"})
-ALLOW_WRITE_VAR = "SAFEEASYAPI_HOOK_ALLOW_WRITE"
+ALLOW_WRITE_VAR = "OATHKEY_HOOK_ALLOW_WRITE"
 MARKER = "oathkey hook"      # the statusMessage that marks our handler
 HOOK_TIMEOUT = 10            # seconds (Claude Code's own default is 600)
 MAX_STDIN = 64 * 1024 * 1024  # read this much of Claude Code's JSON, no less

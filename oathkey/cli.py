@@ -11,6 +11,7 @@ import sys
 
 from . import __version__
 from . import connect as connect_mod
+from . import extras
 from . import keychain as keychain_mod
 from . import mcp as mcp_mod
 from . import publicapis as pa_mod
@@ -94,7 +95,7 @@ def _build_parser() -> argparse.ArgumentParser:
         description="Install a Claude Code hook that refuses Read, Grep, Bash, "
                     "PowerShell and Monitor calls that touch .env files, and "
                     "Edit, Write, MultiEdit and NotebookEdit calls that change "
-                    "one (set SAFEEASYAPI_HOOK_ALLOW_WRITE=1 to allow those). It "
+                    "one (set OATHKEY_HOOK_ALLOW_WRITE=1 to allow those). It "
                     "is a guardrail, not a wall: it does not stop split-up "
                     "file names, folder sweeps like `grep -r KEY .`, links, "
                     "MCP file tools or subagents (see the README).")
@@ -121,14 +122,18 @@ def _build_parser() -> argparse.ArgumentParser:
     hsub.add_parser("check", help="The hook itself: reads Claude Code's JSON "
                                   "on stdin. Not for typing by hand.")
 
-    for name, help_text in (("connect", "Connect a service (guided key setup)."),
+    for name, help_text in (("get", "One command: opens the key page, takes the key from "
+                                    "your copy, tests it, and saves it in the OS keychain."),
+                            ("connect", "Connect a service (guided key setup)."),
                             ("rotate", "Replace the stored key for a service.")):
         c = sub.add_parser(name, help=help_text)
         c.add_argument("service", help="Service slug (see `oathkey list`).")
         c.add_argument("--env-file", default=None,
                        help="Where to store the key with --store env "
                             "(default: the manifest's env_file, else .env).")
-        c.add_argument("--store", choices=["env", "keychain"], default="env",
+        c.add_argument("--no-clipboard", action="store_true",
+                       help="(get) Use the hidden paste prompt instead of copy-and-go.")
+        c.add_argument("--store", choices=["env", "keychain"], default=None,
                        help="env: owner-only .env file (default). keychain: "
                             "the OS keychain (macOS Keychain, Windows "
                             "Credential Manager, secret-tool on Linux), "
@@ -147,7 +152,8 @@ def _build_parser() -> argparse.ArgumentParser:
                        help="Get the key from the vendor's own CLI after its browser "
                             "sign-in (built-in recipes that support it, e.g. github).")
 
-    sub.add_parser("list", help="List services with saved recipes.")
+    ls = sub.add_parser("list", help="List services with saved recipes.")
+    ls.add_argument("--json", action="store_true", help="Machine-readable output.")
 
     dr = sub.add_parser(
         "doctor-recipes", help="Check that the recipes' web addresses still work.",
@@ -297,10 +303,16 @@ def _build_parser() -> argparse.ArgumentParser:
     f.add_argument("--limit", type=int, default=10)
     f.add_argument("--refresh", action="store_true",
                    help="Re-download the directory (cached 7 days).")
+    extras.add_parsers(sub)
     return p
 
 
-def _cmd_list(catalog: dict) -> int:
+def _cmd_list(catalog: dict, as_json: bool = False) -> int:
+    if as_json:
+        print(json.dumps([{"service": s, "display": catalog[s]["display"],
+                           "env_vars": list(recipes_mod.env_vars(catalog[s]))}
+                          for s in sorted(catalog)]))
+        return 0
     if not catalog:
         print("no recipes yet - add one with `oathkey add`.")
         return 0
@@ -728,7 +740,14 @@ def main(argv: list[str] | None = None) -> int:
 def _main(argv: list[str] | None = None) -> int:
     _harden_streams()
     parser = _build_parser()
+    argv = list(sys.argv[1:] if argv is None else argv)
+    tail: list = []
+    if argv and argv[0] == "remote" and "--" in argv:
+        i = argv.index("--")
+        argv, tail = argv[:i], argv[i + 1:]
     args = parser.parse_args(argv)
+    if args.cmd == "remote":
+        args.command = tail
     if args.project_dir:
         try:
             os.chdir(args.project_dir)
@@ -762,8 +781,11 @@ def _main(argv: list[str] | None = None) -> int:
     if args.cmd == "about":
         from . import aboutcmd
         return aboutcmd.cmd_about()
+    handled = extras.dispatch(args, catalog)
+    if handled is not None:
+        return handled
     if args.cmd == "list":
-        return _cmd_list(catalog)
+        return _cmd_list(catalog, getattr(args, "json", False))
     if args.cmd == "find":
         return _cmd_find(args)
     if args.cmd == "add":
@@ -791,6 +813,13 @@ def _main(argv: list[str] | None = None) -> int:
                                    clipboard=args.clipboard,
                                    allow_history=args.allow_clipboard_history)
         return projectcmds.cmd_setup(args, catalog, connect_one)
+    if args.cmd == "get":                 # one command: keychain + copy-and-go
+        args.cmd = "connect"
+        args.clipboard = args.clipboard or not args.no_clipboard
+        if args.store is None:
+            args.store = "keychain"
+    if getattr(args, "store", "env") is None:
+        args.store = "env"
     if args.cmd in ("connect", "rotate", "forget", "export") and getattr(args, "env_file", None) is None:
         args.env_file = _project_env_file()
         if args.env_file is None:

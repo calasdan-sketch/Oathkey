@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import re
 import sys
 
@@ -159,10 +160,79 @@ def _tool_defs() -> list[dict]:
          "inputSchema": {"type": "object",
                          "properties": {"name": {"type": "string"}},
                          "required": ["name"]}},
+        {"name": "call_api",
+         "description": ("Call a connected service's API WITHOUT ever seeing "
+                         "its key. You give service, method, path (like "
+                         "/user), optional query_json and body_json (JSON "
+                         "text). The host and credential are added for you; "
+                         "the key is hidden from the reply. GET is allowed; "
+                         "POST/PUT/PATCH/DELETE ask the person first. If a "
+                         "request is refused or not approved, do NOT retry: "
+                         "tell the person what you wanted to do and why. "
+                         "Never put keys in any argument."),
+         "inputSchema": {"type": "object",
+                         "properties": {
+                             "service": {"type": "string"},
+                             "method": {"type": "string"},
+                             "path": {"type": "string"},
+                             "query_json": {"type": "string"},
+                             "body_json": {"type": "string"}},
+                         "required": ["service", "method", "path"]}},
     ]
 
 
 _TYPE_WORDS = {"string": "a string", "integer": "an integer", "boolean": "true or false"}
+_POLICY = None
+
+
+def _session_policy():
+    global _POLICY
+    if _POLICY is None:
+        from . import broker
+        from . import approve as approve_mod
+        _POLICY = broker.Policy(approve=approve_mod.ask_person)
+    return _POLICY
+
+
+def _call_api(catalog: dict, args: dict) -> dict:
+    """Run one brokered call; the answer is always scrubbed text."""
+    from . import broker, remote
+
+    def fail(msg):
+        return {"content": [{"type": "text", "text": json.dumps({"error": msg})}],
+                "isError": True}
+    recipe = catalog.get(args.get("service", ""))
+    if not recipe:
+        return fail("Unknown service '%s'. Call list_services to see the names."
+                    % str(args.get("service"))[:40])
+    try:
+        query = json.loads(args["query_json"]) if args.get("query_json") else None
+        body = json.loads(args["body_json"]) if args.get("body_json") else None
+    except ValueError:
+        return fail("query_json and body_json must be valid JSON text")
+    if query is not None and not isinstance(query, dict):
+        return fail("query_json must be a JSON object")
+    try:
+        # never a .env found in the folder the AI app happened to start in
+        # (an agent could plant one); only the keychain or a file the person
+        # named in OATHKEY_ENV_FILE
+        env_file = (os.environ.get("OATHKEY_ENV_FILE")
+                    or os.path.join(remote.home_dir(), "no-env-file"))
+        values = remote.collect_values(recipe, env_file)
+        audit = broker.AuditLog(os.path.join(remote.home_dir(), "audit.log"))
+        result = broker.call(recipe, values, args["method"], args["path"],
+                             query, body, policy=_session_policy(), audit=audit)
+    except broker.BrokerError as e:
+        return fail(str(e))
+    except remote.RemoteError:
+        return fail("No key is saved for '%s'. Tell the person to run "
+                    "`oathkey get %s` in a terminal. "
+                    "Never ask them to paste a key into the chat."
+                    % (recipe["service"], recipe["service"]))
+    return {"content": [{"type": "text", "text": json.dumps(result)}]}
+
+
+_TYPE_WORDS = {"string": "a string", "integer": "an integer"}
 
 
 def _has_type(value, json_type: str) -> bool:
@@ -391,9 +461,20 @@ def _handle(request, catalog: dict[str, dict],
         if problem:
             return err(INVALID_PARAMS, f"Invalid params: {problem}")
         if name == "list_services":
+            from . import remote as _remote
+            _envf = (os.environ.get("OATHKEY_ENV_FILE")
+                     or os.path.join(_remote.home_dir(), "no-env-file"))
+
+            def _has(r):
+                try:
+                    _remote.collect_values(r, _envf)
+                    return True
+                except Exception:
+                    return False
             services = [{"service": r["service"], "display": r["display"],
                          "env_var": r["env_var"],
-                         "env_vars": recipes_mod.env_vars(r)}
+                         "env_vars": recipes_mod.env_vars(r),
+                         "connected": _has(r)}
                         for r in catalog.values()]
             return ok({"content": [{"type": "text",
                                     "text": json.dumps(services)}]})
@@ -488,6 +569,8 @@ def _handle(request, catalog: dict[str, dict],
                     f"Docs: {detail['url']}")
             return ok({"content": [{"type": "text",
                                     "text": json.dumps(detail)}]})
+        if name == "call_api":
+            return ok(_call_api(catalog, args))
         return err(INTERNAL_ERROR, f"tool not implemented: {name}")
     return err(INTERNAL_ERROR, f"method not implemented: {method}")
 

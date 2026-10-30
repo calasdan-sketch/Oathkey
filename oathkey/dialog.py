@@ -107,7 +107,7 @@ def available(platform: str | None = None, env=None, which=safeexec.find) -> boo
     # NOTE: this switch is read from the server's environment, which the MCP client's
     # config sets; an agent that can edit that config can set it (and so fall back to
     # the advisory terminal route). It is a convenience, not a lock.
-    if env.get("SAFEEASYAPI_NO_WINDOW") == "1":
+    if env.get("OATHKEY_NO_WINDOW") == "1":
         return False                    # the person turned windows off for this server
     if platform == "win32":
         return True
