@@ -180,3 +180,85 @@ def format_doctor(result: dict) -> str:
         lines.append(f"  [{mark}] {c['check']}: {c['detail']}" +
                      (f"  -> {c['fix']}" if (not c["ok"] and c["fix"]) else ""))
     return "\n".join(lines)
+
+
+# ---- git history and pre-commit hook ----------------------------------------------
+
+def scan_git(repo: str = ".", staged: bool = False, max_lines: int = 5_000_000) -> dict:
+    """Look for keys in what git remembers: every added line in every
+    commit (or only the staged change). A key that was ever committed is
+    still readable in history even after the file is cleaned."""
+    import subprocess
+    cmd = ["git", "-C", repo, "-c", "core.quotepath=off"]
+    cmd += (["diff", "--cached", "-U0", "--no-color"] if staged
+            else ["log", "--all", "-p", "-U0", "--no-color", "--format=commit %H"])
+    findings: list[dict] = []
+    try:
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    except OSError:
+        return {"error": "git not found", "findings": []}
+    commit, fname, n = ("staged" if staged else ""), "", 0
+    for raw in proc.stdout:
+        n += 1
+        if n > max_lines:
+            break
+        line = raw.decode("utf-8", "replace").rstrip("\n")
+        if line.startswith("commit "):
+            commit = line[7:15]
+        elif line.startswith("+++ b/"):
+            fname = line[6:]
+        elif line.startswith("+") and not line.startswith("+++") and len(line) < 5000:
+            for kind, rx in PATTERNS:
+                m = rx.search(line)
+                if m:
+                    findings.append({"file": fname, "commit": commit, "kind": kind,
+                                     "hint": mask(m.group(0))})
+    proc.stdout.close()
+    code = proc.wait()
+    if code not in (0, None) and not findings:
+        return {"error": f"git exited with {code} (is this a repository?)", "findings": []}
+    return {"findings": findings, "error": None}
+
+
+def format_git(res: dict) -> str:
+    if res.get("error"):
+        return f"  git scan problem: {res['error']}"
+    if not res["findings"]:
+        return "  git history: no keys found."
+    seen, lines = set(), [f"  git history: {len(res['findings'])} key(s) found "
+                          "(still readable by anyone with the repo):"]
+    for f in res["findings"]:
+        k = (f["file"], f["commit"], f["kind"])
+        if k in seen:
+            continue
+        seen.add(k)
+        lines.append(f"    ! {f['kind']}  {f['file']}  commit {f['commit']}  {f['hint']}")
+    lines.append("    Fix: treat these keys as leaked - replace them at the provider "
+                 "(`safeeasyapi rotate`), then clean history if the repo is shared.")
+    return "\n".join(lines)
+
+
+HOOK_MARK = "# safeeasyapi pre-commit"
+
+
+def install_hook(repo: str = ".") -> str:
+    import sys as _sys
+    hooks = os.path.join(repo, ".git", "hooks")
+    if not os.path.isdir(hooks):
+        raise OSError("not a git repository (no .git/hooks)")
+    path = os.path.join(hooks, "pre-commit")
+    if os.path.exists(path):
+        with open(path, encoding="utf-8") as f:
+            if HOOK_MARK not in f.read():
+                raise OSError("a pre-commit hook already exists; not overwriting it")
+    py = _sys.executable.replace("\\", "/")
+    body = (f"#!/bin/sh\n{HOOK_MARK}\n"
+            f"# blocks the commit if a key is staged, and if the scanner itself fails\n"
+            f"\"{py}\" -m safeeasyapi scan --staged || {{ echo 'commit blocked by safeeasyapi' >&2; exit 1; }}\n")
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
+        f.write(body)
+    try:
+        os.chmod(path, 0o755)
+    except OSError:
+        pass
+    return path

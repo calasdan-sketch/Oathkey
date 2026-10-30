@@ -104,6 +104,11 @@ def _build_parser() -> argparse.ArgumentParser:
     sc.add_argument("--no-home", action="store_true",
                     help="Do not check shell history and AI-tool settings in your home folder.")
     sc.add_argument("--json", action="store_true", help="Machine-readable output.")
+    sc.add_argument("--git", action="store_true", help="Also look through every past commit.")
+    sc.add_argument("--staged", action="store_true",
+                    help="Only check what is about to be committed (for the pre-commit hook).")
+    sc.add_argument("--install-hook", action="store_true",
+                    help="Install a git pre-commit hook that blocks commits containing keys.")
 
     dc = sub.add_parser("doctor", help="Check this computer is ready (keychain, ssh, git).")
     dc.add_argument("--json", action="store_true", help="Machine-readable output.")
@@ -586,8 +591,30 @@ def _main(argv: list[str] | None = None) -> int:
     if args.cmd in ("scan", "doctor"):
         import json as _json
         from . import scan as scan_mod
+        if args.cmd == "scan" and args.install_hook:
+            try:
+                print("hook installed:", scan_mod.install_hook(args.paths[0]))
+                return 0
+            except OSError as e:
+                print(f"error: {e}", file=sys.stderr)
+                return 1
+        if args.cmd == "scan" and args.staged:
+            g = scan_mod.scan_git(args.paths[0], staged=True)
+            if g.get("error"):
+                print(f"error: {g['error']}", file=sys.stderr)
+                return 2
+            if g["findings"]:
+                print("safeeasyapi: a key looks like it is about to be committed:\n"
+                      + scan_mod.format_git(g), file=sys.stderr)
+                return 1
+            return 0
         if args.cmd == "scan":
             res = scan_mod.scan(args.paths, include_home=not args.no_home)
+            if args.git:
+                res["git"] = scan_mod.scan_git(args.paths[0])
+                res["findings"] = res["findings"] + [
+                    dict(f, line=0, file=f["file"] + "@" + f["commit"])
+                    for f in res["git"]["findings"]]
             print(_json.dumps(res, indent=2) if args.json else scan_mod.format_report(res))
             return 1 if res["findings"] else 0
         res = scan_mod.doctor()
