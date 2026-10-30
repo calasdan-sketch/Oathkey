@@ -200,7 +200,8 @@ class TestUnwritableEnvFile(unittest.TestCase):
         with mock.patch.object(recipes_mod, "load_recipes", return_value=cat), \
                 mock.patch.object(connect_mod, "connect", connect_with_fakes), \
                 redirect_stdout(out), redirect_stderr(err):
-            code = cli_mod.main(["connect", "acme", "--no-browser", "--env-file", env])
+            code = cli_mod.main(["connect", "acme", "--no-browser", "--store", "env",
+                                "--env-file", env])
         self.assertEqual(code, 1)
         self.assertNotIn("Traceback", out.getvalue() + err.getvalue())
         self.assertNotIn(FAKE_KEY, out.getvalue() + err.getvalue())
@@ -501,7 +502,7 @@ class TestForget(unittest.TestCase):
         self.assertNotIn("ACME_API_KEY", store_mod.load_env(env))
         with mock.patch.object(recipes_mod, "load_recipes", return_value=cat), \
                 redirect_stdout(io.StringIO()):
-            self.assertEqual(cli_mod.main(["forget", "nope"]), 1)
+            self.assertEqual(cli_mod.main(["forget", "nope"]), 3)
 
 
 # ------------------------------------------------------- validation shapes

@@ -10,7 +10,8 @@ readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.10"
-keywords = ["api-key", "api-keys", "secrets", "dotenv", "env-file", "mcp", "cli"]
+keywords = ["api-key", "api-keys", "secrets", "dotenv", "env-file", "mcp", "cli", "ai", "llm", "agents", "keychain", "model-context-protocol"]
+authors = [{name = "Calas Automations Inc."}]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Environment :: Console",
@@ -18,6 +19,7 @@ classifiers = [
     "Intended Audience :: End Users/Desktop",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -28,6 +30,9 @@ classifiers = [
 [project.urls]
 Homepage = "https://github.com/calasdan-sketch/oathkey"
 Issues = "https://github.com/calasdan-sketch/oathkey/issues"
+Documentation = "https://github.com/calasdan-sketch/oathkey/blob/main/docs/guide.md"
+Security = "https://github.com/calasdan-sketch/oathkey/security/policy"
+Changelog = "https://github.com/calasdan-sketch/oathkey/releases"
 
 [project.scripts]
 oathkey = "oathkey.cli:main"

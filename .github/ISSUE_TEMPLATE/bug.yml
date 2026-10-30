@@ -1,0 +1,23 @@
+name: Bug report
+description: Something did not work
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: "Never paste an API key here. `oathkey doctor` output is safe to share."
+  - type: textarea
+    id: what
+    attributes:
+      label: What you ran and what happened
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Output of `oathkey doctor` and `oathkey --version`
+      render: text
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options: [Windows, macOS, Linux]

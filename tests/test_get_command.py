@@ -32,9 +32,9 @@ class GetCommandTests(unittest.TestCase):
         _, seen = self._run(["get", "github", "--no-clipboard"])
         self.assertIsNone(seen["clipboard"])
 
-    def test_connect_keeps_old_defaults(self):
+    def test_connect_now_defaults_to_the_keychain(self):
         _, seen = self._run(["connect", "github"])
-        self.assertIsNone(seen["store_fn"])
+        self.assertEqual(seen["store_fn"], "STORE")
         self.assertIsNone(seen["clipboard"])
 
 

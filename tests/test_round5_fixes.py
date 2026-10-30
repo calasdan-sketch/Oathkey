@@ -1250,7 +1250,10 @@ class TestPackagingMetadata(unittest.TestCase):
         self.assertTrue(all(isinstance(k, str) and k.strip()
                             for k in project["keywords"]))
         self.assertEqual(project["urls"],
-                         {"Homepage": REPO_URL, "Issues": REPO_URL + "/issues"})
+                         {"Homepage": REPO_URL, "Issues": REPO_URL + "/issues",
+                          "Documentation": REPO_URL + "/blob/main/docs/guide.md",
+                          "Security": REPO_URL + "/security/policy",
+                          "Changelog": REPO_URL + "/releases"})
 
 
 class TestOneVersion(unittest.TestCase):

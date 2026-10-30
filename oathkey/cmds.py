@@ -100,7 +100,11 @@ def cmd_call(recipe: dict, args) -> int:
 def cmd_audit(action: str, as_json: bool, last: int = 20) -> int:
     log = broker.AuditLog(os.path.join(_home(), "audit.log"))
     if action == "reset":
-        kept = log.reset()
+        try:
+            kept = log.reset()
+        except broker.BrokerError as e:
+            print(f"error: {e}", file=sys.stderr)
+            return PROBLEM
         print("started a fresh activity log." +
               (f" The old one was kept as {kept}" if kept else ""))
         return OK

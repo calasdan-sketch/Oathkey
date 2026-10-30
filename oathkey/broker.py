@@ -275,7 +275,7 @@ def describe(recipe: dict, method: str, host: str, url: str, data) -> str:
         for k, v in q:
             if len(k) > MAX_QUERY_PART or len(v) > MAX_QUERY_PART:
                 raise BrokerError(TOO_LONG, 5)      # never show a cut-off value
-        text += "  query: " + ", ".join(f"{_clean(k, 999)}={_clean(v, 999)}"
+        text += "  query: " + ", ".join(f"{_clean(k, 999)!r}={_clean(v, 999)!r}"
                                          for k, v in q)
     if data:
         if len(data) > MAX_BODY_SHOWN:
@@ -302,6 +302,7 @@ def call(recipe: dict, values: dict, method: str, path: str,
     policy = policy or Policy()
     method = str(method).upper()
     if method not in READ_METHODS | WRITE_METHODS:
+        _log(audit, recipe, method, "?", _clean(path), 0, 0, "refused")
         raise BrokerError("method not supported", 5)
     policy.count()          # every attempt counts, refused ones included
     try:
@@ -323,6 +324,7 @@ def call(recipe: dict, values: dict, method: str, path: str,
     data = None
     if body is not None:
         if method in READ_METHODS:
+            _log(audit, recipe, method, host, path, 0, 0, "refused")
             raise BrokerError("GET/HEAD may not have a body", 5)
         if isinstance(body, bytes):
             data = body
@@ -331,6 +333,7 @@ def call(recipe: dict, values: dict, method: str, path: str,
         else:
             data = json.dumps(body).encode()
         if len(data) > MAX_BODY_IN:
+            _log(audit, recipe, method, host, path, 0, 0, "refused")
             raise BrokerError("request body too large", 5)
 
     # permission: writes need a grant or a person's yes
@@ -433,14 +436,14 @@ def _log(audit, recipe, method, host, path, status, size, result, ms=0):
         audit.write({"service": recipe.get("service"), "method": method,
                      "host": host, "path": _clean(path.split("?")[0], 200), "status": status,
                      "bytes": size, "result": result, "ms": ms})
-    except OSError:
-        pass            # ready() already refused to act when the log is unwritable
+    except (OSError, BrokerError):
+        pass            # ready() already refused to act when the log is unwritable or busy
 
 
 @contextlib.contextmanager
 def _file_lock(path: str):
     """One writer at a time across processes (MCP + serve + call may all run).
-    If the lock cannot be taken we carry on: the in-process lock still holds."""
+    Yields True when the lock is held; callers fail closed when it is not."""
     fd = None
     locked = False
     try:
@@ -462,7 +465,7 @@ def _file_lock(path: str):
     except OSError:
         pass
     try:
-        yield
+        yield locked
     finally:
         if fd is not None:
             try:
@@ -511,32 +514,42 @@ class AuditLog:
         except OSError:
             raise BrokerError("The activity log cannot be written, so "
                               "nothing was sent.", 5) from None
+        with _file_lock(self.path) as got:
+            if not got:
+                raise BrokerError("The activity log is busy or locked, so "
+                                  "nothing was sent. Try again.", 5)
 
     @staticmethod
     def _digest(entry: dict) -> str:
         return hashlib.sha256(json.dumps(entry, sort_keys=True).encode()).hexdigest()
 
     def _scan(self):
-        """One pass: (entries, last good hash, chain intact, file exists)."""
-        prev, n = "0" * 64, 0
+        """One pass: (entries, last good hash, chain intact, file exists,
+        first entry says an end-marker file should exist)."""
+        prev, n, anchored = "0" * 64, 0, False
         try:
             with open(self.path, "rb") as f:
                 data = f.read()
         except FileNotFoundError:
-            return 0, prev, True, False
+            return 0, prev, True, False, False
         except OSError:
-            return 0, prev, False, True
-        for line in data.splitlines():
+            return 0, prev, False, True, False
+        lines = data.splitlines()
+        if data and not data.endswith(b"\n") and lines:
+            lines = lines[:-1]           # a write in progress: not a problem yet
+        for line in lines:
             try:
                 e = json.loads(line)
                 h = e.pop("hash")
                 good = e.get("prev") == prev and h == self._digest(e)
+                if n == 0:
+                    anchored = e.get("anchored") is True
             except (ValueError, KeyError, TypeError, AttributeError):
                 good = False
             if not good:
-                return n, prev, False, True
+                return n, prev, False, True, anchored
             prev, n = h, n + 1
-        return n, prev, True, True
+        return n, prev, True, True, anchored
 
     def _last_hash(self) -> str:
         return self._scan()[1]
@@ -569,11 +582,13 @@ class AuditLog:
             pass
 
     @staticmethod
-    def _problem(n, last, ok, a):
+    def _problem(n, last, ok, a, anchored=False):
         if not ok:
             return "a line was changed, removed or damaged"
         if a is _BAD:
             return "the end-marker file is unreadable"
+        if a is None and n > 0 and anchored:
+            return "the end-marker file was deleted"
         if a is not None and (n < a[0] or (n == a[0] and last != a[1])):
             return "entries were cut off or replaced"
         return None
@@ -599,10 +614,12 @@ class AuditLog:
         return entry["hash"]
 
     def write(self, entry: dict) -> None:
-        with AuditLog._lock, _file_lock(self.path):   # one writer at a time
-            n, last, ok, _exists = self._scan()
+        with AuditLog._lock, _file_lock(self.path) as got:   # one writer at a time
+            if not got:
+                raise BrokerError("The activity log is busy or locked.", 5)
+            n, last, ok, _exists, anchored = self._scan()
             a = self._read_anchor()
-            reason = self._problem(n, last, ok, a)
+            reason = self._problem(n, last, ok, a, anchored)
             flagged = self.broken_reason() is not None
             if reason and not flagged:
                 try:
@@ -616,16 +633,18 @@ class AuditLog:
                      "result": "LOG-PROBLEM-FOUND", "note": reason}, last)
                 n += 1
                 flagged = True
+            if n == 0:
+                entry = dict(entry, anchored=True)     # this log has a .head file
             h = self._append(entry, last)
             if not flagged and not reason:
                 self._save_anchor(n + 1, h)      # a flagged log never re-anchors
 
     def verify(self) -> tuple[bool, int]:
         a = self._read_anchor()                  # read first: a write landing
-        n, last, ok, exists = self._scan()       # in between can only add entries
+        n, last, ok, exists, anchored = self._scan()   # in between can only add entries
         if self.broken_reason() is not None:
             return False, n
-        if self._problem(n, last, ok, a):
+        if self._problem(n, last, ok, a, anchored):
             return False, n
         return True, n
 
@@ -634,11 +653,25 @@ class AuditLog:
         with AuditLog._lock, _file_lock(self.path):
             kept = None
             if os.path.exists(self.path):
-                kept = f"{self.path}.problem-{int(time.time())}"
-                os.replace(self.path, kept)
+                base = f"{self.path}.problem-{int(time.time())}"
+                kept, i = base, 1
+                while os.path.exists(kept):          # never overwrite an earlier one
+                    kept, i = f"{base}-{i}", i + 1
+                try:
+                    os.replace(self.path, kept)
+                except OSError as e:
+                    raise BrokerError("could not move the old log aside "
+                                      f"({e.strerror or 'in use'}); close other "
+                                      "oathkey programs and try again", 1) from None
+            stuck = []
             for p in (self.anchor_path, self.broken_path):
                 try:
                     os.remove(p)
-                except OSError:
+                except FileNotFoundError:
                     pass
+                except OSError:
+                    stuck.append(os.path.basename(p))
+            if stuck:
+                raise BrokerError("the old log was moved aside but could not "
+                                  f"remove {', '.join(stuck)}; remove it by hand", 1)
             return kept

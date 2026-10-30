@@ -3,3 +3,5 @@
 recursive-include tests *.py
 global-exclude __pycache__ *.py[cod]
 include docs/guide.md
+
+include SECURITY.md

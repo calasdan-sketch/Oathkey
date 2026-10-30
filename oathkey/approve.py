@@ -31,6 +31,19 @@ def _tool(*paths):
     return None
 
 
+def _system_root() -> str:
+    """The Windows folder, asked of the OS rather than an environment variable
+    an AI-tool config could point somewhere else."""
+    try:
+        import ctypes
+        buf = ctypes.create_unicode_buffer(260)
+        if ctypes.windll.kernel32.GetSystemDirectoryW(buf, 260):
+            return os.path.dirname(buf.value)       # ...\Windows\System32 -> ...\Windows
+    except Exception:
+        pass
+    return os.environ.get("SystemRoot") or r"C:\Windows"
+
+
 def _safe(text: str, limit: int = MAX_SHOWN) -> str:
     s = "".join(c if c.isprintable() else " " for c in str(text))
     return s if len(s) <= limit else s[:limit] + "...[+%d more characters]" % (len(s) - limit)
@@ -42,8 +55,7 @@ def dialog(summary: str) -> bool | None:
     env = dict(os.environ, SEA_MSG=msg)
     try:
         if os.name == "nt":
-            root = os.environ.get("SystemRoot") or r"C:\Windows"
-            ps = _tool(os.path.join(root, "System32", "WindowsPowerShell",
+            ps = _tool(os.path.join(_system_root(), "System32", "WindowsPowerShell",
                                     "v1.0", "powershell.exe"))
             if not ps:
                 return None
@@ -67,11 +79,13 @@ def dialog(summary: str) -> bool | None:
             return r.returncode == 0 and "button returned:Yes" in r.stdout
         for names, argv in ((("zenity",), ["--question", "--no-markup",
                                            "--title=oathkey", "--text=" + msg]),
-                            (("kdialog",), ["--yesno", _no_markup(msg), "--title", "oathkey"])):
+                            (("kdialog",), ["--yesno", "<qt>" + _no_markup(msg) + "</qt>", "--title", "oathkey"])):
             exe = _tool(*[d + "/" + n for n in names for d in ("/usr/bin", "/bin")])
             if exe:
                 return subprocess.run([exe] + argv, timeout=TIMEOUT,
                                       capture_output=True).returncode == 0
+    except subprocess.TimeoutExpired:
+        return False                 # no answer in time means no
     except (OSError, subprocess.SubprocessError):
         return None
     return None

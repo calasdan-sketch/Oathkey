@@ -552,12 +552,14 @@ START_HERE = """
   oathkey - let your AI use your API keys without ever seeing them.
 
   Start here:
-    oathkey get github      save a key (opens the page; you click Copy)
-    oathkey install         plug oathkey into Claude, Cursor or VS Code
-    oathkey selftest        watch it attack itself
-    oathkey doctor          check this computer
+    oathkey get github              save a key (opens the page; you click Copy)
+    oathkey call github GET /user   use it once yourself (a window asks you first)
+    oathkey install                 plug oathkey into Claude, Cursor or VS Code
+    oathkey selftest                watch it attack itself
+    oathkey doctor                  check this computer
 
-  All commands:  oathkey --help      What it does not stop:  see SECURITY.md
+  All commands:  oathkey --help
+  What it does not stop:  https://github.com/calasdan-sketch/oathkey/blob/main/SECURITY.md
 """
 
 
@@ -567,7 +569,8 @@ def _unknown_service(catalog: dict, name: str, show_all: bool = False) -> None:
     msg = f"unknown service '{recipes_mod.printable(name)}'."
     if close:
         msg += " Did you mean: " + ", ".join(close) + "?"
-    print(msg + "  (`oathkey list` shows all; `oathkey add` makes your own.)")
+    print(msg + "  (`oathkey list` shows all; `oathkey add` makes your own.)",
+          file=sys.stderr)
     if show_all:
         _cmd_list(catalog)
 
@@ -704,11 +707,11 @@ def _main(argv: list[str] | None = None) -> int:
             return e.code
     if args.cmd in ("get", "connect", "rotate", "run", "forget", "remote"):
         if getattr(args, "store", None) is None:
-            args.store = "keychain" if args.cmd == "get" else "env"
+            args.store = "keychain" if args.cmd in ("get", "connect", "rotate") else "env"
         recipe = catalog.get(args.service)
         if not recipe:
             _unknown_service(catalog, args.service)
-            return 1
+            return 3                      # service not found
         if args.cmd == "remote":
             from . import remote as remote_mod
             try:
@@ -725,7 +728,7 @@ def _main(argv: list[str] | None = None) -> int:
             return max(_cmd_forget(dict(recipe, env_var=var), args.env_file)
                        for var in recipes_mod.env_vars(recipe))
         import webbrowser
-        if (args.cmd == "get" and args.store == "keychain"
+        if (args.cmd in ("get", "connect", "rotate") and args.store == "keychain"
                 and args.env_file == ".env" and keychain_mod.detect_backend() is None):
             print("error: this computer has no keychain, and I won't leave a key in a "
                   "file in your project folder\n(an AI tool could read it). Choose a "

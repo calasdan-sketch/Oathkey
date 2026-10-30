@@ -5,10 +5,10 @@ oathkey is built so an AI agent can use your API keys without being handed them.
 ## What it defends against
 - **An AI reading a key out of chat, a prompt or tool output.** The tool adds the key itself. Replies and program output are scrubbed for the key in many disguises (encoded, escaped, split by spaces). If a disguised key is still detected, the whole reply is withheld.
 - **A prompt-injected AI sending your key to another server.** The destination comes from the saved service profile, never from the AI. Private and internal addresses are refused, the connection goes to the address we checked, redirects are not followed, proxies are ignored, and odd path tricks are refused.
-- **An AI making changes you did not approve.** Anything other than a read asks you first, in a pop-up window (or, with no window available, on the console with a code shown only on screen). The pop-up shows the method, address, query and the start of the body. Three refusals stop further requests.
+- **An AI making changes you did not approve.** Anything other than a read asks you first, in a pop-up window (or, with no window available, on the console with a code shown only on screen). The pop-up shows the method, address, every query parameter and the whole body (anything too long to show in full is refused). Three refusals stop further requests. The call limit and the three-refusal stop are counted separately by each running oathkey program (MCP server, web door, `call`), not across all of them.
 - **Accidental or casual edits to the activity log.** Each entry carries the hash of the one before it (`oathkey audit verify`).
 - **An AI turning a harmless-looking read into new credentials.** For AWS, only plain look-ups are allowed (`GetCallerIdentity` for STS; `Describe*`/`List*` elsewhere); actions that create keys (`GetSessionToken`, `AssumeRole`, ...) are refused.
-- **A request padded to hide what it does.** The approval window lists every query parameter and the size, hash and start of the body; a query value over 200 characters or a body over 400 bytes is refused, never shown cut off. The pop-up program is found by its full system path, never through PATH or the current folder.
+- **A request padded to hide what it does.** The approval window lists every query parameter and shows the whole body with its size and hash; a query value over 200 characters or a body over 400 bytes is refused, never shown cut off. The pop-up program is found by its full system path, never through PATH or the current folder.
 - **A planted recipe that sends a built-in service's key somewhere else.** A recipe in your own recipes folder cannot redirect a built-in service (or reuse its key name) to a different server.
 - **Dangerous ssh options** passed to `remote`.
 - **Web pages and rebinding tricks** against the local web door (`serve`): loopback only, secret token, exact Host check, Origin refused, no CORS.
@@ -33,4 +33,4 @@ oathkey is built so an AI agent can use your API keys without being handed them.
 - The package uses only Python's standard library, no outside code. A test (`tests/test_stdlib_only.py`) fails if that ever changes.
 
 ## Report a problem
-Contact address to be published before launch. Please do not post a working exploit publicly first. We aim to reply within 7 days.
+Report privately at https://github.com/calasdan-sketch/oathkey/security/advisories/new (GitHub private vulnerability reporting). Please do not open a public issue or post a working exploit first. We aim to reply within 7 days.

@@ -235,7 +235,7 @@ def _prompt_shows_everything(key):
     q = {f"p{i}": "v" for i in range(14)}
     _call(key, send, method="POST", path="/x", policy=pol, query=q, body={"danger": "yes"})
     text = seen[-1] if seen else ""
-    ok = all(f"p{i}=" in text for i in range(14)) and "sha256" in text and "danger" in text
+    ok = all(f"'p{i}'=" in text for i in range(14)) and "sha256" in text and "danger" in text
     return ok, "the approval text lists every parameter and the start of the body"
 
 
@@ -383,6 +383,12 @@ def _log_tests():
         os.remove(path)
         return (not log.verify()[0]), "deleting the whole log is detected"
 
+    def head_gone(key, log, path):
+        fill(key, log)
+        os.remove(log.anchor_path)
+        write(path, read(path)[:-2])
+        return (not log.verify()[0]), "deleting the end-marker file and cutting the log is detected"
+
     def junk(key, log, path):
         fill(key, log)
         with open(path, "a", encoding="utf-8") as f:
@@ -419,6 +425,8 @@ def _log_tests():
             ("Deleting from the activity log is detected", with_log(removed)),
             ("Cutting the end off the activity log is detected", with_log(tail_cut)),
             ("Deleting the activity log file is detected", with_log(file_gone)),
+            ("Deleting the end-marker file as well as cutting the log is detected",
+             with_log(head_gone)),
             ("A forged extra log line is detected", with_log(junk)),
             ("If the log cannot be written, nothing is sent", with_log(unwritable)),
             ("Refused requests are recorded in the log", with_log(refusals_logged))]
@@ -511,10 +519,10 @@ def cmd_selftest(as_json: bool = False, verbose: bool = False) -> int:
                         print(f"            -> {r['detail']}")
         print(f"\n{len(results) - len(failed)} of {len(results)} attacks stopped.")
         if failed:
-            print("Some attacks got through. Please report this (see SECURITY.md).\n")
+            print("Some attacks got through. Please report this (see https://github.com/calasdan-sketch/oathkey/blob/main/SECURITY.md).\n")
         else:
             print("These are simulated attacks on oathkey's rules, using a pretend "
                   "server. They do not\ntest the live network layer, and cannot show "
-                  "that nothing else can go wrong. See SECURITY.md.\n"
+                  "that nothing else can go wrong. See https://github.com/calasdan-sketch/oathkey/blob/main/SECURITY.md\n"
                   "(Add --verbose to see every attack.)\n")
     return 1 if failed else 0

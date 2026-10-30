@@ -216,7 +216,7 @@ def _doctor_oathkey_checks(add) -> None:
         res = selftest.run_all()
         passed = sum(1 for r in res if r["pass"])
         add("self-attack test", passed == len(res), f"{passed} of {len(res)} attacks stopped",
-            "Run `oathkey selftest` to see which attack got through, and report it (see SECURITY.md).")
+            "Run `oathkey selftest` to see which attack got through, and report it (see https://github.com/calasdan-sketch/oathkey/blob/main/SECURITY.md).")
     except Exception as e:                                   # noqa: BLE001
         add("self-attack test", False, f"could not run ({type(e).__name__})", "")
 

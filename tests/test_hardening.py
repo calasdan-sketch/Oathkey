@@ -125,7 +125,7 @@ class Approval(unittest.TestCase):
     def test_summary_shows_query_and_body(self):
         s = broker.describe(RECIPE, "POST", "api.github.com",
                             "https://api.github.com/gists?force=true", b'{"files":1}')
-        self.assertIn("force=true", s)
+        self.assertIn("'force'='true'", s)
         self.assertIn("11 bytes", s)
 
     def test_no_dialog_and_no_console_means_no(self):

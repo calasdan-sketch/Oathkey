@@ -64,7 +64,11 @@ class MutationTests(unittest.TestCase):
             self.assertTrue(any("AWS" in a for a in self._failed()))
 
     def test_log_anchor_removed(self):
-        with mock.patch.object(broker.AuditLog, "_read_anchor", lambda self: None):
+        orig = broker.AuditLog._problem
+        with mock.patch.object(broker.AuditLog, "_read_anchor", lambda self: None), \
+                mock.patch.object(broker.AuditLog, "_problem",
+                                  staticmethod(lambda n, last, ok, a, anchored=False:
+                                               orig(n, last, ok, None, False))):
             failed = self._failed()
         self.assertTrue(any("Cutting the end" in a for a in failed))
         self.assertTrue(any("Deleting the activity log file" in a for a in failed))

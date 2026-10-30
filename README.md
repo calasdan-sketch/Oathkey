@@ -3,13 +3,14 @@
 **Let your AI use your API keys without ever holding them.**
 
 - The key sits in your computer's own keychain. When your AI needs an API, it asks oathkey to make the call.
-- The reply is cleaned of the key, anything that changes data needs your click, and every call is written to a log.
-- Plain Python, nothing else to install. No account, no server, no cloud. MIT license.
+- Replies are cleaned of the key. Anything other than a read (GET) waits for your click. Every call is logged.
+- Plain Python, no extra packages. No account, no server, no cloud. MIT license. **Beta: no independent security review yet.**
+- Not related to OATH/TOTP one-time codes.
 
 ## Try it in 60 seconds
 
 ```
-pipx install git+https://github.com/calasdan-sketch/oathkey
+pipx install oathkey
 oathkey get github            # opens the key page; you click Copy; oathkey tests it and saves it
 oathkey call github GET /user # a window asks once to allow github reads: click Yes. Prints the answer, never the key
 oathkey selftest              # watch oathkey attack itself; prints how many attacks it stopped
@@ -19,8 +20,8 @@ oathkey install               # plug it into Claude, Cursor or VS Code, then res
 Now ask your AI: *"Who am I on GitHub?"* It uses your key through oathkey and never holds it.
 To see what it did: `oathkey audit show`.
 
-> No `pipx`? `pip install git+https://github.com/calasdan-sketch/oathkey` works too.
-> Needs Python 3.10 or newer. If your computer says `oathkey` is not found, close the window and open a new one, or run `python -m oathkey`.
+> No `pipx`? `pip install oathkey` works too. Latest unreleased code: `pipx install git+https://github.com/calasdan-sketch/oathkey`.
+> Needs Python 3.10 or newer. On Linux the keychain needs `secret-tool` (package `libsecret-tools`). If your computer says `oathkey` is not found, close the window and open a new one, or run `python -m oathkey`.
 
 ## Why not just put the key in a `.env` file?
 
@@ -43,7 +44,7 @@ Reads are allowed after one "yes" per AI session (a window asks the first time).
 | `oathkey scan` | Finds API keys lying in your project files, AI-tool settings and shell history (`--git` also checks git history). It never prints a whole key. |
 | `oathkey audit verify` | Checks the activity log was not edited, cut short or deleted. If it did not check out, `audit reset` starts a fresh log and keeps the old one. |
 
-oathkey uses only Python's own standard library, and a test in the repository ([tests/test_stdlib_only.py](tests/test_stdlib_only.py)) fails if that ever changes.
+oathkey uses only Python's own standard library, and a test in the repository ([tests/test_stdlib_only.py](https://github.com/calasdan-sketch/oathkey/blob/main/tests/test_stdlib_only.py)) fails if that ever changes.
 
 ## Commands
 
@@ -91,8 +92,8 @@ It reduces risk; it does not remove it, and no independent security review has b
 - **The clipboard.** `get` empties it right away, but other programs or clipboard-history tools may see the key while it is there.
 - **A log that can't be rewritten.** The log shows accidents and casual edits. Someone running as you could rewrite it.
 
-The full list is in [SECURITY.md](SECURITY.md). The longer user guide (every flag, where keys are stored, two-value keys, testing) is in [docs/guide.md](docs/guide.md).
+The full list is in [SECURITY.md](https://github.com/calasdan-sketch/oathkey/blob/main/SECURITY.md). The longer user guide (every flag, where keys are stored, two-value keys, testing) is in [docs/guide.md](https://github.com/calasdan-sketch/oathkey/blob/main/docs/guide.md).
 
 ## License
 
-MIT. See LICENSE.
+MIT. See [LICENSE](https://github.com/calasdan-sketch/oathkey/blob/main/LICENSE).

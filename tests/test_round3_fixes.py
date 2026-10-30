@@ -582,7 +582,7 @@ class TestKeychain(unittest.TestCase):
             with mock.patch.object(connect_mod, "connect", return_value=0) as c:
                 cli_mod.main(["connect", "acme", "--no-browser", "--store", "keychain"])
                 self.assertIsNotNone(c.call_args.kwargs["store_fn"])
-                cli_mod.main(["connect", "acme", "--no-browser"])
+                cli_mod.main(["connect", "acme", "--no-browser", "--store", "env"])
                 self.assertIsNone(c.call_args.kwargs["store_fn"])
 
     def test_readme_states_each_os_behaviour(self):
