@@ -121,3 +121,39 @@ def run_scrubbed(cmd, env, secrets, out=None, err=None) -> int:
     for t in threads:
         t.join()
     return status
+
+
+# ---- fail-closed second check ---------------------------------------------------------
+
+def _normalize(text: str) -> str:
+    """Undo the common disguises: whitespace splits, escaped slashes,
+    unicode escapes, percent-encoding (any case, repeated), HTML entities."""
+    import html
+    import re
+    from urllib.parse import unquote
+    t = re.sub(r"\\u([0-9a-fA-F]{4})", lambda m: chr(int(m.group(1), 16)), text)
+    t = t.replace("\\/", "/")
+    for _ in range(3):
+        nxt = html.unescape(unquote(t))
+        if nxt == t:
+            break
+        t = nxt
+    return re.sub(r"\s+", "", t)
+
+
+def loosely_contains(text: str, secrets) -> bool:
+    """True if, after undoing common disguises, any secret (in a plain,
+    base64 or hex form) is still in the text. The caller then withholds the
+    whole text instead of trying to patch it."""
+    norm = _normalize(text)
+    for s in secrets:
+        if len(s) < MIN_LEN:
+            continue
+        for f in forms(s):
+            try:
+                needle = _normalize(f.decode("utf-8"))
+            except UnicodeDecodeError:
+                continue
+            if len(needle) >= MIN_LEN and needle in norm:
+                return True
+    return False

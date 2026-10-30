@@ -66,6 +66,7 @@ def make_server(catalog: dict, get_values, token: str, policy, audit=None,
     class Handler(BaseHTTPRequestHandler):
         server_version = "safeeasyapi"
         sys_version = ""
+        timeout = 15                       # a stalled client cannot hold a thread forever
 
         def log_message(self, *a):          # never log request lines
             pass
@@ -111,7 +112,8 @@ def make_server(catalog: dict, get_values, token: str, policy, audit=None,
                 return
             if self.path != "/call":
                 return self._send(404, {"error": "not found"})
-            if "application/json" not in (self.headers.get("Content-Type") or ""):
+            ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+            if ctype != "application/json":
                 return self._send(415, {"error": "send application/json"})
             try:
                 n = int(self.headers.get("Content-Length") or "0")

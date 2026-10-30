@@ -20,13 +20,14 @@ import json
 import os
 import re
 import socket
+import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 
 from . import validate as _v
-from .scrub import Scrubber
+from .scrub import Scrubber, loosely_contains
 
 MAX_BODY_OUT = 1_000_000      # most we read back
 MAX_BODY_IN = 256_000         # most the AI may send
@@ -56,17 +57,35 @@ class Policy:
         self.approve = approve          # callable(summary) -> bool, or None
         self._stamps: list[float] = []
         self.calls = 0
+        self.denials = 0
         self.approved_hosts: set[tuple[str, str]] = set()
+        self.lock = threading.RLock()           # one decision at a time
 
     def count(self, now: float | None = None) -> None:
-        now = time.monotonic() if now is None else now
-        self._stamps = [t for t in self._stamps if now - t < 60]
-        if self.calls >= self.max_calls:
-            raise BrokerError("call limit for this session reached", 5)
-        if len(self._stamps) >= self.max_per_minute:
-            raise BrokerError("too many calls per minute; wait and retry", 5)
-        self.calls += 1
-        self._stamps.append(now)
+        with self.lock:
+            now = time.monotonic() if now is None else now
+            self._stamps = [t for t in self._stamps if now - t < 60]
+            if self.calls >= self.max_calls:
+                raise BrokerError(f"Limit of {self.max_calls} calls reached for "
+                                  "this session. Restart the AI app to reset.", 5)
+            if len(self._stamps) >= self.max_per_minute:
+                raise BrokerError("Too many calls per minute; wait a minute "
+                                  "and retry.", 5)
+            self.calls += 1
+            self._stamps.append(now)
+
+    def ask(self, summary: str) -> bool:
+        """Ask the person, one prompt at a time; after 3 refusals stop asking."""
+        with self.lock:
+            if self.approve is None:
+                return False
+            if self.denials >= 3:
+                raise BrokerError("The person said no three times; no more "
+                                  "requests this session.", 5)
+            yes = bool(self.approve(summary))
+            if not yes:
+                self.denials += 1
+            return yes
 
 
 # ---- address safety ----------------------------------------------------------
@@ -153,11 +172,25 @@ def check_path(path: str) -> str:
                           "characters", 5)
     if path.startswith("//"):
         raise BrokerError("path may not start with //", 5)
-    decoded = urllib.parse.unquote(path)
+    low = path.lower()
+    if ";" in path or "%25" in low or "%00" in low or "%2f" in low or "//" in path:
+        raise BrokerError("path contains an encoding or character that "
+                          "servers read differently; refused", 5)
+    decoded = path
+    for _ in range(4):                       # decode to a fixed point
+        nxt = urllib.parse.unquote(decoded)
+        if nxt == decoded:
+            break
+        decoded = nxt
     segments = decoded.split("/")
-    if ".." in segments or "." in segments[1:-1] or "\\" in decoded:
+    if ".." in segments or "." in segments[1:-1] or "\\" in decoded or "\x00" in decoded:
         raise BrokerError("path may not contain . or .. segments", 5)
     return path
+
+
+# query names that turn a harmless GET into an action on some servers
+_OVERRIDE_KEYS = {"method", "_method", "$httpmethod", "x-http-method-override",
+                  "http_method", "httpmethod"}
 
 
 def build_url(recipe: dict, path: str, query: dict | None) -> tuple[str, str]:
@@ -166,14 +199,39 @@ def build_url(recipe: dict, path: str, query: dict | None) -> tuple[str, str]:
     query = dict(query or {})
     if auth.get("type") == "query" and auth.get("param") in query:
         raise BrokerError("the credential parameter is set by the broker", 5)
+    if len(query) > 50:
+        raise BrokerError("too many query parameters", 5)
     for k, v in query.items():
         if not isinstance(k, str) or not isinstance(v, (str, int, float, bool)):
             raise BrokerError("query values must be plain text or numbers", 5)
+        if k.strip().lower() in _OVERRIDE_KEYS:
+            raise BrokerError(f"query parameter '{k}' can change what a GET "
+                              "does on some servers; refused", 5)
+        if auth.get("type") == "query" and k.strip().lower() == str(auth.get("param", "")).lower():
+            raise BrokerError("the credential parameter is set by the broker", 5)
     q = urllib.parse.urlencode(query)
     url = f"https://{host}{check_path(path)}" + (f"?{q}" if q else "")
     if urllib.parse.urlsplit(url).hostname != host:       # belt and braces
         raise BrokerError("host mismatch; refused", 5)
     return host, url
+
+
+NO_APPROVAL = ("The person did not approve this (or no approval window could "
+               "be shown). Do not retry; tell the person to allow it, then ask "
+               "again.")
+
+
+def describe(recipe: dict, method: str, host: str, url: str, data) -> str:
+    """What the person is asked to approve. Shows everything that matters."""
+    parts = urllib.parse.urlsplit(url)
+    q = urllib.parse.parse_qsl(parts.query)
+    text = f"{method} https://{host}{parts.path}"
+    if q:
+        text += "  query: " + ", ".join(f"{k}={v[:30]}" for k, v in q[:8])
+    if data:
+        text += (f"  body: {len(data)} bytes, starts: "
+                 f"{data[:80].decode('utf-8', 'replace')!r}")
+    return f"Using your '{recipe['service']}' key:  " + text
 
 
 def credentials(recipe: dict, values: dict):
@@ -212,19 +270,26 @@ def call(recipe: dict, values: dict, method: str, path: str,
         if len(data) > MAX_BODY_IN:
             raise BrokerError("request body too large", 5)
 
-    # permission: writes need a grant or a person's yes, every time
-    if method in WRITE_METHODS and not policy.allow_write:
-        summary = f"{method} https://{host}{urllib.parse.urlsplit(url).path}"
-        if not (policy.approve and policy.approve(summary)):
-            raise BrokerError("writes are not allowed in this session "
-                              "(no approval given)", 5)
-    elif (recipe["service"], host) not in policy.approved_hosts:
-        if policy.approve is not None:
-            if not policy.approve(f"first use of {recipe['service']} -> {host}"):
-                raise BrokerError("not approved", 5)
-        policy.approved_hosts.add((recipe["service"], host))
+    # permission: counted first (so floods are limited before they can
+    # nag the person), then writes need a grant or a person's yes
     policy.count()
+    with policy.lock:
+        if method in WRITE_METHODS and not policy.allow_write:
+            summary = describe(recipe, method, host, url, data)
+            if not policy.ask(summary):
+                _log(audit, recipe, method, host, path, 0, 0, "denied")
+                raise BrokerError(NO_APPROVAL, 5)
+        elif (recipe["service"], host) not in policy.approved_hosts:
+            if policy.approve is not None:
+                if not policy.ask(f"First use of '{recipe['service']}' "
+                                  f"(talks to {host}). Read-only requests will "
+                                  "then be allowed this session."):
+                    _log(audit, recipe, method, host, path, 0, 0, "denied")
+                    raise BrokerError(NO_APPROVAL, 5)
+            policy.approved_hosts.add((recipe["service"], host))
 
+    if audit is not None:
+        audit.ready()
     creds = credentials(recipe, values)
     spec = dict(recipe["validate"])
     spec["url"] = url
@@ -246,12 +311,20 @@ def call(recipe: dict, values: dict, method: str, path: str,
         raise
 
     secrets = [v for v in values.values() if isinstance(v, str)]
+    if token:
+        secrets.append(token)           # the OAuth token we minted is a secret too
     sc = Scrubber(secrets)
-    clip = raw[:MAX_BODY_OUT]
     ctype = headers.get("content-type", "")
     textual = any(t in ctype for t in ("json", "text", "xml", "html", "x-www-form"))
-    if textual:
-        shown = (sc.feed(clip) + sc.flush()).decode("utf-8", "replace")
+    if textual and headers.get("content-encoding", "").lower() not in ("", "identity"):
+        shown = "[response is compressed; not shown]"
+    elif textual:
+        # scrub everything we read, then clip (a key at the cut line is caught)
+        whole = (sc.feed(raw) + sc.flush())
+        if loosely_contains(whole.decode("utf-8", "replace"), secrets):
+            shown = "[response withheld: it appears to contain the key in a disguised form]"
+        else:
+            shown = whole[:MAX_BODY_OUT].decode("utf-8", "replace")
     else:
         shown = f"[binary {len(raw)} bytes sha256 {hashlib.sha256(raw).hexdigest()[:16]}]"
     keep = {}
@@ -284,24 +357,41 @@ class AuditLog:
         self.path = path
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
 
+    _lock = threading.Lock()
+
     def _last_hash(self) -> str:
         try:
             with open(self.path, "rb") as f:
-                last = f.read().splitlines()[-1]
-            return json.loads(last)["hash"]
-        except (OSError, IndexError, ValueError, KeyError):
+                lines = f.read().splitlines()
+        except OSError:
             return "0" * 64
+        for line in reversed(lines):             # skip junk at the end
+            try:
+                return json.loads(line)["hash"]
+            except (ValueError, KeyError, TypeError):
+                continue
+        return "0" * 64
+
+    def ready(self) -> None:
+        """Refuse to act if we could not record it afterwards."""
+        try:
+            fd = os.open(self.path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+            os.close(fd)
+        except OSError:
+            raise BrokerError("The activity log cannot be written, so "
+                              "nothing was sent.", 5) from None
 
     def write(self, entry: dict) -> None:
-        entry = dict(entry, ts=int(time.time()), prev=self._last_hash())
-        entry["hash"] = hashlib.sha256(
-            json.dumps(entry, sort_keys=True).encode()).hexdigest()
-        fd = os.open(self.path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
-        try:
-            os.write(fd, (json.dumps(entry, sort_keys=True) + "\n").encode())
-            os.fsync(fd)
-        finally:
-            os.close(fd)
+        with AuditLog._lock:                    # one writer at a time here
+            entry = dict(entry, ts=int(time.time()), prev=self._last_hash())
+            entry["hash"] = hashlib.sha256(
+                json.dumps(entry, sort_keys=True).encode()).hexdigest()
+            fd = os.open(self.path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+            try:
+                os.write(fd, (json.dumps(entry, sort_keys=True) + "\n").encode())
+                os.fsync(fd)
+            finally:
+                os.close(fd)
 
     def verify(self) -> tuple[bool, int]:
         prev, n = "0" * 64, 0
@@ -319,24 +409,3 @@ class AuditLog:
         except (ValueError, KeyError):
             return False, n
         return True, n
-
-
-# ---- approval from the real terminal, never from piped input -------------------
-
-def tty_approve(summary: str) -> bool:
-    """Ask on the console device itself. An AI that can pipe text into our
-    stdin cannot answer this. No console = no."""
-    dev_in, dev_out = (("CONIN$", "CONOUT$") if os.name == "nt"
-                       else ("/dev/tty", "/dev/tty"))
-    try:
-        with open(dev_out, "w", encoding="utf-8") as out, \
-                open(dev_in, encoding="utf-8") as inp:
-            out.write(f"\nsafeeasyapi: an AI wants to: {_safe(summary)}\nAllow? [y/N] ")
-            out.flush()
-            return inp.readline().strip().lower() in ("y", "yes")
-    except OSError:
-        return False
-
-
-def _safe(text: str) -> str:
-    return "".join(c for c in text if c.isprintable())[:200]

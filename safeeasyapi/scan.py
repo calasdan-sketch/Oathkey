@@ -34,7 +34,7 @@ PATTERNS = [
 
 SKIP_DIRS = {".git", "node_modules", ".venv", "venv", "__pycache__", "dist", "build",
              ".mypy_cache", ".pytest_cache", ".idea", ".vscode-test"}
-MAX_BYTES = 1_000_000
+MAX_BYTES = 20_000_000
 
 # where AI tools keep things an assistant can read or that get committed
 AGENT_FILES = [".claude/settings.local.json", ".claude/settings.json", ".mcp.json",
@@ -58,8 +58,11 @@ def _is_text(sample: bytes) -> bool:
 def scan_file(path: str) -> list[dict]:
     out: list[dict] = []
     try:
-        if os.path.islink(path) or os.path.getsize(path) > MAX_BYTES:
-            return out
+        if os.path.islink(path) or not stat.S_ISREG(os.stat(path).st_mode):
+            return out                      # links, pipes, devices: never open
+        if os.path.getsize(path) > MAX_BYTES:
+            return [{"file": path, "line": 0, "kind": "skipped (too large)",
+                     "hint": "not checked", "skipped": True}]
         with open(path, "rb") as f:
             raw = f.read()
     except OSError:
@@ -68,7 +71,7 @@ def scan_file(path: str) -> list[dict]:
         return out
     text = raw.decode("utf-8", "replace")
     for n, line in enumerate(text.splitlines(), 1):
-        if len(line) > 5000:
+        if len(line) > 300_000:
             continue
         for kind, rx in PATTERNS:
             m = rx.search(line)
@@ -107,6 +110,11 @@ def scan(paths: list[str], home: str | None = None, include_home: bool = True) -
             continue
         seen.add(real)
         found = scan_file(f)
+        skipped = [x for x in found if x.get("skipped")]
+        found = [x for x in found if not x.get("skipped")]
+        for x in skipped:
+            warnings.append({"file": f, "why": "too large to check (over "
+                             f"{MAX_BYTES // 1_000_000} MB); not scanned."})
         findings.extend(found)
         base = os.path.basename(f)
         norm = f.replace("\\", "/")
@@ -189,9 +197,13 @@ def scan_git(repo: str = ".", staged: bool = False, max_lines: int = 5_000_000) 
     commit (or only the staged change). A key that was ever committed is
     still readable in history even after the file is cleaned."""
     import subprocess
-    cmd = ["git", "-C", repo, "-c", "core.quotepath=off"]
-    cmd += (["diff", "--cached", "-U0", "--no-color"] if staged
-            else ["log", "--all", "-p", "-U0", "--no-color", "--format=commit %H"])
+    # never run anything the repository's own config asks for
+    cmd = ["git", "--no-pager", "-C", repo, "-c", "core.quotepath=off",
+           "-c", "core.fsmonitor=false", "-c", "core.pager=cat"]
+    cmd += (["diff", "--cached", "-U0", "--no-color", "--no-textconv", "--no-ext-diff"]
+            if staged else
+            ["log", "--all", "-p", "-U0", "--no-color", "--no-textconv",
+             "--no-ext-diff", "--format=commit %H"])
     findings: list[dict] = []
     try:
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
@@ -207,7 +219,7 @@ def scan_git(repo: str = ".", staged: bool = False, max_lines: int = 5_000_000) 
             commit = line[7:15]
         elif line.startswith("+++ b/"):
             fname = line[6:]
-        elif line.startswith("+") and not line.startswith("+++") and len(line) < 5000:
+        elif line.startswith("+") and not line.startswith("+++ ") and len(line) < 200_000:
             for kind, rx in PATTERNS:
                 m = rx.search(line)
                 if m:
@@ -252,9 +264,12 @@ def install_hook(repo: str = ".") -> str:
             if HOOK_MARK not in f.read():
                 raise OSError("a pre-commit hook already exists; not overwriting it")
     py = _sys.executable.replace("\\", "/")
+    if any(c in py for c in '"$`'):
+        raise OSError("the Python path has a character that is unsafe in a hook")
+    _flag = "-P" if _sys.version_info >= (3, 11) else "-I"
     body = (f"#!/bin/sh\n{HOOK_MARK}\n"
             f"# blocks the commit if a key is staged, and if the scanner itself fails\n"
-            f"\"{py}\" -m safeeasyapi scan --staged || {{ echo 'commit blocked by safeeasyapi' >&2; exit 1; }}\n")
+            f"\"{py}\" {_flag} -m safeeasyapi scan --staged || {{ echo 'commit blocked by safeeasyapi' >&2; exit 1; }}\n")
     with open(path, "w", encoding="utf-8", newline="\n") as f:
         f.write(body)
     try:

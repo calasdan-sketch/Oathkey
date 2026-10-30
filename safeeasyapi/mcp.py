@@ -76,8 +76,10 @@ def _tool_defs() -> list[dict]:
                          "/user), optional query_json and body_json (JSON "
                          "text). The host and credential are added for you; "
                          "the key is hidden from the reply. GET is allowed; "
-                         "POST/PUT/PATCH/DELETE ask the person first. Never "
-                         "put keys in any argument."),
+                         "POST/PUT/PATCH/DELETE ask the person first. If a "
+                         "request is refused or not approved, do NOT retry: "
+                         "tell the person what you wanted to do and why. "
+                         "Never put keys in any argument."),
          "inputSchema": {"type": "object",
                          "properties": {
                              "service": {"type": "string"},
@@ -96,7 +98,8 @@ def _session_policy():
     global _POLICY
     if _POLICY is None:
         from . import broker
-        _POLICY = broker.Policy(approve=broker.tty_approve)
+        from . import approve as approve_mod
+        _POLICY = broker.Policy(approve=approve_mod.ask_person)
     return _POLICY
 
 
@@ -109,7 +112,8 @@ def _call_api(catalog: dict, args: dict) -> dict:
                 "isError": True}
     recipe = catalog.get(args.get("service", ""))
     if not recipe:
-        return fail("no recipe for '%s'. Use list_services." % args.get("service"))
+        return fail("Unknown service '%s'. Call list_services to see the names."
+                    % str(args.get("service"))[:40])
     try:
         query = json.loads(args["query_json"]) if args.get("query_json") else None
         body = json.loads(args["body_json"]) if args.get("body_json") else None
@@ -118,14 +122,22 @@ def _call_api(catalog: dict, args: dict) -> dict:
     if query is not None and not isinstance(query, dict):
         return fail("query_json must be a JSON object")
     try:
-        values = remote.collect_values(recipe, ".env")
+        # never a .env found in the folder the AI app happened to start in
+        # (an agent could plant one); only the keychain or a file the person
+        # named in SAFEEASYAPI_ENV_FILE
+        env_file = (os.environ.get("SAFEEASYAPI_ENV_FILE")
+                    or os.path.join(remote.home_dir(), "no-env-file"))
+        values = remote.collect_values(recipe, env_file)
         audit = broker.AuditLog(os.path.join(remote.home_dir(), "audit.log"))
         result = broker.call(recipe, values, args["method"], args["path"],
                              query, body, policy=_session_policy(), audit=audit)
     except broker.BrokerError as e:
         return fail(str(e))
-    except remote.RemoteError as e:
-        return fail("no key available for this service: " + str(e)[:120])
+    except remote.RemoteError:
+        return fail("No key is saved for '%s'. Tell the person to run "
+                    "`safeeasyapi connect %s --store keychain` in a terminal. "
+                    "Never ask them to paste a key into the chat."
+                    % (recipe["service"], recipe["service"]))
     return {"content": [{"type": "text", "text": json.dumps(result)}]}
 
 
@@ -331,9 +343,20 @@ def handle(request, catalog: dict[str, dict],
         if problem:
             return err(INVALID_PARAMS, f"Invalid params: {problem}")
         if name == "list_services":
+            from . import remote as _remote
+            _envf = (os.environ.get("SAFEEASYAPI_ENV_FILE")
+                     or os.path.join(_remote.home_dir(), "no-env-file"))
+
+            def _has(r):
+                try:
+                    _remote.collect_values(r, _envf)
+                    return True
+                except Exception:
+                    return False
             services = [{"service": r["service"], "display": r["display"],
                          "env_var": r["env_var"],
-                         "env_vars": recipes_mod.env_vars(r)}
+                         "env_vars": recipes_mod.env_vars(r),
+                         "connected": _has(r)}
                         for r in catalog.values()]
             return ok({"content": [{"type": "text",
                                     "text": json.dumps(services)}]})

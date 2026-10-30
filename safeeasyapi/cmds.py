@@ -10,6 +10,7 @@ import os
 import sys
 
 from . import broker
+from . import approve as approve_mod
 from . import recipes as recipes_mod
 
 OK, PROBLEM, USAGE, NOT_FOUND, POLICY, NETWORK = 0, 1, 2, 3, 5, 7
@@ -71,7 +72,7 @@ def cmd_call(recipe: dict, args) -> int:
         except ValueError:
             print("error: --data must be valid JSON", file=sys.stderr)
             return USAGE
-    policy = broker.Policy(allow_write=False, approve=broker.tty_approve)
+    policy = broker.Policy(allow_write=False, approve=approve_mod.ask_person)
     audit = broker.AuditLog(os.path.join(_home(), "audit.log"))
     try:
         values = remote.collect_values(recipe, args.env_file)
@@ -108,7 +109,7 @@ def cmd_serve(catalog: dict, port: int, env_file: str) -> int:
     from . import httpd, remote
     tokfile = os.path.join(_home(), "http.token")
     token = httpd.load_or_make_token(tokfile)
-    policy = broker.Policy(approve=broker.tty_approve)
+    policy = broker.Policy(approve=approve_mod.ask_person)
     audit = broker.AuditLog(os.path.join(_home(), "audit.log"))
     srv = httpd.make_server(catalog, lambda r: remote.collect_values(r, env_file),
                             token, policy, audit, port=port)

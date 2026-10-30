@@ -19,7 +19,14 @@ NAME = "safeeasyapi"
 
 
 def server_entry() -> dict:
-    return {"command": sys.executable, "args": ["-m", "safeeasyapi", "mcp"]}
+    return {"command": sys.executable, "args": python_flags() + ["-m", "safeeasyapi", "mcp"]}
+
+
+def python_flags() -> list[str]:
+    """Do not put the current folder on Python's path: otherwise a file named
+    like a standard module, dropped into a project, would run in our place.
+    -P does exactly that on 3.11+; -I is the older, stricter equivalent."""
+    return ["-P"] if sys.version_info >= (3, 11) else ["-I"]
 
 
 def targets(env=None, home=None, cwd=None) -> dict:
@@ -74,7 +81,9 @@ def apply(p: dict) -> str | None:
     backup = None
     if p["present"]:
         backup = f"{path}.bak-{time.strftime('%Y%m%d-%H%M%S')}"
-        shutil.copy2(path, backup)
+        fd0 = os.open(backup, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd0, "wb") as dst, open(path, "rb") as src:
+            shutil.copyfileobj(src, dst)
     fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path) or ".", suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
