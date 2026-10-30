@@ -80,8 +80,16 @@ def apply(p: dict) -> str | None:
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     backup = None
     if p["present"]:
-        backup = f"{path}.bak-{time.strftime('%Y%m%d-%H%M%S')}"
-        fd0 = os.open(backup, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        stamp = time.strftime('%Y%m%d-%H%M%S')
+        for i in range(100):
+            backup = f"{path}.bak-{stamp}" + (f"-{i}" if i else "")
+            try:
+                fd0 = os.open(backup, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                break
+            except FileExistsError:
+                continue
+        else:
+            raise OSError("could not create a backup file")
         with os.fdopen(fd0, "wb") as dst, open(path, "rb") as src:
             shutil.copyfileobj(src, dst)
     fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path) or ".", suffix=".tmp")
