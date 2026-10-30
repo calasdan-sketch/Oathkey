@@ -198,7 +198,7 @@ class TestAClosedStandardStream(unittest.TestCase):
                                       which)
 
     def test_the_readme_says_so(self):
-        with open(os.path.join(_isolation.REPO, "README.md"),
+        with open(os.path.join(_isolation.REPO, "docs", "guide.md"),
                   encoding="utf-8") as f:
             flat = " ".join(f.read().split())
         for phrase in ("standard input or standard output is closed",

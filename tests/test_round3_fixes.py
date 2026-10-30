@@ -586,7 +586,7 @@ class TestKeychain(unittest.TestCase):
                 self.assertIsNone(c.call_args.kwargs["store_fn"])
 
     def test_readme_states_each_os_behaviour(self):
-        with open(os.path.join(REPO, "README.md"), encoding="utf-8") as f:
+        with open(os.path.join(REPO, "docs", "guide.md"), encoding="utf-8") as f:
             text = f.read()
         for phrase in ("macOS", "Credential Manager", "secret-tool",
                        "--store keychain", "oathkey run"):

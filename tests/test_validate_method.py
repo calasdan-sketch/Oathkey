@@ -121,7 +121,7 @@ class TestTheCallItselfIsAlsoGuarded(unittest.TestCase):
 
 class TestReadmeSaysSo(unittest.TestCase):
     def test_the_recipe_rules_mention_get_or_head(self):
-        with open(os.path.join(_isolation.REPO, "README.md"),
+        with open(os.path.join(_isolation.REPO, "docs", "guide.md"),
                   encoding="utf-8") as f:
             flat = " ".join(f.read().split())
         self.assertTrue("`GET` or `HEAD`" in flat,

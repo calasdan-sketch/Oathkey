@@ -649,7 +649,7 @@ class TestShippedCatalog(unittest.TestCase):
 
 class TestReadme(unittest.TestCase):
     def test_windows_first_wording(self):
-        with open(os.path.join(REPO, "README.md"), encoding="utf-8") as f:
+        with open(os.path.join(REPO, "docs", "guide.md"), encoding="utf-8") as f:
             text = f.read()
         self.assertNotIn("python3", text)
         self.assertNotIn("alias seapi", text)

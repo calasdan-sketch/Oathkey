@@ -454,7 +454,7 @@ class TestANameMayNotEndInANewline(unittest.TestCase):
 class TestReadmeTellsTheTruth(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        with open(os.path.join(_isolation.REPO, "README.md"),
+        with open(os.path.join(_isolation.REPO, "docs", "guide.md"),
                   encoding="utf-8") as f:
             cls.text = f.read()
         cls.flat = " ".join(cls.text.split())

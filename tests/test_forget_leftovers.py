@@ -521,7 +521,7 @@ esac
 
 class TestReadmeSaysWhatForgetCanAndCannotDo(unittest.TestCase):
     def test_it_says_what_it_did_before_what_it_could_not(self):
-        with open(os.path.join(_isolation.REPO, "README.md"),
+        with open(os.path.join(_isolation.REPO, "docs", "guide.md"),
                   encoding="utf-8") as f:
             flat = " ".join(f.read().split())
         for phrase in ("says what it removed before it says what it could not "
@@ -529,7 +529,7 @@ class TestReadmeSaysWhatForgetCanAndCannotDo(unittest.TestCase):
             self.assertTrue(phrase in flat, f"the README does not say: {phrase!r}")
 
     def test_the_forget_paragraph(self):
-        with open(os.path.join(_isolation.REPO, "README.md"),
+        with open(os.path.join(_isolation.REPO, "docs", "guide.md"),
                   encoding="utf-8") as f:
             flat = " ".join(f.read().split())
         for phrase in ("interrupted write", "hard link", "cannot know about"):

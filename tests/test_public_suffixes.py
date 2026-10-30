@@ -337,7 +337,7 @@ class TestTheTypedYesIsAskedFor(unittest.TestCase):
 
 class TestReadmeSaysWhatTheListIs(unittest.TestCase):
     def test_it_is_a_compact_snapshot_not_the_public_suffix_list(self):
-        with open(os.path.join(_isolation.REPO, "README.md"),
+        with open(os.path.join(_isolation.REPO, "docs", "guide.md"),
                   encoding="utf-8") as f:
             flat = " ".join(f.read().split())
         for phrase in ("compact snapshot", "not the full Public Suffix List",

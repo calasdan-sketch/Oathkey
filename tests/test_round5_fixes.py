@@ -1189,7 +1189,7 @@ class TestDuplicateKeys(unittest.TestCase):
 
 class TestReadmeValidationNote(unittest.TestCase):
     def test_connect_section_says_to_validate_on_your_own_computer(self):
-        with open(os.path.join(REPO, "README.md"), encoding="utf-8") as f:
+        with open(os.path.join(REPO, "docs", "guide.md"), encoding="utf-8") as f:
             text = f.read()
         # the note belongs where validation is described
         start = text.index("## A connect, annotated")
