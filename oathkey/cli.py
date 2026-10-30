@@ -540,7 +540,34 @@ def _interrupted() -> int:
     return 130
 
 
+START_HERE = """
+  oathkey - let your AI use your API keys without ever seeing them.
+
+  Start here:
+    oathkey get github      save a key (opens the page; you click Copy)
+    oathkey install         plug oathkey into Claude, Cursor or VS Code
+    oathkey selftest        watch it attack itself
+    oathkey doctor          check this computer
+
+  All commands:  oathkey --help      What it does not stop:  see SECURITY.md
+"""
+
+
+def _unknown_service(catalog: dict, name: str, show_all: bool = False) -> None:
+    import difflib
+    close = difflib.get_close_matches(str(name).lower(), list(catalog), n=3, cutoff=0.5)
+    msg = f"unknown service '{recipes_mod.printable(name)}'."
+    if close:
+        msg += " Did you mean: " + ", ".join(close) + "?"
+    print(msg + "  (`oathkey list` shows all; `oathkey add` makes your own.)")
+    if show_all:
+        _cmd_list(catalog)
+
+
 def main(argv: list[str] | None = None) -> int:
+    if (argv is None and len(sys.argv) == 1) or argv == []:
+        print(START_HERE)
+        return 0
     try:
         try:
             code = _main(argv)
@@ -608,7 +635,7 @@ def _main(argv: list[str] | None = None) -> int:
             return cmds.cmd_serve(catalog, args.port, args.env_file)
         recipe = catalog.get(args.service)
         if not recipe:
-            print(f"error: unknown service '{args.service}'.", file=sys.stderr)
+            _unknown_service(catalog, args.service)
             return cmds.NOT_FOUND
         return cmds.cmd_call(recipe, args)
     if args.cmd in ("scan", "doctor"):
@@ -651,7 +678,7 @@ def _main(argv: list[str] | None = None) -> int:
                 return 0
             recipe = catalog.get(args.service)
             if not recipe:
-                print(f"unknown service '{args.service}'.")
+                _unknown_service(catalog, args.service)
                 return 1
             remote_mod.ensure_ssh_access(args.host)
             code = remote_mod.run_remote(
@@ -672,8 +699,7 @@ def _main(argv: list[str] | None = None) -> int:
             args.store = "keychain" if args.cmd == "get" else "env"
         recipe = catalog.get(args.service)
         if not recipe:
-            print(f"unknown service '{args.service}'.")
-            _cmd_list(catalog)
+            _unknown_service(catalog, args.service)
             return 1
         if args.cmd == "remote":
             from . import remote as remote_mod

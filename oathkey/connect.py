@@ -561,6 +561,15 @@ def connect(
         del values
     for description in saved:
         out.write(f"\n  ✓ {description}\n")
+    try:
+        import urllib.parse as _up
+        _path = _up.urlsplit((recipe.get("validate") or {}).get("url", "")).path or "/"
+    except ValueError:
+        _path = "/"
+    if len(fields) == 1 and fields[0]["name"] == DEFAULT_FIELD and _path.isprintable():
+        out.write(f"\n  Next:  oathkey call {printable(recipe['service'])} GET {_path}"
+                  "     (a test call; the key stays hidden)\n"
+                  "         oathkey install     (plug oathkey into Claude, Cursor or VS Code)\n")
     return 0
 
 
