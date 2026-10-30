@@ -312,10 +312,11 @@ class _CredentialScrubbingRedirectHandler(urllib.request.HTTPRedirectHandler):
 
 
 def _send(req: urllib.request.Request, scrubber: _CredentialScrubbingRedirectHandler,
-          timeout: float, read_limit: int = 0) -> tuple[int, bytes]:
+          timeout: float, read_limit: int = 0, no_proxy: bool = False) -> tuple[int, bytes]:
     """(status, up to read_limit bytes of body). Errors become
     ValidationError without repeating anything the request carried."""
-    opener = urllib.request.build_opener(scrubber)
+    opener = (urllib.request.build_opener(urllib.request.ProxyHandler({}), scrubber)
+              if no_proxy else urllib.request.build_opener(scrubber))
     body = b""
     try:
         try:
@@ -371,7 +372,8 @@ def _verdict(status: int, spec: dict, reject_default=REJECT_DEFAULT) -> bool:
 
 # ---- OAuth2 client credentials -----------------------------------------------
 
-def _fetch_token(spec: dict, creds: dict[str, str], timeout: float) -> str | None:
+def _fetch_token(spec: dict, creds: dict[str, str], timeout: float,
+                 no_proxy: bool = False) -> str | None:
     """POST the client credentials to the recipe's token_url. Returns the
     access token, or None when the vendor said the credentials are wrong.
     No redirect is followed: a token endpoint never needs one, and the
@@ -393,7 +395,7 @@ def _fetch_token(spec: dict, creds: dict[str, str], timeout: float) -> str | Non
     req = urllib.request.Request(auth["token_url"], data=urllib.parse.urlencode(form).encode(),
                                  headers=headers, method="POST")
     status, body = _send(req, _CredentialScrubbingRedirectHandler("Authorization", follow=False),
-                         timeout, MAX_TOKEN_BYTES)
+                         timeout, MAX_TOKEN_BYTES, no_proxy)
     if status in TOKEN_REJECT:
         return None
     if status != 200:

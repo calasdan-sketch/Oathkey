@@ -8,7 +8,7 @@ oathkey is built so an AI agent can use your API keys without being handed them.
 - **An AI making changes you did not approve.** Anything other than a read asks you first, in a pop-up window (or, with no window available, on the console with a code shown only on screen). The pop-up shows the method, address, query and the start of the body. Three refusals stop further requests.
 - **Accidental or casual edits to the activity log.** Each entry carries the hash of the one before it (`oathkey audit verify`).
 - **An AI turning a harmless-looking read into new credentials.** For AWS, only plain look-ups are allowed (`GetCallerIdentity` for STS; `Describe*`/`List*` elsewhere); actions that create keys (`GetSessionToken`, `AssumeRole`, ...) are refused.
-- **A request padded to hide what it does.** The approval window lists every query parameter and the size, hash and start of the body; a request too long to review is refused instead of cut short. The pop-up program is found by its full system path, never through PATH or the current folder.
+- **A request padded to hide what it does.** The approval window lists every query parameter and the size, hash and start of the body; a query value over 200 characters or a body over 400 bytes is refused, never shown cut off. The pop-up program is found by its full system path, never through PATH or the current folder.
 - **A planted recipe that sends a built-in service's key somewhere else.** A recipe in your own recipes folder cannot redirect a built-in service (or reuse its key name) to a different server.
 - **Dangerous ssh options** passed to `remote`.
 - **Web pages and rebinding tricks** against the local web door (`serve`): loopback only, secret token, exact Host check, Origin refused, no CORS.
@@ -17,6 +17,8 @@ oathkey is built so an AI agent can use your API keys without being handed them.
 - **Malware, or an AI agent that can run programs as you.** Anything running as you can read your keychain or `.env` directly, edit the activity log (it has no secret key), or drive the screen to click a pop-up. The broker protects against an AI that only uses the tool, not one with full control of your computer. Run risky agents in a separate account or container.
 - **`run` and `remote` handed to an AI that can run commands.** They give the key to a program you name; a program can print its own environment, and a terminal-style session is not scrubbed. Give AIs the MCP tool or `call` only.
 - **A key left where an AI can simply read the file** (`.env`, shell history, AI-tool settings). `oathkey scan` finds these; prefer `--store keychain`.
+- **The sign-in request for OAuth services** (the token fetch). It checks the address is public, ignores proxy settings and never follows redirects, but unlike ordinary calls it is not pinned to the address it checked.
+- **Log flooding.** Refused requests count toward the call limit and are logged with a clipped path, but a patient attacker with a few dozen refused calls can still push older lines out of the default `audit show` view; use `--last`.
 - **Harmful actions inside what a key is allowed to do.** GET requests are treated as reads, but some services let a GET change things. Limit each key at the provider (read-only keys, narrow scopes).
 - **What the AI company sees.** Replies from the API go to the AI. If you let the AI read your email through this tool, the AI vendor sees that email.
 - **The approval window cannot show everything.** It shows the first part of a body, not all of it.

@@ -50,7 +50,7 @@ def cmd_status(catalog: dict, env_file: str, as_json: bool) -> int:
             f"  services known: {info['services']}   with a key stored: "
             f"{info['with_keys']}\n"
             f"  connected: {', '.join(info['connected']) or 'none yet'}\n"
-            f"  activity log: {'intact' if ok else 'DAMAGED OR CHANGED - run `oathkey audit show`'} "
+            f"  activity log: {'intact' if ok else 'check FAILED - run `oathkey audit show`'} "
             f"({n} entries)")
     _emit(info, as_json, text)
     return OK if ok else PROBLEM
@@ -82,7 +82,7 @@ def cmd_call(recipe: dict, args) -> int:
                           body, policy=policy, audit=audit)
     except remote.RemoteError:
         print(f"error: no key stored for '{recipe['service']}'. Run "
-              f"`oathkey connect {recipe['service']}` first.", file=sys.stderr)
+              f"`oathkey get {recipe['service']}` first.", file=sys.stderr)
         return NOT_FOUND
     except broker.BrokerError as e:
         print(f"error: {e}", file=sys.stderr)
@@ -99,6 +99,11 @@ def cmd_call(recipe: dict, args) -> int:
 
 def cmd_audit(action: str, as_json: bool, last: int = 20) -> int:
     log = broker.AuditLog(os.path.join(_home(), "audit.log"))
+    if action == "reset":
+        kept = log.reset()
+        print("started a fresh activity log." +
+              (f" The old one was kept as {kept}" if kept else ""))
+        return OK
     if action == "show":
         import time as _t
         intact, _n = log.verify()
@@ -117,7 +122,10 @@ def cmd_audit(action: str, as_json: bool, last: int = 20) -> int:
         except OSError:
             pass
         if as_json:
-            print(json.dumps(rows, indent=2))
+            print(json.dumps({"intact": intact,
+                              "problem": None if intact else
+                              (log.broken_reason() or "the log does not check out"),
+                              "entries": rows}, indent=2))
         elif not rows:
             print("nothing yet - no AI has used a key through oathkey.")
         for e in ([] if as_json else rows):
@@ -126,10 +134,11 @@ def cmd_audit(action: str, as_json: bool, last: int = 20) -> int:
             print(f"{when}  {c(e.get('service'))}  {c(e.get('method'), 10)} "
                   f"{c(e.get('host'))}{c(e.get('path'))}  -> {c(e.get('status'), 6)} "
                   f"({c(e.get('result'), 20)})")
-        return OK
+        return OK if intact else PROBLEM
     ok, n = log.verify()
+    why = "" if ok else f" - {log.broken_reason() or 'the log does not check out'}"
     _emit({"intact": ok, "entries": n}, as_json,
-          f"activity log: {'intact' if ok else 'TAMPERED'} ({n} entries)")
+          f"activity log: {'intact' if ok else 'TAMPERED'} ({n} entries){why}")
     return OK if ok else PROBLEM
 
 
@@ -175,5 +184,5 @@ def cmd_start(catalog: dict, env_file: str) -> int:
               "quit and reopen that app.")
     else:
         print("\nNext: connect your first service, for example:\n"
-              "  oathkey connect github --store keychain")
+              "  oathkey get github")
     return OK if d["ok"] else PROBLEM

@@ -174,10 +174,11 @@ def doctor(env=None, which=shutil.which) -> dict:
     add("git", bool(which("git")), "found" if which("git") else "missing",
         "Needed for `deploy` and git-based updates.")
     proxy = env.get("HTTPS_PROXY") or env.get("https_proxy")
-    add("proxy", True, "set" if proxy else "none",
-        "")
+    if proxy:           # only worth a line when set; oathkey ignores it for AI calls
+        add("proxy", True, "set (oathkey ignores it for AI calls)", "")
     cafile = env.get("SSL_CERT_FILE") or env.get("REQUESTS_CA_BUNDLE")
-    add("custom CA bundle", True, "set" if cafile else "none", "")
+    if cafile:
+        add("custom CA bundle", True, "set", "")
     _doctor_oathkey_checks(add)
     return {"ok": all(c["ok"] for c in checks), "checks": checks}
 
@@ -191,8 +192,9 @@ def _doctor_oathkey_checks(add) -> None:
         log = broker.AuditLog(os.path.join(remote.home_dir(), "audit.log"))
         ok, n = log.verify()
         add("activity log", ok,
-            f"{n} entries, chain intact" if ok else f"broken after entry {n}",
-            "The log was edited or damaged. Keep a copy, then run `oathkey audit show`.")
+            f"{n} entries, chain intact" if ok else
+            f"check failed ({log.broken_reason() or 'broken after entry ' + str(n)})",
+            "Keep a copy, run `oathkey audit show`, then `oathkey audit reset` to start a fresh log.")
     except Exception as e:                                   # noqa: BLE001
         add("activity log", False, f"could not check ({type(e).__name__})", "")
     try:
@@ -225,6 +227,9 @@ def format_doctor(result: dict) -> str:
         mark = "ok " if c["ok"] else "FIX"
         lines.append(f"  [{mark}] {c['check']}: {c['detail']}" +
                      (f"  -> {c['fix']}" if (not c["ok"] and c["fix"]) else ""))
+    lines.append("")
+    lines.append("  Ready. Next: oathkey get github" if result["ok"]
+                 else "  Fix the items marked FIX, then run `oathkey doctor` again.")
     return "\n".join(lines)
 
 

@@ -114,7 +114,7 @@ def _build_parser() -> argparse.ArgumentParser:
     sc.add_argument("--install-hook", action="store_true",
                     help="Install a git pre-commit hook that blocks commits containing keys.")
 
-    dc = sub.add_parser("doctor", help="Check this computer is ready (keychain, ssh, git).")
+    dc = sub.add_parser("doctor", help="Check this computer is ready (keychain, ssh, git, and oathkey's own self-attack test).")
     dc.add_argument("--json", action="store_true", help="Machine-readable output.")
 
     ts = sub.add_parser("trust-server", help="Make a server trust this PC (makes an ssh "
@@ -152,7 +152,8 @@ def _build_parser() -> argparse.ArgumentParser:
     stt.add_argument("--json", action="store_true", help="Machine-readable output.")
     stt.add_argument("--env-file", default=".env")
     au = sub.add_parser("audit", help="Check the activity log has not been tampered with.")
-    au.add_argument("action", choices=["verify", "show"])
+    au.add_argument("action", choices=["verify", "show", "reset"],
+                    help="reset: start a fresh log after a problem (the old one is kept)")
     au.add_argument("--json", action="store_true")
     au.add_argument("--last", type=int, default=20, help="how many entries to show")
     ca = sub.add_parser("call", help="Call a connected service's API; the key is "
@@ -171,6 +172,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     stp = sub.add_parser("selftest", help="Attack oathkey with a made-up key and a pretend server; shows pass or fail.")
     stp.add_argument("--json", action="store_true")
+    stp.add_argument("--verbose", action="store_true", help="list every attack, not just the groups")
     f = sub.add_parser("find", help="Find free public APIs for a task.")
     f.add_argument("query", help="What you need, e.g. 'weather', 'crypto price'.")
     f.add_argument("--auth", default=None,
@@ -318,19 +320,25 @@ def keychain_store(recipe: dict, env_file: str, out=None,
     out = out or sys.stdout
     backend = backend or keychain.detect_backend()
 
+    def _fallback(env_var: str, key: str, why: str) -> str:
+        if env_file == ".env":      # the default: a file in the project folder
+            raise keychain.KeychainError(
+                f"{why}. oathkey will not leave your key in a file in your "
+                "project folder (an AI tool could read it). Fix the keychain "
+                "and run this again, or choose a private place yourself with "
+                "--env-file <path>")
+        out.write(f"  ({why} - storing in the .env file instead)\n")
+        return connect_mod.store_in_env_file(env_file)(env_var, key)
+
     def _store(env_var: str, key: str) -> str:
         if backend is None:
-            out.write("  (no OS keychain available on this system - "
-                      "storing in the .env file instead)\n")
-            return connect_mod.store_in_env_file(env_file)(env_var, key)
+            return _fallback(env_var, key, "no OS keychain available on this system")
         try:
             used = keychain.store(recipe["service"], env_var, key, backend)
         except keychain.KeychainError as e:
-            out.write(f"  ({e} - storing in the .env file instead)\n")
-            return connect_mod.store_in_env_file(env_file)(env_var, key)
-        return (f"stored {env_var} in the {keychain.label(used)} "
-                f"(never displayed, never logged); use it with "
-                f"`oathkey run {recipe['service']} -- <command>`")
+            return _fallback(env_var, key, str(e))
+        return (f"saved {env_var} to the {keychain.label(used)} "
+                "(never displayed, never logged)")
     return _store
 
 
@@ -619,7 +627,7 @@ def _main(argv: list[str] | None = None) -> int:
         return clients.run(args.targets, args.yes)
     if args.cmd == "selftest":
         from . import selftest
-        return selftest.cmd_selftest(args.json)
+        return selftest.cmd_selftest(args.json, args.verbose)
     if args.cmd == "uninstall":
         from . import clients
         return clients.remove(args.targets, args.yes)
@@ -741,9 +749,13 @@ def _main(argv: list[str] | None = None) -> int:
             except clipboard_mod.Unavailable as e:
                 print(f"  (copy-and-go unavailable: {recipes_mod.printable(e)} - "
                       f"using the hidden paste instead)")
-        return connect_mod.connect(recipe, env_file=args.env_file,
-                                   browser_open=opener, store_fn=store_fn,
-                                   clipboard=clip, via_cli=args.via_cli)
+        try:
+            return connect_mod.connect(recipe, env_file=args.env_file,
+                                       browser_open=opener, store_fn=store_fn,
+                                       clipboard=clip, via_cli=args.via_cli)
+        except keychain_mod.KeychainError as e:
+            print(f"error: {recipes_mod.printable(e)}", file=sys.stderr)
+            return 1
     return 0
 
 

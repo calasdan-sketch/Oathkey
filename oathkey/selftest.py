@@ -248,6 +248,32 @@ def _prompt_cannot_be_padded(key):
     return ok and not send.seen, d
 
 
+def _query_value_not_cut(key):
+    send = _fake_server(lambda req: b"{}")
+    pol = broker.Policy(approve=lambda s: True)
+    ok, d = _refused(lambda: _call(key, send, method="POST", path="/x", policy=pol,
+                                   query={"note": "a" * 300}), "too long")
+    return ok and not send.seen, d
+
+
+def _body_tail_not_cut(key):
+    send = _fake_server(lambda req: b"{}")
+    pol = broker.Policy(approve=lambda s: True)
+    body = {"note": "harmless words " * 3 + "x" * 600 + " and a hostile tail"}
+    ok, d = _refused(lambda: _call(key, send, method="POST", path="/x", policy=pol,
+                                   body=body), "too long")
+    return ok and not send.seen, d
+
+
+def _refusals_use_the_limit(key):
+    send = _fake_server(lambda req: b"{}")
+    pol = broker.Policy(approve=lambda s: True, max_calls=3)
+    for _ in range(3):
+        _refused(lambda: _call(key, send, path="/a/../b", policy=pol), ". or ..")
+    ok, d = _refused(lambda: _call(key, send, policy=pol), "limit of 3")
+    return ok and not send.seen, d
+
+
 def _read_with_body(key):
     send = _fake_server(lambda req: b"{}")
     ok, d = _refused(lambda: _call(key, send, body={"a": 1}), "may not have a body")
@@ -376,7 +402,19 @@ def _log_tests():
         return (ok and n == 1 and "refused" in "\n".join(read(path))), \
             "a refused request is written to the log"
 
+    def stays_broken(key, log, path):
+        fill(key, log)
+        write(path, read(path)[:-2])
+        send = _fake_server(lambda req: b"{}")
+        _call(key, send, audit=log)              # later calls must not
+        _call(key, send, audit=log)              # make the log look healthy
+        text = "\n".join(read(path))
+        return (not log.verify()[0] and "LOG-PROBLEM-FOUND" in text), \
+            "after a cut, later calls cannot make the log look healthy again"
+
     return [("The activity log holds no key", with_log(keyless)),
+            ("After tampering the log stays flagged, even after more calls",
+             with_log(stays_broken)),
             ("Editing the activity log is detected", with_log(edited)),
             ("Deleting from the activity log is detected", with_log(removed)),
             ("Cutting the end off the activity log is detected", with_log(tail_cut)),
@@ -405,42 +443,51 @@ def _helpers():
             ("Copy-and-go does not take a web address as a key", url_not_a_key)]
 
 
+def _sections():
+    return [
+        ("Key leaks", _leak_attacks() + [
+            ("A server that echoes the key in a header is hidden", _header_leak),
+            ("The key reaches only the recipe's own server", _attack_reaches_api)]),
+        ("Addresses and paths", _paths() + _private_ips() + [
+            ("A query that changes the HTTP method is refused", _override_query)]),
+        ("Approval and limits", [
+            ("A write is refused when the person says no", _write_denied),
+            ("A write is refused when no one can be asked", _write_no_prompt),
+            ("After three 'no' answers, nothing more is sent", _three_noes),
+            ("The approval text shows every parameter and the body", _prompt_shows_everything),
+            ("A request padded to hide its body from the approval text is refused",
+             _prompt_cannot_be_padded),
+            ("A long query value is refused, never shown cut off", _query_value_not_cut),
+            ("A long body is refused, never shown cut off", _body_tail_not_cut),
+            ("A read request with a body is refused", _read_with_body),
+            ("A flood of calls is stopped at the limit", _flood),
+            ("Refused requests count toward the limit too", _refusals_use_the_limit)]),
+        ("AWS key-minting", _aws_cases()),
+        ("Activity log", _log_tests()),
+        ("Helper programs", _helpers()),
+    ]
+
+
 def attacks():
-    items = []
-    items += _leak_attacks()
-    items.append(("A server that echoes the key in a header is hidden", _header_leak))
-    items.append(("The key reaches only the recipe's own server", _attack_reaches_api))
-    items += _paths()
-    items += _private_ips()
-    items.append(("A query that changes the HTTP method is refused", _override_query))
-    items.append(("A write is refused when the person says no", _write_denied))
-    items.append(("A write is refused when no one can be asked", _write_no_prompt))
-    items.append(("After three 'no' answers, nothing more is sent", _three_noes))
-    items.append(("The approval text shows every parameter and the body", _prompt_shows_everything))
-    items.append(("A request padded to hide its body from the approval text is refused",
-                  _prompt_cannot_be_padded))
-    items.append(("A read request with a body is refused", _read_with_body))
-    items.append(("A flood of calls is stopped at the limit", _flood))
-    items += _aws_cases()
-    items += _log_tests()
-    items += _helpers()
-    return items
+    return [pair for _g, items in _sections() for pair in items]
 
 
 def run_all() -> list[dict]:
     # a made-up key with awkward characters, used nowhere else
     key = "sk_selftest_" + secrets.token_hex(12) + "+/=&%"
     results = []
-    for name, fn in attacks():
-        try:
-            ok, detail = fn(key)
-        except Exception as e:                           # a crash is a failure
-            ok, detail = False, f"crashed: {type(e).__name__}: {str(e)[:60]}"
-        results.append({"attack": name, "pass": bool(ok), "detail": detail})
+    for group, items in _sections():
+        for name, fn in items:
+            try:
+                ok, detail = fn(key)
+            except Exception as e:                       # a crash is a failure
+                ok, detail = False, f"crashed: {type(e).__name__}: {str(e)[:60]}"
+            results.append({"group": group, "attack": name, "pass": bool(ok),
+                            "detail": detail})
     return results
 
 
-def cmd_selftest(as_json: bool = False) -> int:
+def cmd_selftest(as_json: bool = False, verbose: bool = False) -> int:
     results = run_all()
     failed = [r for r in results if not r["pass"]]
     if as_json:
@@ -449,14 +496,25 @@ def cmd_selftest(as_json: bool = False) -> int:
     else:
         print("\noathkey selftest - attacking itself with a made-up key and a "
               "pretend server\n(no network, no real key used)\n")
+        groups = []
         for r in results:
-            print(f"  {'PASS' if r['pass'] else 'FAIL'}  {r['attack']}")
-            if not r["pass"]:
-                print(f"        -> {r['detail']}")
+            if r["group"] not in groups:
+                groups.append(r["group"])
+        for g in groups:
+            rs = [r for r in results if r["group"] == g]
+            good = sum(1 for r in rs if r["pass"])
+            print(f"  {g:<22} {good} of {len(rs)} stopped")
+            for r in rs:
+                if verbose or not r["pass"]:
+                    print(f"      {'PASS' if r['pass'] else 'FAIL'}  {r['attack']}")
+                    if not r["pass"]:
+                        print(f"            -> {r['detail']}")
         print(f"\n{len(results) - len(failed)} of {len(results)} attacks stopped.")
         if failed:
             print("Some attacks got through. Please report this (see SECURITY.md).\n")
         else:
-            print("This checks the rules above only. It cannot show that nothing "
-                  "else can go wrong\n(see SECURITY.md for what oathkey does not stop).\n")
+            print("These are simulated attacks on oathkey's rules, using a pretend "
+                  "server. They do not\ntest the live network layer, and cannot show "
+                  "that nothing else can go wrong. See SECURITY.md.\n"
+                  "(Add --verbose to see every attack.)\n")
     return 1 if failed else 0

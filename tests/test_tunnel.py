@@ -136,7 +136,7 @@ class TestMCP(unittest.TestCase):
                            CATALOG)
         text = r["result"]["content"][0]["text"]
         self.assertIn("https://acme.test/keys", text)
-        self.assertIn("oathkey connect acme", text)
+        self.assertIn("oathkey get acme", text)
 
     def test_get_recipe_unknown(self):
         r = mcp_mod.handle({"jsonrpc": "2.0", "id": 5, "method": "tools/call",

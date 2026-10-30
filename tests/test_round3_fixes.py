@@ -510,7 +510,7 @@ class TestKeychain(unittest.TestCase):
                                       keychain=fake)("ACME_API_KEY", FAKE_KEY)
         self.assertEqual(stored, [("acme", "ACME_API_KEY", FAKE_KEY, keychain_mod.LINUX)])
         self.assertIn("Secret Service", desc)
-        self.assertIn("oathkey run acme", desc)
+        self.assertIn("saved ACME_API_KEY", desc)
         self.assertNotIn(FAKE_KEY, desc)
         self.assertFalse(os.path.exists(env))
 

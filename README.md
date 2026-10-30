@@ -1,6 +1,6 @@
 # oathkey
 
-**Let your AI use your API keys. It can never see them.**
+**Let your AI use your API keys without ever holding them.**
 
 - The key sits in your computer's own keychain. When your AI needs an API, it asks oathkey to make the call.
 - The reply is cleaned of the key, anything that changes data needs your click, and every call is written to a log.
@@ -11,8 +11,8 @@
 ```
 pipx install git+https://github.com/calasdan-sketch/oathkey
 oathkey get github            # opens the key page; you click Copy; oathkey tests it and saves it
-oathkey call github GET /user # works, and prints the answer - never the key
-oathkey selftest              # watch oathkey attack itself and print PASS or FAIL for each attack
+oathkey call github GET /user # a window asks once to allow github reads: click Yes. Prints the answer, never the key
+oathkey selftest              # watch oathkey attack itself; prints how many attacks it stopped
 oathkey install               # plug it into Claude, Cursor or VS Code, then restart that app
 ```
 
@@ -24,7 +24,7 @@ To see what it did: `oathkey audit show`.
 
 ## Why not just put the key in a `.env` file?
 
-AI coding tools read files in your project, and they paste what they read into a chat that someone else's computer sees. A key in a file, a chat or a config can leak in seconds. With oathkey the key is never in a file the AI can read, and never in anything it is shown.
+AI coding tools read files in your project, and they paste what they read into a chat that someone else's computer sees. A key in a file, a chat or a config can leak in seconds. With oathkey your AI never receives the key: it stays in your computer's keychain and oathkey adds it to the request itself. `oathkey get` will not leave a key in a file in your project folder.
 
 ## How it works
 
@@ -32,24 +32,25 @@ AI coding tools read files in your project, and they paste what they read into a
 2. **Your AI asks for an action**, not a key: "GET /user on GitHub". It can only name the service, the method, the path and the data.
 3. **oathkey makes the call itself**, to the service's real address only, adds the key, and hands back the answer with any trace of the key removed.
 
-Reading is automatic after the first "yes". Anything that creates, changes or deletes pops up a window and waits for you.
+Reads are allowed after one "yes" per AI session (a window asks the first time). Anything that creates, changes or deletes pops up a window and waits for you. `oathkey call` is you making the same brokered call by hand, with no AI involved.
 
 ## Check it yourself (don't trust us)
 
 | Command | What it shows |
 |---|---|
-| `oathkey selftest` | Attacks oathkey with a made-up key and a pretend server (no network, no real key): a server that echoes the key in disguise, tricky addresses, names that point inside your network, writes without permission, edits to the log. Prints PASS or FAIL for each, and exits with an error if any attack gets through. |
+| `oathkey selftest` | Runs oathkey's rules against simulated attacks, using a made-up key and a pretend server: a server that echoes the key in disguise, tricky addresses, names that point inside your network, writes without permission, edits to the log. Prints how many it stopped (`--verbose` lists each) and exits with an error if any gets through. It does not test the live network layer, so treat it as a check of the rules, not a security audit. |
 | `oathkey doctor` | One-paste health check: keychain, activity log, which AI tools it is plugged into, and a quick self-attack run. |
 | `oathkey scan` | Finds API keys lying in your project files, AI-tool settings and shell history (`--git` also checks git history). It never prints a whole key. |
-| `oathkey audit verify` | Checks the activity log was not edited, cut short or deleted. |
+| `oathkey audit verify` | Checks the activity log was not edited, cut short or deleted. If it did not check out, `audit reset` starts a fresh log and keeps the old one. |
 
-oathkey uses only Python's own standard library, and a test in the repository fails if that ever changes.
+oathkey uses only Python's own standard library, and a test in the repository ([tests/test_stdlib_only.py](tests/test_stdlib_only.py)) fails if that ever changes.
 
 ## Commands
 
 **Start**
 
 - `get <service>` - one command: opens the key page, takes the key when you click Copy (then empties the clipboard), tests it, saves it in the keychain. `--no-clipboard` uses hidden typing instead.
+- `start` - a short guided tour: what is connected and what to do next.
 - `install` / `uninstall` - plug oathkey into (or remove it from) Claude Desktop, Cursor, Claude Code and VS Code.
 - `list` - the services it knows.
 
@@ -73,11 +74,11 @@ oathkey uses only Python's own standard library, and a test in the repository fa
 - `remote`, `trust-server`, `deploy` - use a key on your own server over ssh.
 - `add` - make your own service recipe. `find` - look for free public APIs.
 
-Most commands accept `--json`. Exit codes: 0 fine, 1 problem, 2 wrong usage, 3 service not found, 5 refused by policy, 7 network problem.
+Many commands accept `--json` (try `list`, `status`, `selftest`, `doctor`, `audit`). Exit codes: 0 fine, 1 problem, 2 wrong usage, 3 service not found, 5 refused by policy, 7 network problem.
 
 ## Services
 
-Airtable, Anthropic (Claude API), AssemblyAI, AWS (access key), Brave Search API, Cloudflare, Cohere, Deepgram, Discord (bot token), eBay, ElevenLabs, GitHub, Google AI Studio (Gemini API), Groq, Hugging Face, Mailgun, Mistral AI, Netlify, Notion, OpenAI, OpenRouter, OpenWeather, PayPal (live REST app), Pinecone, Postmark (server API token), Replicate, Resend, SendGrid, Spotify Web API, Stripe, Supabase (Management API access token), Tavily, Together AI, Twilio, Vercel
+35 services are built in, from GitHub and Stripe to OpenAI and AWS. `oathkey list` shows them all.
 
 Not listed? `oathkey add` makes a recipe in a minute. A recipe cannot send a built-in service's key to a different server.
 

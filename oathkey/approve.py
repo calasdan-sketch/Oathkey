@@ -67,7 +67,7 @@ def dialog(summary: str) -> bool | None:
             return r.returncode == 0 and "button returned:Yes" in r.stdout
         for names, argv in ((("zenity",), ["--question", "--no-markup",
                                            "--title=oathkey", "--text=" + msg]),
-                            (("kdialog",), ["--yesno", msg, "--title", "oathkey"])):
+                            (("kdialog",), ["--yesno", _no_markup(msg), "--title", "oathkey"])):
             exe = _tool(*[d + "/" + n for n in names for d in ("/usr/bin", "/bin")])
             if exe:
                 return subprocess.run([exe] + argv, timeout=TIMEOUT,
@@ -75,6 +75,13 @@ def dialog(summary: str) -> bool | None:
     except (OSError, subprocess.SubprocessError):
         return None
     return None
+
+
+def _no_markup(msg: str) -> str:
+    """kdialog has no plain-text switch and treats <b>...</b> as markup, so a
+    request could dress itself up. Turn the three special characters into
+    their harmless spelling."""
+    return msg.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
 def _flush(inp) -> None:

@@ -151,7 +151,7 @@ class TestMCPTools(unittest.TestCase):
     def test_get_apikey(self):
         d = _call("get_public_api", {"name": "Weatherstack"})
         self.assertIn("oathkey add", d["wiring"])
-        self.assertIn("oathkey connect", d["wiring"])
+        self.assertIn("oathkey get", d["wiring"])
 
     def test_get_missing(self):
         resp = mcp_mod.handle(

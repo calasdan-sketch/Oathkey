@@ -151,7 +151,7 @@ def collect_values(recipe: dict, env_file: str, backend=None) -> dict:
         if not value:
             raise RemoteError(
                 f"no stored key for '{recipe['service']}' ({var}). Run "
-                f"`oathkey connect {recipe['service']}` first.", 1)
+                f"`oathkey get {recipe['service']}` first.", 1)
         if "\n" in value or "\r" in value or "\0" in value:
             raise RemoteError(f"the stored {var} has a line break in it; "
                               "run `oathkey rotate` to replace it.", 1)

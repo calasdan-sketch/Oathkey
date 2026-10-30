@@ -38,6 +38,10 @@ _PATH_OK = re.compile(r"/[A-Za-z0-9._~!$&'()*+,;=:@%/-]*")
 _EXPOSED_HEADERS = ("content-type", "content-length", "retry-after",
                     "x-ratelimit-remaining", "x-ratelimit-reset", "location")
 
+MAX_QUERY_PART = 200    # longest query name or value shown in full
+MAX_BODY_SHOWN = 400    # longest body shown in full; bigger is refused
+TOO_LONG = ("This request is too long for you to review safely, so it was "
+            "refused. Ask for something smaller.")
 MAX_REVIEW = 900     # longest request description a person can really read
 
 # AWS "GET" requests can still mint new credentials (GetSessionToken,
@@ -268,11 +272,17 @@ def describe(recipe: dict, method: str, host: str, url: str, data) -> str:
     q = urllib.parse.parse_qsl(parts.query, keep_blank_values=True)
     text = f"{method} https://{host}{parts.path}"
     if q:
-        text += "  query: " + ", ".join(f"{k}={v[:60]}" for k, v in q)
+        for k, v in q:
+            if len(k) > MAX_QUERY_PART or len(v) > MAX_QUERY_PART:
+                raise BrokerError(TOO_LONG, 5)      # never show a cut-off value
+        text += "  query: " + ", ".join(f"{_clean(k, 999)}={_clean(v, 999)}"
+                                         for k, v in q)
     if data:
+        if len(data) > MAX_BODY_SHOWN:
+            raise BrokerError(TOO_LONG, 5)          # never show a cut-off body
         text += (f"  body: {len(data)} bytes, sha256 "
-                 f"{hashlib.sha256(data).hexdigest()[:12]}, starts: "
-                 f"{data[:160].decode('utf-8', 'replace')!r}")
+                 f"{hashlib.sha256(data).hexdigest()[:12]}, text: "
+                 f"{data.decode('utf-8', 'replace')!r}")
     return f"Using your '{recipe['service']}' key:  " + text
 
 
@@ -293,6 +303,7 @@ def call(recipe: dict, values: dict, method: str, path: str,
     method = str(method).upper()
     if method not in READ_METHODS | WRITE_METHODS:
         raise BrokerError("method not supported", 5)
+    policy.count()          # every attempt counts, refused ones included
     try:
         host, url = build_url(recipe, path, query)
     except BrokerError:
@@ -322,17 +333,17 @@ def call(recipe: dict, values: dict, method: str, path: str,
         if len(data) > MAX_BODY_IN:
             raise BrokerError("request body too large", 5)
 
-    # permission: counted first (so floods are limited before they can
-    # nag the person), then writes need a grant or a person's yes
-    policy.count()
+    # permission: writes need a grant or a person's yes
     with policy.lock:
         if method in WRITE_METHODS and not policy.allow_write:
-            summary = describe(recipe, method, host, url, data)
+            try:
+                summary = describe(recipe, method, host, url, data)
+            except BrokerError:
+                _log(audit, recipe, method, host, path, 0, 0, "refused")
+                raise
             if len(summary) > MAX_REVIEW:
                 _log(audit, recipe, method, host, path, 0, 0, "refused")
-                raise BrokerError("This request is too long for you to review "
-                                  "safely, so it was refused. Ask for something "
-                                  "smaller.", 5)
+                raise BrokerError(TOO_LONG, 5)
             if not policy.ask(summary):
                 _log(audit, recipe, method, host, path, 0, 0, "denied")
                 raise BrokerError(NO_APPROVAL, 5)
@@ -352,7 +363,18 @@ def call(recipe: dict, values: dict, method: str, path: str,
     spec["url"] = url
     token = None
     if auth_type == "oauth2_client_credentials":
-        token = _v._fetch_token(spec, _v._creds(creds), timeout)
+        try:
+            th = urllib.parse.urlsplit(str(spec["auth"].get("token_url", "")))
+            if th.scheme != "https" or not th.hostname:
+                raise BrokerError("the token address must be https", 5)
+            resolve_public(th.hostname, th.port or 443, resolver)
+            token = _v._fetch_token(spec, _v._creds(creds), timeout, no_proxy=True)
+        except BrokerError:
+            _log(audit, recipe, method, host, path, 0, 0, "refused")
+            raise
+        except _v.ValidationError as e:
+            _log(audit, recipe, method, host, path, 0, 0, "network-error")
+            raise BrokerError(f"could not get a sign-in token: {e}", 5) from None
     req = _v._build_request(spec, creds, token)       # builds GET + credential
     req.method = method
     if data is not None:
@@ -392,7 +414,10 @@ def call(recipe: dict, values: dict, method: str, path: str,
     for k in _EXPOSED_HEADERS:
         if k in headers:
             hs = Scrubber(secrets)
-            keep[k] = (hs.feed(headers[k].encode()) + hs.flush()).decode("utf-8", "replace")
+            val = (hs.feed(headers[k].encode()) + hs.flush()).decode("utf-8", "replace")
+            if loosely_contains(val, secrets):
+                val = "[header withheld: it appears to contain the key in a disguised form]"
+            keep[k] = val
     _log(audit, recipe, method, host, path, status, len(raw), "ok",
          ms=int((time.time() - started) * 1000))
     return {"status": status, "headers": keep, "body": shown,
@@ -406,7 +431,7 @@ def _log(audit, recipe, method, host, path, status, size, result, ms=0):
         return
     try:
         audit.write({"service": recipe.get("service"), "method": method,
-                     "host": host, "path": path.split("?")[0], "status": status,
+                     "host": host, "path": _clean(path.split("?")[0], 200), "status": status,
                      "bytes": size, "result": result, "ms": ms})
     except OSError:
         pass            # ready() already refused to act when the log is unwritable
@@ -450,10 +475,19 @@ def _file_lock(path: str):
             os.close(fd)
 
 
+_BAD = object()      # an end-marker file that exists but cannot be read
+
+
 class AuditLog:
     """Append-only JSON lines; each line holds the hash of the line before.
     Change or remove any line and verify() says so. Never records query
-    strings, bodies or headers."""
+    strings, bodies or headers.
+
+    A second small file (.head) remembers how many entries there should be
+    and the last hash, so cutting off the end or deleting the log shows. Once
+    a problem is seen, a flag file (.broken) is written and stays until the
+    person runs `oathkey audit reset`; later writes never lower the count and
+    never make the log look healthy again."""
 
     def __init__(self, path: str):
         self.path = path
@@ -461,18 +495,13 @@ class AuditLog:
 
     _lock = threading.Lock()
 
-    def _last_hash(self) -> str:
-        try:
-            with open(self.path, "rb") as f:
-                lines = f.read().splitlines()
-        except OSError:
-            return "0" * 64
-        for line in reversed(lines):             # skip junk at the end
-            try:
-                return json.loads(line)["hash"]
-            except (ValueError, KeyError, TypeError):
-                continue
-        return "0" * 64
+    @property
+    def anchor_path(self) -> str:
+        return self.path + ".head"
+
+    @property
+    def broken_path(self) -> str:
+        return self.path + ".broken"
 
     def ready(self) -> None:
         """Refuse to act if we could not record it afterwards."""
@@ -483,37 +512,54 @@ class AuditLog:
             raise BrokerError("The activity log cannot be written, so "
                               "nothing was sent.", 5) from None
 
-    @property
-    def anchor_path(self) -> str:
-        return self.path + ".head"
+    @staticmethod
+    def _digest(entry: dict) -> str:
+        return hashlib.sha256(json.dumps(entry, sort_keys=True).encode()).hexdigest()
 
-    def _count(self) -> int:
-        n = 0
+    def _scan(self):
+        """One pass: (entries, last good hash, chain intact, file exists)."""
+        prev, n = "0" * 64, 0
         try:
             with open(self.path, "rb") as f:
-                for line in f.read().splitlines():
-                    try:
-                        json.loads(line)["hash"]
-                        n += 1
-                    except (ValueError, KeyError, TypeError):
-                        continue
+                data = f.read()
+        except FileNotFoundError:
+            return 0, prev, True, False
         except OSError:
-            pass
-        return n
+            return 0, prev, False, True
+        for line in data.splitlines():
+            try:
+                e = json.loads(line)
+                h = e.pop("hash")
+                good = e.get("prev") == prev and h == self._digest(e)
+            except (ValueError, KeyError, TypeError, AttributeError):
+                good = False
+            if not good:
+                return n, prev, False, True
+            prev, n = h, n + 1
+        return n, prev, True, True
+
+    def _last_hash(self) -> str:
+        return self._scan()[1]
+
+    def _count(self) -> int:
+        return self._scan()[0]
 
     def _read_anchor(self):
+        """None = no marker file; _BAD = unreadable; else (count, hash)."""
         try:
             with open(self.anchor_path, encoding="utf-8") as f:
-                count, h = f.read().split()
-            return int(count), h
-        except (OSError, ValueError):
+                text = f.read()
+        except FileNotFoundError:
             return None
+        except OSError:
+            return _BAD
+        try:
+            count, h = text.split()
+            return int(count), h
+        except ValueError:
+            return _BAD
 
     def _save_anchor(self, count: int, h: str) -> None:
-        """A second small file holding how many entries there should be and
-        the last hash, so cutting the end off the log (or deleting it) shows.
-        Someone running as you can rewrite both files; this catches accidents
-        and casual tampering, not a determined attacker (see SECURITY.md)."""
         tmp = self.anchor_path + ".tmp"
         try:
             with open(tmp, "w", encoding="utf-8") as f:
@@ -522,37 +568,77 @@ class AuditLog:
         except OSError:
             pass
 
+    @staticmethod
+    def _problem(n, last, ok, a):
+        if not ok:
+            return "a line was changed, removed or damaged"
+        if a is _BAD:
+            return "the end-marker file is unreadable"
+        if a is not None and (n < a[0] or (n == a[0] and last != a[1])):
+            return "entries were cut off or replaced"
+        return None
+
+    def broken_reason(self):
+        try:
+            with open(self.broken_path, encoding="utf-8") as f:
+                return f.read().strip() or "a problem was found earlier"
+        except FileNotFoundError:
+            return None
+        except OSError:
+            return "a problem was found earlier"
+
+    def _append(self, entry: dict, prev: str) -> str:
+        entry = dict(entry, ts=int(time.time()), prev=prev)
+        entry["hash"] = self._digest(entry)
+        fd = os.open(self.path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+        try:
+            os.write(fd, (json.dumps(entry, sort_keys=True) + "\n").encode())
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        return entry["hash"]
+
     def write(self, entry: dict) -> None:
         with AuditLog._lock, _file_lock(self.path):   # one writer at a time
-            count = self._count()
-            entry = dict(entry, ts=int(time.time()), prev=self._last_hash())
-            entry["hash"] = hashlib.sha256(
-                json.dumps(entry, sort_keys=True).encode()).hexdigest()
-            fd = os.open(self.path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
-            try:
-                os.write(fd, (json.dumps(entry, sort_keys=True) + "\n").encode())
-                os.fsync(fd)
-            finally:
-                os.close(fd)
-            self._save_anchor(count + 1, entry["hash"])
+            n, last, ok, _exists = self._scan()
+            a = self._read_anchor()
+            reason = self._problem(n, last, ok, a)
+            flagged = self.broken_reason() is not None
+            if reason and not flagged:
+                try:
+                    with open(self.broken_path, "w", encoding="utf-8") as f:
+                        f.write(reason + "\n")
+                except OSError:
+                    pass
+                last = self._append(
+                    {"service": None, "method": "-", "host": "-", "path": "-",
+                     "status": 0, "bytes": 0, "ms": 0,
+                     "result": "LOG-PROBLEM-FOUND", "note": reason}, last)
+                n += 1
+                flagged = True
+            h = self._append(entry, last)
+            if not flagged and not reason:
+                self._save_anchor(n + 1, h)      # a flagged log never re-anchors
 
     def verify(self) -> tuple[bool, int]:
-        prev, n = "0" * 64, 0
-        try:
-            with open(self.path, "rb") as f:
-                for line in f.read().splitlines():
-                    e = json.loads(line)
-                    h = e.pop("hash")
-                    if e.get("prev") != prev or h != hashlib.sha256(
-                            json.dumps(e, sort_keys=True).encode()).hexdigest():
-                        return False, n
-                    prev, n = h, n + 1
-        except FileNotFoundError:
-            a = self._read_anchor()
-            return (a is None or a[0] == 0), 0
-        except (ValueError, KeyError):
+        a = self._read_anchor()                  # read first: a write landing
+        n, last, ok, exists = self._scan()       # in between can only add entries
+        if self.broken_reason() is not None:
             return False, n
-        a = self._read_anchor()
-        if a is not None and (n < a[0] or (n == a[0] and prev != a[1])):
-            return False, n            # entries were cut off or replaced
+        if self._problem(n, last, ok, a):
+            return False, n
         return True, n
+
+    def reset(self):
+        """Start a fresh log. The old one is kept beside it, never deleted."""
+        with AuditLog._lock, _file_lock(self.path):
+            kept = None
+            if os.path.exists(self.path):
+                kept = f"{self.path}.problem-{int(time.time())}"
+                os.replace(self.path, kept)
+            for p in (self.anchor_path, self.broken_path):
+                try:
+                    os.remove(p)
+                except OSError:
+                    pass
+            return kept

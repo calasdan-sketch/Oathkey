@@ -66,7 +66,7 @@ def _tool_defs() -> list[dict]:
          "description": ("Get full details for one public API plus how to "
                          "wire it: no-auth APIs can be called directly; "
                          "apiKey APIs should go through `oathkey add` + "
-                         "`oathkey connect` so the key is stored securely."),
+                         "`oathkey get <service>` so the key is stored securely."),
          "inputSchema": {"type": "object",
                          "properties": {"name": {"type": "string"}},
                          "required": ["name"]}},
@@ -135,7 +135,7 @@ def _call_api(catalog: dict, args: dict) -> dict:
         return fail(str(e))
     except remote.RemoteError:
         return fail("No key is saved for '%s'. Tell the person to run "
-                    "`oathkey connect %s --store keychain` in a terminal. "
+                    "`oathkey get %s` in a terminal. "
                     "Never ask them to paste a key into the chat."
                     % (recipe["service"], recipe["service"]))
     return {"content": [{"type": "text", "text": json.dumps(result)}]}
@@ -369,7 +369,7 @@ def handle(request, catalog: dict[str, dict],
                 return ok({"content": [{"type": "text", "text": err_text}],
                            "isError": True})
             hint = ("\n\nTo complete the connection, run in a terminal: "
-                    f"`oathkey connect {recipe['service']}` — it opens the key "
+                    f"`oathkey get {recipe['service']}` — it opens the key "
                     "page, validates the key, and stores it securely. "
                     "Never ask the user to paste the key into chat.")
             return ok({"content": [{"type": "text",
@@ -417,7 +417,7 @@ def handle(request, catalog: dict[str, dict],
                     "Needs an API key. Do NOT ask the user to paste it. "
                     "Run `oathkey add` in a terminal to save this service's key "
                     "recipe (use the docs URL below as the key page), then "
-                    f"`oathkey connect <service>` to store the key securely. "
+                    f"`oathkey get <service>` to store the key securely. "
                     f"Docs: {detail['url']}")
             else:
                 detail["wiring"] = (
