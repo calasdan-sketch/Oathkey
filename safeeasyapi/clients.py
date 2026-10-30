@@ -128,3 +128,35 @@ def run(names, yes: bool, ask=input, out=print, **kw) -> int:
     elif done:
         out("\nRestart the AI tool so it loads safeeasyapi.")
     return 0
+
+
+def remove(names, yes: bool, ask=input, out=print, **kw) -> int:
+    """Take safeeasyapi out of the AI tools' config files (other servers stay)."""
+    tg = targets(**kw)
+    chosen = names or list(tg)
+    for n in chosen:
+        if n not in tg:
+            out(f"unknown target '{n}'. Choose from: {', '.join(tg)}")
+            return 2
+        path, key = tg[n]
+        if not os.path.exists(path):
+            continue
+        try:
+            with open(path, encoding="utf-8-sig") as f:
+                data = json.loads(f.read() or "{}")
+        except (ValueError, OSError):
+            out(f"  {n}: could not read {path}; not touching it.")
+            continue
+        if not isinstance(data.get(key), dict) or NAME not in data[key]:
+            continue
+        out(f"  {n}: will remove '{NAME}' from {path}")
+        if not yes and ask("    go ahead? [y/N] ").strip().lower() not in ("y", "yes"):
+            out("    skipped.")
+            continue
+        new = json.loads(json.dumps(data))
+        del new[key][NAME]
+        b = apply({"path": path, "present": True, "new": new})
+        out(f"    done. Backup: {b}")
+    out("\nRestart the AI tool. Your saved keys were not touched "
+        "(`safeeasyapi forget <service>` removes one).")
+    return 0

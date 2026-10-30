@@ -49,6 +49,19 @@ class Install(unittest.TestCase):
         with self.assertRaises(ValueError):
             clients.plan(self.path, "mcpServers")
 
+    def test_uninstall_keeps_other_servers(self):
+        json.dump({"mcpServers": {"other": {"command": "x"}}}, open(self.path, "w"))
+        clients.apply(clients.plan(self.path, "mcpServers"))
+        tg = {"cursor": (self.path, "mcpServers")}
+        orig = clients.targets
+        clients.targets = lambda **kw: tg
+        try:
+            clients.remove(["cursor"], True, out=lambda *a: None)
+        finally:
+            clients.targets = orig
+        got = json.load(open(self.path))
+        self.assertEqual(list(got["mcpServers"]), ["other"])
+
     def test_asks_first(self):
         out = []
         clients.run(["cursor"], False, ask=lambda q: "n", out=out.append,

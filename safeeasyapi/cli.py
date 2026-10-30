@@ -138,14 +138,19 @@ def _build_parser() -> argparse.ArgumentParser:
     ins.add_argument("targets", nargs="*", help="claude-desktop, cursor, claude-code, vscode "
                                                 "(default: the ones found)")
     ins.add_argument("--yes", action="store_true", help="Do not ask.")
+    un = sub.add_parser("uninstall", help="Remove safeeasyapi from your AI tools' settings "
+                                          "(your saved keys are not touched).")
+    un.add_argument("targets", nargs="*")
+    un.add_argument("--yes", action="store_true", help="Do not ask.")
     sub.add_parser("start", help="First run: check this computer, look for loose "
                                  "keys, and say what to do next.")
     stt = sub.add_parser("status", help="What is connected, and is the activity log intact.")
     stt.add_argument("--json", action="store_true", help="Machine-readable output.")
     stt.add_argument("--env-file", default=".env")
     au = sub.add_parser("audit", help="Check the activity log has not been tampered with.")
-    au.add_argument("action", choices=["verify"])
+    au.add_argument("action", choices=["verify", "show"])
     au.add_argument("--json", action="store_true")
+    au.add_argument("--last", type=int, default=20, help="how many entries to show")
     ca = sub.add_parser("call", help="Call a connected service's API; the key is "
                                      "added for you and hidden from the output.")
     ca.add_argument("service")
@@ -573,6 +578,9 @@ def _main(argv: list[str] | None = None) -> int:
     if args.cmd == "install":
         from . import clients
         return clients.run(args.targets, args.yes)
+    if args.cmd == "uninstall":
+        from . import clients
+        return clients.remove(args.targets, args.yes)
     if args.cmd in ("start", "status", "audit", "call", "serve"):
         from . import cmds
         if args.cmd == "start":
@@ -580,7 +588,7 @@ def _main(argv: list[str] | None = None) -> int:
         if args.cmd == "status":
             return cmds.cmd_status(catalog, args.env_file, args.json)
         if args.cmd == "audit":
-            return cmds.cmd_audit(args.action, args.json)
+            return cmds.cmd_audit(args.action, args.json, args.last)
         if args.cmd == "serve":
             return cmds.cmd_serve(catalog, args.port, args.env_file)
         recipe = catalog.get(args.service)

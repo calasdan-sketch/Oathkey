@@ -44,11 +44,13 @@ def cmd_status(catalog: dict, env_file: str, as_json: bool) -> int:
             "with_keys": sum(r["key_stored"] for r in rows),
             "audit_log_ok": ok, "audit_entries": n,
             "connected": [r["service"] for r in rows if r["key_stored"]]}
-    text = (f"safeeasyapi is ready.\n"
+    head = ("safeeasyapi is ready." if info["with_keys"]
+            else "Not ready yet: no key is saved. Run `safeeasyapi start`.")
+    text = (f"{head}\n"
             f"  services known: {info['services']}   with a key stored: "
             f"{info['with_keys']}\n"
             f"  connected: {', '.join(info['connected']) or 'none yet'}\n"
-            f"  activity log: {'intact' if ok else 'TAMPERED - do not trust it'} "
+            f"  activity log: {'intact' if ok else 'DAMAGED OR CHANGED - run `safeeasyapi audit show`'} "
             f"({n} entries)")
     _emit(info, as_json, text)
     return OK if ok else PROBLEM
@@ -95,8 +97,30 @@ def cmd_call(recipe: dict, args) -> int:
 
 # ---- audit ----------------------------------------------------------------------
 
-def cmd_audit(action: str, as_json: bool) -> int:
+def cmd_audit(action: str, as_json: bool, last: int = 20) -> int:
     log = broker.AuditLog(os.path.join(_home(), "audit.log"))
+    if action == "show":
+        import time as _t
+        rows = []
+        try:
+            with open(log.path, "rb") as f:
+                for line in f.read().splitlines()[-max(1, last):]:
+                    try:
+                        rows.append(json.loads(line))
+                    except ValueError:
+                        pass
+        except OSError:
+            pass
+        if as_json:
+            print(json.dumps(rows, indent=2))
+        elif not rows:
+            print("nothing yet - no AI has used a key through safeeasyapi.")
+        for e in ([] if as_json else rows):
+            when = _t.strftime("%Y-%m-%d %H:%M", _t.localtime(e.get("ts", 0)))
+            print(f"{when}  {e.get('service')}  {e.get('method')} "
+                  f"{e.get('host')}{e.get('path')}  -> {e.get('status')} "
+                  f"({e.get('result')})")
+        return OK
     ok, n = log.verify()
     _emit({"intact": ok, "entries": n}, as_json,
           f"activity log: {'intact' if ok else 'TAMPERED'} ({n} entries)")
@@ -140,8 +164,9 @@ def cmd_start(catalog: dict, env_file: str) -> int:
     have = [s for s, r in catalog.items() if _have_key(r, env_file)]
     if have:
         print(f"\nConnected already: {', '.join(sorted(have))}.")
-        print("Next: let your AI use them safely - run `safeeasyapi mcp` (or "
-              "`safeeasyapi serve` for other AI tools).")
+        print("Next: run `safeeasyapi install` to plug it into Claude, Cursor or "
+              "VS Code (or `safeeasyapi serve` for other AI tools). Then fully "
+              "quit and reopen that app.")
     else:
         print("\nNext: connect your first service, for example:\n"
               "  safeeasyapi connect github --store keychain")
