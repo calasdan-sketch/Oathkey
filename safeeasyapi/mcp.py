@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import re
 import sys
 
@@ -69,7 +70,63 @@ def _tool_defs() -> list[dict]:
          "inputSchema": {"type": "object",
                          "properties": {"name": {"type": "string"}},
                          "required": ["name"]}},
+        {"name": "call_api",
+         "description": ("Call a connected service's API WITHOUT ever seeing "
+                         "its key. You give service, method, path (like "
+                         "/user), optional query_json and body_json (JSON "
+                         "text). The host and credential are added for you; "
+                         "the key is hidden from the reply. GET is allowed; "
+                         "POST/PUT/PATCH/DELETE ask the person first. Never "
+                         "put keys in any argument."),
+         "inputSchema": {"type": "object",
+                         "properties": {
+                             "service": {"type": "string"},
+                             "method": {"type": "string"},
+                             "path": {"type": "string"},
+                             "query_json": {"type": "string"},
+                             "body_json": {"type": "string"}},
+                         "required": ["service", "method", "path"]}},
     ]
+
+
+_POLICY = None
+
+
+def _session_policy():
+    global _POLICY
+    if _POLICY is None:
+        from . import broker
+        _POLICY = broker.Policy(approve=broker.tty_approve)
+    return _POLICY
+
+
+def _call_api(catalog: dict, args: dict) -> dict:
+    """Run one brokered call; the answer is always scrubbed text."""
+    from . import broker, remote
+
+    def fail(msg):
+        return {"content": [{"type": "text", "text": json.dumps({"error": msg})}],
+                "isError": True}
+    recipe = catalog.get(args.get("service", ""))
+    if not recipe:
+        return fail("no recipe for '%s'. Use list_services." % args.get("service"))
+    try:
+        query = json.loads(args["query_json"]) if args.get("query_json") else None
+        body = json.loads(args["body_json"]) if args.get("body_json") else None
+    except ValueError:
+        return fail("query_json and body_json must be valid JSON text")
+    if query is not None and not isinstance(query, dict):
+        return fail("query_json must be a JSON object")
+    try:
+        values = remote.collect_values(recipe, ".env")
+        audit = broker.AuditLog(os.path.join(remote.home_dir(), "audit.log"))
+        result = broker.call(recipe, values, args["method"], args["path"],
+                             query, body, policy=_session_policy(), audit=audit)
+    except broker.BrokerError as e:
+        return fail(str(e))
+    except remote.RemoteError as e:
+        return fail("no key available for this service: " + str(e)[:120])
+    return {"content": [{"type": "text", "text": json.dumps(result)}]}
 
 
 _TYPE_WORDS = {"string": "a string", "integer": "an integer"}
@@ -346,6 +403,8 @@ def handle(request, catalog: dict[str, dict],
                     f"Docs: {detail['url']}")
             return ok({"content": [{"type": "text",
                                     "text": json.dumps(detail)}]})
+        if name == "call_api":
+            return ok(_call_api(catalog, args))
         return err(INTERNAL_ERROR, f"tool not implemented: {name}")
     return err(INTERNAL_ERROR, f"method not implemented: {method}")
 
