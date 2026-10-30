@@ -7,6 +7,8 @@
 - Plain Python, no extra packages. No account, no server, no cloud. MIT license. **Beta: no independent security review yet.**
 - Not related to OATH/TOTP one-time codes.
 
+![Recording of a terminal running oathkey --version, list, selftest and audit show. The output is real; the demo does not show saving a key.](https://raw.githubusercontent.com/calasdan-sketch/oathkey/main/docs/demo.svg)
+
 ## Try it in 60 seconds
 
 Need pipx? https://pipx.pypa.io
