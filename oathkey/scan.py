@@ -178,7 +178,45 @@ def doctor(env=None, which=shutil.which) -> dict:
         "")
     cafile = env.get("SSL_CERT_FILE") or env.get("REQUESTS_CA_BUNDLE")
     add("custom CA bundle", True, "set" if cafile else "none", "")
+    _doctor_oathkey_checks(add)
     return {"ok": all(c["ok"] for c in checks), "checks": checks}
+
+
+def _doctor_oathkey_checks(add) -> None:
+    """Checks about oathkey itself. Each is wrapped so one failure never
+    hides the others."""
+    import json
+    try:
+        from . import broker, remote
+        log = broker.AuditLog(os.path.join(remote.home_dir(), "audit.log"))
+        ok, n = log.verify()
+        add("activity log", ok,
+            f"{n} entries, chain intact" if ok else f"broken after entry {n}",
+            "The log was edited or damaged. Keep a copy, then run `oathkey audit show`.")
+    except Exception as e:                                   # noqa: BLE001
+        add("activity log", False, f"could not check ({type(e).__name__})", "")
+    try:
+        from . import clients
+        plugged = []
+        for name, (path, key) in clients.targets().items():
+            try:
+                with open(path, encoding="utf-8") as f:
+                    if "oathkey" in json.load(f).get(key, {}):
+                        plugged.append(name)
+            except (OSError, ValueError, AttributeError):
+                continue
+        add("AI tools", True, ("plugged into " + ", ".join(plugged)) if plugged
+            else "none yet", "" if plugged else "Run `oathkey install` to plug it into Claude, Cursor or VS Code.")
+    except Exception as e:                                   # noqa: BLE001
+        add("AI tools", False, f"could not check ({type(e).__name__})", "")
+    try:
+        from . import selftest
+        res = selftest.run_all()
+        passed = sum(1 for r in res if r["pass"])
+        add("self-attack test", passed == len(res), f"{passed} of {len(res)} attacks stopped",
+            "Run `oathkey selftest` to see which attack got through, and report it (see SECURITY.md).")
+    except Exception as e:                                   # noqa: BLE001
+        add("self-attack test", False, f"could not run ({type(e).__name__})", "")
 
 
 def format_doctor(result: dict) -> str:

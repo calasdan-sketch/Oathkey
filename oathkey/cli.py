@@ -69,7 +69,8 @@ def _build_parser() -> argparse.ArgumentParser:
                        help="Get the key from the vendor's own CLI after its browser "
                             "sign-in (built-in recipes that support it, e.g. github).")
 
-    sub.add_parser("list", help="List services with saved recipes.")
+    ls = sub.add_parser("list", help="List services with saved recipes.")
+    ls.add_argument("--json", action="store_true", help="Machine-readable output.")
 
     fg = sub.add_parser("forget", help="Remove a stored key: from the OS "
                                        "keychain and from the .env file.")
@@ -181,7 +182,13 @@ def _build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def _cmd_list(catalog: dict) -> int:
+def _cmd_list(catalog: dict, as_json: bool = False) -> int:
+    if as_json:
+        import json as _json
+        print(_json.dumps([{"service": s, "display": catalog[s]["display"],
+                            "env_vars": list(recipes_mod.env_vars(catalog[s]))}
+                           for s in sorted(catalog)]))
+        return 0
     if not catalog:
         print("no recipes yet - add one with `oathkey add`.")
         return 0
@@ -192,7 +199,7 @@ def _cmd_list(catalog: dict) -> int:
         print(f"    {recipes_mod.printable(slug):14} "
               f"{recipes_mod.printable(r['display'], words=True):38} -> "
               f"{', '.join(recipes_mod.printable(v) for v in recipes_mod.env_vars(r))}")
-    print("\n  `oathkey connect <service>` to set one up.\n")
+    print("\n  `oathkey get <service>` to set one up.\n")
     return 0
 
 
@@ -573,7 +580,7 @@ def _main(argv: list[str] | None = None) -> int:
     catalog = recipes_mod.load_recipes()
 
     if args.cmd == "list":
-        return _cmd_list(catalog)
+        return _cmd_list(catalog, getattr(args, "json", False))
     if args.cmd == "find":
         return _cmd_find(args)
     if args.cmd == "add":

@@ -747,7 +747,7 @@ class TestBrokenPipe(unittest.TestCase):
         out = io.StringIO()
         code, err = self.run_main(["list"], out)
         self.assertEqual((code, err), (0, ""))
-        self.assertIn("oathkey connect <service>", out.getvalue())
+        self.assertIn("oathkey get <service>", out.getvalue())
         with self.assertRaises(SystemExit) as cm:
             self.run_main(["--version"], io.StringIO())
         self.assertEqual(cm.exception.code, 0)
