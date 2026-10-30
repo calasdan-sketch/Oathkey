@@ -48,7 +48,8 @@ class FrontPageTests(unittest.TestCase):
         text = _read("README.md")
         for cmd in ("get", "call", "selftest", "doctor", "scan", "install", "audit",
                     "serve", "mcp", "run", "list"):
-            self.assertTrue(f"oathkey {cmd}" in text.replace("`", "") or f"`{cmd}`" in text\n                            or f"`{cmd} " in text, cmd)
+            self.assertTrue(f"oathkey {cmd}" in text.replace("`", "") or f"`{cmd}`" in text
+                            or f"`{cmd} " in text, cmd)
 
     def test_it_points_at_security_and_the_guide(self):
         text = _read("README.md")

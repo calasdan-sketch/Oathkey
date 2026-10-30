@@ -7,11 +7,15 @@ oathkey is built so an AI agent can use your API keys without being handed them.
 - **A prompt-injected AI sending your key to another server.** The destination comes from the saved service profile, never from the AI. Private and internal addresses are refused, the connection goes to the address we checked, redirects are not followed, proxies are ignored, and odd path tricks are refused.
 - **An AI making changes you did not approve.** Anything other than a read asks you first, in a pop-up window (or, with no window available, on the console with a code shown only on screen). The pop-up shows the method, address, query and the start of the body. Three refusals stop further requests.
 - **Accidental or casual edits to the activity log.** Each entry carries the hash of the one before it (`oathkey audit verify`).
+- **An AI turning a harmless-looking read into new credentials.** For AWS, only plain look-ups are allowed (`GetCallerIdentity` for STS; `Describe*`/`List*` elsewhere); actions that create keys (`GetSessionToken`, `AssumeRole`, ...) are refused.
+- **A request padded to hide what it does.** The approval window lists every query parameter and the size, hash and start of the body; a request too long to review is refused instead of cut short. The pop-up program is found by its full system path, never through PATH or the current folder.
+- **A planted recipe that sends a built-in service's key somewhere else.** A recipe in your own recipes folder cannot redirect a built-in service (or reuse its key name) to a different server.
 - **Dangerous ssh options** passed to `remote`.
 - **Web pages and rebinding tricks** against the local web door (`serve`): loopback only, secret token, exact Host check, Origin refused, no CORS.
 
 ## What it does NOT defend against
 - **Malware, or an AI agent that can run programs as you.** Anything running as you can read your keychain or `.env` directly, edit the activity log (it has no secret key), or drive the screen to click a pop-up. The broker protects against an AI that only uses the tool, not one with full control of your computer. Run risky agents in a separate account or container.
+- **`run` and `remote` handed to an AI that can run commands.** They give the key to a program you name; a program can print its own environment, and a terminal-style session is not scrubbed. Give AIs the MCP tool or `call` only.
 - **A key left where an AI can simply read the file** (`.env`, shell history, AI-tool settings). `oathkey scan` finds these; prefer `--store keychain`.
 - **Harmful actions inside what a key is allowed to do.** GET requests are treated as reads, but some services let a GET change things. Limit each key at the provider (read-only keys, narrow scopes).
 - **What the AI company sees.** Replies from the API go to the AI. If you let the AI read your email through this tool, the AI vendor sees that email.
@@ -19,7 +23,7 @@ oathkey is built so an AI agent can use your API keys without being handed them.
 - **Secrets we have not thought of how to disguise.** The scrubber is best effort; Python also cannot reliably erase secrets from memory.
 - **A compromised service**, or one that logs or leaks your key itself.
 - **The clipboard.** Copy-and-go (`oathkey get`) empties the clipboard right after taking the key, but other programs and clipboard-history tools can read it while it is there and may keep their own copy. If that worries you, use `--no-clipboard` (hidden typing instead).
-- **A tamper-proof log.** The activity log is tamper-evident, not tamper-proof: someone running as you could rewrite it from the start. It is not yet anchored anywhere outside the AI's reach.
+- **A tamper-proof log.** The activity log is tamper-evident, not tamper-proof. Edits, deleted lines, a cut-off end and a deleted file are detected (a small second file remembers how many entries there should be), but someone running as you can rewrite both files. Nothing is anchored outside your account yet.
 
 ## Check it yourself
 
