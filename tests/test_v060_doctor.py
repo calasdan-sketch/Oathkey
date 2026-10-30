@@ -10,9 +10,9 @@ import urllib.error
 from unittest import mock
 
 import _isolation  # noqa: F401
-from safeeasyapi import cli as cli_mod
-from safeeasyapi import doctor
-from safeeasyapi import recipes as recipes_mod
+from oathkey import cli as cli_mod
+from oathkey import doctor
+from oathkey import recipes as recipes_mod
 
 CAT = recipes_mod.load_recipes(recipes_mod.RECIPES_DIR)
 

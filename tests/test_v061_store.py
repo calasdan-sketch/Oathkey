@@ -5,7 +5,7 @@ import threading
 import unittest
 
 import _isolation  # noqa: F401
-from safeeasyapi import store
+from oathkey import store
 
 
 class Parallel(unittest.TestCase):

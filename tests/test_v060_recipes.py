@@ -5,12 +5,12 @@ import re
 import unittest
 
 import _isolation  # noqa: F401
-import safeeasyapi
+import oathkey
 from _stub import Stub
-from safeeasyapi import clipboard as clipboard_mod
-from safeeasyapi import recipes as recipes_mod
-from safeeasyapi import scan as scan_mod
-from safeeasyapi import validate as validate_mod
+from oathkey import clipboard as clipboard_mod
+from oathkey import recipes as recipes_mod
+from oathkey import scan as scan_mod
+from oathkey import validate as validate_mod
 
 CAT = recipes_mod.load_recipes(recipes_mod.RECIPES_DIR)
 def _raw(n):
@@ -387,7 +387,7 @@ class TestVerdictsThroughShippedRecipes(unittest.TestCase):
 class TestConnectShowsTheNewFields(unittest.TestCase):
     def test_least_privilege_and_unverified_are_printed_before_the_key_is_asked_for(self):
         import io
-        from safeeasyapi import connect as connect_mod
+        from oathkey import connect as connect_mod
         out = io.StringIO()
         connect_mod._print_steps(CAT["mailgun"], out)
         text = out.getvalue()
@@ -396,7 +396,7 @@ class TestConnectShowsTheNewFields(unittest.TestCase):
 
     def test_a_limited_key_is_stored_and_the_note_is_shown(self):
         import io
-        from safeeasyapi import connect as connect_mod
+        from oathkey import connect as connect_mod
         env = os.path.join(_isolation.mktemp(), ".env")
         out = io.StringIO()
         code = connect_mod.connect(
@@ -410,7 +410,7 @@ class TestConnectShowsTheNewFields(unittest.TestCase):
         self.assertNotIn("sk_live_ABCDEFGHIJKLMN", out.getvalue())
 
     def test_the_version_is_075(self):
-        self.assertEqual(safeeasyapi.__version__, "0.7.5")
+        self.assertEqual(oathkey.__version__, "0.7.5")
 
 
 if __name__ == "__main__":

@@ -1,24 +1,24 @@
-# SafeEasyAPI (`safeeasyapi`)
+# oathkey (`oathkey`)
 
 **Quickstart**
 
 ```bash
-pipx install safeeasyapi          # Python 3.10+, no other dependencies
-safeeasyapi scan                  # find keys an AI agent can read (works offline)
-safeeasyapi hook install          # stop Claude Code reading your .env files
-safeeasyapi list                  # the services it knows (36 built in)
-safeeasyapi connect github        # opens the key page, shows the exact steps
+pipx install oathkey          # Python 3.10+, no other dependencies
+oathkey scan                  # find keys an AI agent can read (works offline)
+oathkey hook install          # stop Claude Code reading your .env files
+oathkey list                  # the services it knows (36 built in)
+oathkey connect github        # opens the key page, shows the exact steps
 #   paste the key when asked (typing is hidden), or use --clipboard and
 #   click the vendor's Copy button; the key is tested with one API call
 #   and only then saved to .env (owner-only) - or to the OS keychain:
-safeeasyapi connect openai --store keychain
-safeeasyapi run openai -- python app.py     # keychain key goes to that command only
-safeeasyapi forget openai         # remove it from the keychain and .env
+oathkey connect openai --store keychain
+oathkey run openai -- python app.py     # keychain key goes to that command only
+oathkey forget openai         # remove it from the keychain and .env
 
 # a whole project at once (0.6.0):
-safeeasyapi init --write          # list the services the project uses (safeeasyapi.json, no secrets)
-safeeasyapi setup                 # connect every service that has no key yet
-safeeasyapi status                # where each key lives, how old it is
+oathkey init --write          # list the services the project uses (oathkey.json, no secrets)
+oathkey setup                 # connect every service that has no key yet
+oathkey status                # where each key lives, how old it is
 ```
 
 The key is never displayed, never logged, never in shell history.
@@ -28,15 +28,15 @@ instruction files and, if you let them, your `.env`. A key pasted into
 one of those is in the agent's memory and its conversation log. Radware
 (August 2026) looked at about 100,000 agent instruction files: roughly
 0.69% held a real credential, and 60% of the keys it could test still
-worked. `safeeasyapi scan` finds them in seconds and tells you what to
+worked. `oathkey scan` finds them in seconds and tells you what to
 do about each.
 
 The safe tunnel for API keys. Connecting a website tool usually means 40
 minutes of hunting through dashboards, imprecise docs, and fumbling a
-secret into the right file. `safeeasyapi` turns it into one command:
+secret into the right file. `oathkey` turns it into one command:
 
 ```bash
-safeeasyapi connect github
+oathkey connect github
 ```
 
 It opens the exact key page, walks the precise saved steps, takes the key
@@ -53,7 +53,7 @@ shell history, never in an AI agent's chat.** Here is exactly what that
 means, what you do, and what the tool does.
 
 ```bash
-safeeasyapi connect openai --clipboard
+oathkey connect openai --clipboard
 ```
 
 | You | The tool |
@@ -72,28 +72,28 @@ the zero-copy mode: GitHub's own `gh` signs you in and hands the token over.
 Then, in your project:
 
 ```bash
-safeeasyapi init --write      # writes safeeasyapi.json: service names + variable names, no secrets, commit it
-safeeasyapi setup             # walks every service that has no key yet; safe to run again
-safeeasyapi run --all -- python app.py   # the program gets the keys; its output is scrubbed of them
-safeeasyapi export groq --to github      # copy a key into GitHub Actions secrets, through gh's standard input
-safeeasyapi status            # which keys exist, where, how old; says when to rotate
+oathkey init --write      # writes oathkey.json: service names + variable names, no secrets, commit it
+oathkey setup             # walks every service that has no key yet; safe to run again
+oathkey run --all -- python app.py   # the program gets the keys; its output is scrubbed of them
+oathkey export groq --to github      # copy a key into GitHub Actions secrets, through gh's standard input
+oathkey status            # which keys exist, where, how old; says when to rotate
 ```
 
 **AI agents.** Claude Code (or any MCP client) never handles a key. The
 `capture_key` tool (0.7.0) lets the agent do the whole job: it drives the
-browser, makes the key and clicks the vendor's own Copy button; safeeasyapi
+browser, makes the key and clicks the vendor's own Copy button; oathkey
 takes the key from the clipboard, empties it, tests it and stores it, and the
 agent is told only `{state: "stored", env_vars, stored_in, key_length}`.
 `request_connect` answers `{service, env_var, status, instructions, browser,
 rules}`, and `needs_keys` lists which keys a project lacks. Only when
 `capture_key` is unavailable (no clipboard access, headless, or the person
-has not allowed it) is the person asked to run `safeeasyapi connect
+has not allowed it) is the person asked to run `oathkey connect
 <service>` in their own terminal. No tool can return a
 secret value: answers are built from names and status words only, and a
 second filter blanks any secret the server can reach (a variable in its
 environment, a value in the project's `.env`), also in base64, hex and
 URL-encoded form. A test plants canary keys everywhere and searches every
-tool answer and every JSON output for them. The agent skill (the same rules, written for the agent) ships inside the package. Install it with `safeeasyapi skill install` (for you) or `safeeasyapi skill install --project` (this project only); it never overwrites a different file without asking.
+tool answer and every JSON output for them. The agent skill (the same rules, written for the agent) ships inside the package. Install it with `oathkey skill install` (for you) or `oathkey skill install --project` (this project only); it never overwrites a different file without asking.
 
 ### What it cannot do
 
@@ -116,15 +116,15 @@ tool answer and every JSON output for them. The agent skill (the same rules, wri
   detect a clipboard manager: if you run one, use the hidden prompt.
 - **It cannot stop the vendor's page, a browser extension or malware** that
   can read the page or your clipboard from seeing the key.
-- **An agent that can run `safeeasyapi run` can still get the key.** The key
+- **An agent that can run `oathkey run` can still get the key.** The key
   lives in the child program's environment, readable by the same user, and a
   program started by the agent can print it reversed, hashed, split or
   encoded in a way redaction does not know. The hook refuses the obvious
   routes (`run --no-redact`, `secret-tool`, `security find-generic-password`,
-  `cmdkey`, `Get-Secret`, `keyring`, `/proc/*/environ`, `~/.safeeasyapi`), and
+  `cmdkey`, `Get-Secret`, `keyring`, `/proc/*/environ`, `~/.oathkey`), and
   `--no-redact` refuses to work unless you are at a terminal. None of that
   is a wall. For a sensitive service, run agent sessions without permission
-  to use `safeeasyapi run` (a deny rule in Claude Code), and start the
+  to use `oathkey run` (a deny rule in Claude Code), and start the
   program yourself in your own terminal: the agent writes the code, you run
   it. The MCP instructions tell agents to ask you, not to run it themselves.
 - **Redaction is not a vault.** `run` scrubs the exact key and its common
@@ -147,7 +147,7 @@ tool answer and every JSON output for them. The agent skill (the same rules, wri
 - **The hook is a guardrail, not a wall** (see below), and `scan` finds keys by
   their shape: a key with no recognisable shape can slip past it.
 - **It was not run against real vendor dashboards** for this release: the
-  recipes follow the vendors' documentation, and `safeeasyapi doctor-recipes`
+  recipes follow the vendors' documentation, and `oathkey doctor-recipes`
   (also a weekly check on GitHub) tells you when an address has moved.
 - **`export` works only through `gh` and `vercel`** (installed and signed in);
   the key reaches them on standard input, never on a command line. Other
@@ -159,29 +159,29 @@ tool answer and every JSON output for them. The agent skill (the same rules, wri
 Zero dependencies — Python 3.10+ stdlib only.
 
 ```bash
-pipx install safeeasyapi        # or: pip install safeeasyapi
-safeeasyapi --version
+pipx install oathkey        # or: pip install oathkey
+oathkey --version
 ```
 
-From source: `pip install git+https://github.com/calasdan-sketch/safeeasyapi`.
+From source: `pip install git+https://github.com/calasdan-sketch/oathkey`.
 
-That installs the `safeeasyapi` command (`py -m safeeasyapi` / `python -m
-safeeasyapi` works too). From a checkout: `pip install .`
+That installs the `oathkey` command (`py -m oathkey` / `python -m
+oathkey` works too). From a checkout: `pip install .`
 
 **Windows:** run it from PowerShell or Windows Terminal. Under Git Bash /
 mintty the hidden key prompt (`getpass`) may echo what you type or appear
 to hang, because mintty is not a Windows console; if you must use Git
-Bash, prefix the command with `winpty` (`winpty safeeasyapi connect
+Bash, prefix the command with `winpty` (`winpty oathkey connect
 stripe`).
 
 ## Scan: find keys an AI agent can read
 
 ```bash
-safeeasyapi scan                  # this folder, offline, nothing leaves your computer
-safeeasyapi scan ~/projects/app   # another folder (or one file)
-safeeasyapi scan --validate       # ALSO ask each key's service if it still works
-safeeasyapi scan --json           # or --sarif, for scripts and code-scanning tools
-safeeasyapi scan --all            # every text file, not just the agent-readable ones
+oathkey scan                  # this folder, offline, nothing leaves your computer
+oathkey scan ~/projects/app   # another folder (or one file)
+oathkey scan --validate       # ALSO ask each key's service if it still works
+oathkey scan --json           # or --sarif, for scripts and code-scanning tools
+oathkey scan --all            # every text file, not just the agent-readable ones
 ```
 
 It reads `.env` files (`.env`, `.env.local`, `prod.env` ...), `CLAUDE.md`,
@@ -220,7 +220,7 @@ first 4 and last 2 characters):
 ```
   .env:3   OpenAI   sk-p...Wx   not checked
       next: Rotate it at https://platform.openai.com/api-keys, then run
-      `safeeasyapi connect openai` to save the new one safely.
+      `oathkey connect openai` to save the new one safely.
 ```
 
 Each finding has one of four states: `unchecked` (the default; nothing was
@@ -245,7 +245,7 @@ its NAME whose value does not have that service's key format (an
 `public` are never matched to a service.
 
 **Only the recipes shipped inside the package are used.** A recipe in
-`~/.safeeasyapi/recipes` brings its own regular expression and names the
+`~/.oathkey/recipes` brings its own regular expression and names the
 host a key is sent to, so `scan` ignores it - and cannot be made to send a
 key to it - unless you pass `--my-recipes`. With that flag its key format is
 searched for under a 0.25-second timer per piece of text (where the system
@@ -267,10 +267,10 @@ real path.
 ## Hook: stop Claude Code reading `.env`
 
 ```bash
-safeeasyapi hook install            # for you, in ~/.claude/settings.json
-safeeasyapi hook install --project  # for this project, in .claude/settings.json
-safeeasyapi hook status             # is it there, and does it work?
-safeeasyapi hook uninstall          # take it out again
+oathkey hook install            # for you, in ~/.claude/settings.json
+oathkey hook install --project  # for this project, in .claude/settings.json
+oathkey hook status             # is it there, and does it work?
+oathkey hook uninstall          # take it out again
 ```
 
 This adds a Claude Code "PreToolUse hook": a small check Claude Code runs
@@ -283,13 +283,13 @@ allowed, for reading and writing.
 Writing is refused too (since 0.5.2): a real key an agent types into `.env`
 has passed through the agent, which is what this tool exists to prevent, and a
 `Write` can overwrite your keys. The agent is told: "Claude can't write to
-.env - your keys stay out of the chat. Run: safeeasyapi connect <service> (or
+.env - your keys stay out of the chat. Run: oathkey connect <service> (or
 edit the file yourself)." If your `.env` holds nothing secret and you want the
 agent to edit it, start Claude Code with `SAFEEASYAPI_HOOK_ALLOW_WRITE=1` in
 its environment (only writes are allowed; reads stay refused). `Glob` is not
 matched: it lists names only.
 
-Upgrading from 0.5.0 or 0.5.1: run `safeeasyapi hook install` again. It
+Upgrading from 0.5.0 or 0.5.1: run `oathkey hook install` again. It
 updates our own entry's matcher in place and touches nothing else;
 `hook status` says "OUTDATED" until you do.
 
@@ -297,8 +297,8 @@ Your other hooks and settings are kept. The hook always sits in a matcher
 group of its own: another group's matcher or handlers are never edited, and
 `uninstall` removes only our handler (found by a `statusMessage` marker or by
 the exact command an older version wrote - a hook that merely mentions
-`safeeasyapi` is not ours). Every change first copies the old file to a new
-backup in `~/.safeeasyapi/backups` (the last 20 per file are kept; private to
+`oathkey` is not ours). Every change first copies the old file to a new
+backup in `~/.oathkey/backups` (the last 20 per file are kept; private to
 you; never inside a project, where a `.claude/` folder is often committed). A
 settings file that is a symbolic link is changed through the link; one that is
 not valid JSON is left alone (exit 2). Installing twice changes nothing.
@@ -309,14 +309,14 @@ command this installation would write, and says when the file's command is a
 different one.
 
 How the command is written: on macOS and Linux a shell string with the
-installed `safeeasyapi` by its full path (or this Python with `-I`, which
+installed `oathkey` by its full path (or this Python with `-I`, which
 ignores the current folder). On Windows the documented exec form -
 `"command"` is the program and `"args"` is `["hook", "check"]`, no shell - so
 a backslash or a space in the path survives Git Bash and PowerShell. Claude
 Code's documentation does not say which version introduced `args`; for a
-client that predates it use `safeeasyapi hook install --shell-form` (forward
+client that predates it use `oathkey hook install --shell-form` (forward
 slashes, quoted; works in Git Bash, not in PowerShell). The timeout is 10
-seconds. `safeeasyapi hook check` is the hook itself: it reads Claude Code's
+seconds. `oathkey hook check` is the hook itself: it reads Claude Code's
 JSON on stdin (all of it, however big) and prints the answer. Restart Claude
 Code after installing.
 
@@ -326,7 +326,7 @@ something it cannot parse), Claude Code lets the tool call through: that is
 searched for a `.env` file name as plain text and refused if one is there.
 If you would rather block everything when the hook is broken, install with
 `--fail-closed` (it sets `"onFailure": "block"`; needs Claude Code 2.1.295 or
-later; a missing or broken `safeeasyapi` then blocks every call until you fix
+later; a missing or broken `oathkey` then blocks every call until you fix
 or uninstall it).
 
 ### What this hook does NOT stop
@@ -351,57 +351,57 @@ does not stop:
 And it blocks some harmless things: a virtual environment folder named
 `.env` (`source .env/bin/activate`), and a command that merely names the
 file (`echo .env >> .gitignore`). Keep keys out of the files too:
-`safeeasyapi connect <service> --store keychain`.
+`oathkey connect <service> --store keychain`.
 
 ## Commands
 
 ```bash
-safeeasyapi scan [PATH]                 # find keys an AI agent can read (offline)
-safeeasyapi scan --validate [--yes]     # also check if they still work (sends them; asks first)
-safeeasyapi scan --json | --sarif       # machine-readable reports
-safeeasyapi scan --fail-on live         # exit 1 only for keys that still work
-safeeasyapi scan --all                  # every text file, not only agent-readable ones
-safeeasyapi hook install [--project]    # stop Claude Code reading .env files
-safeeasyapi hook status | uninstall     # check it / remove it (--settings FILE for another file)
-safeeasyapi list                        # services with saved recipes
-safeeasyapi connect <service>           # guided key setup -> .env
-safeeasyapi connect <service> --env-file /path/to/.env
-safeeasyapi connect <service> --store keychain   # OS keychain instead of .env
-safeeasyapi connect <service> --clipboard        # copy-and-go: click Copy, no pasting
-safeeasyapi connect github --via-cli    # zero-copy: the vendor CLI's browser sign-in
-safeeasyapi connect <service> --no-browser       # don't open the key page (its address is printed)
-safeeasyapi run <service> -- <command>  # run with a stored key (keychain, else .env) in its env only
-safeeasyapi run --all -- <command>      # ... every service in safeeasyapi.json
-safeeasyapi run <service> --no-redact -- <command>   # don't scrub the output (interactive programs)
-safeeasyapi run <service> --redact -- <command>      # scrub it (the default)
-safeeasyapi run <service> --env-file FILE -- <command>   # read keys from another .env
-safeeasyapi --project-dir DIR <command>   # work as if started in DIR (manifest and .env live there)
-safeeasyapi skill install [--project] [--yes]   # copy the agent skill to ~/.claude/skills (never overwrites unasked)
-safeeasyapi init [--write] [--add] [--force]   # write safeeasyapi.json from the project's variable names
-safeeasyapi setup [service ...] [--dry-run]    # connect every missing service in order (resumable)
-safeeasyapi setup --env-file FILE | --no-browser | --clipboard | --allow-clipboard-history
-safeeasyapi status [--json] [--max-age DAYS] [--env-file FILE]   # where keys live, how old
-safeeasyapi export <service> --to github|vercel [--repo OWNER/REPO] [--environment NAME] [--overwrite] [--yes]
-safeeasyapi about                       # who made it and how to check it is the real one
-safeeasyapi allow-agent <service>       # your one-time yes (terminal route; the normal way is the window the server shows)
-safeeasyapi allow-agent <service> --env-file .env.local   # let the agent write to this .env-style file (default: .env only; terminal route only)
-safeeasyapi setup-agent claude-code|claude-desktop|cursor|codex|gemini [--write]   # the MCP entry, with this Python's absolute path
-safeeasyapi skill install --for cursor|codex|gemini|all   # the rules file for that client (marked block, never overwrites yours)
-safeeasyapi mcp --default-store keychain   # where agent-captured keys go (setup-agent sets it for clients without the .env hook)
-safeeasyapi allow-agent <service> --allow-clipboard-history   # ... and accept Windows' clipboard history (terminal route only; with a window, turn history off)
-safeeasyapi allow-agent --list | --revoke [service]   # what is allowed in this project / take it back
-safeeasyapi doctor-recipes [service ...] [--json] [--timeout S] [--my-recipes]   # have recipe addresses rotted?
-safeeasyapi connect <service> --allow-clipboard-history   # keep copy-and-go even if Windows keeps a history
-safeeasyapi rotate <service>            # replace a stored key
-safeeasyapi forget <service>            # remove the key: OS keychain entry + .env line(s)
-safeeasyapi add                         # capture a new service recipe interactively
-safeeasyapi find <query>                # find free public APIs for a task
-safeeasyapi find <query> --category <name>   # only that category (part of its name)
-safeeasyapi find <query> --refresh      # download the directory again now
-safeeasyapi mcp                         # stdio MCP server (for Claude Code)
+oathkey scan [PATH]                 # find keys an AI agent can read (offline)
+oathkey scan --validate [--yes]     # also check if they still work (sends them; asks first)
+oathkey scan --json | --sarif       # machine-readable reports
+oathkey scan --fail-on live         # exit 1 only for keys that still work
+oathkey scan --all                  # every text file, not only agent-readable ones
+oathkey hook install [--project]    # stop Claude Code reading .env files
+oathkey hook status | uninstall     # check it / remove it (--settings FILE for another file)
+oathkey list                        # services with saved recipes
+oathkey connect <service>           # guided key setup -> .env
+oathkey connect <service> --env-file /path/to/.env
+oathkey connect <service> --store keychain   # OS keychain instead of .env
+oathkey connect <service> --clipboard        # copy-and-go: click Copy, no pasting
+oathkey connect github --via-cli    # zero-copy: the vendor CLI's browser sign-in
+oathkey connect <service> --no-browser       # don't open the key page (its address is printed)
+oathkey run <service> -- <command>  # run with a stored key (keychain, else .env) in its env only
+oathkey run --all -- <command>      # ... every service in oathkey.json
+oathkey run <service> --no-redact -- <command>   # don't scrub the output (interactive programs)
+oathkey run <service> --redact -- <command>      # scrub it (the default)
+oathkey run <service> --env-file FILE -- <command>   # read keys from another .env
+oathkey --project-dir DIR <command>   # work as if started in DIR (manifest and .env live there)
+oathkey skill install [--project] [--yes]   # copy the agent skill to ~/.claude/skills (never overwrites unasked)
+oathkey init [--write] [--add] [--force]   # write oathkey.json from the project's variable names
+oathkey setup [service ...] [--dry-run]    # connect every missing service in order (resumable)
+oathkey setup --env-file FILE | --no-browser | --clipboard | --allow-clipboard-history
+oathkey status [--json] [--max-age DAYS] [--env-file FILE]   # where keys live, how old
+oathkey export <service> --to github|vercel [--repo OWNER/REPO] [--environment NAME] [--overwrite] [--yes]
+oathkey about                       # who made it and how to check it is the real one
+oathkey allow-agent <service>       # your one-time yes (terminal route; the normal way is the window the server shows)
+oathkey allow-agent <service> --env-file .env.local   # let the agent write to this .env-style file (default: .env only; terminal route only)
+oathkey setup-agent claude-code|claude-desktop|cursor|codex|gemini [--write]   # the MCP entry, with this Python's absolute path
+oathkey skill install --for cursor|codex|gemini|all   # the rules file for that client (marked block, never overwrites yours)
+oathkey mcp --default-store keychain   # where agent-captured keys go (setup-agent sets it for clients without the .env hook)
+oathkey allow-agent <service> --allow-clipboard-history   # ... and accept Windows' clipboard history (terminal route only; with a window, turn history off)
+oathkey allow-agent --list | --revoke [service]   # what is allowed in this project / take it back
+oathkey doctor-recipes [service ...] [--json] [--timeout S] [--my-recipes]   # have recipe addresses rotted?
+oathkey connect <service> --allow-clipboard-history   # keep copy-and-go even if Windows keeps a history
+oathkey rotate <service>            # replace a stored key
+oathkey forget <service>            # remove the key: OS keychain entry + .env line(s)
+oathkey add                         # capture a new service recipe interactively
+oathkey find <query>                # find free public APIs for a task
+oathkey find <query> --category <name>   # only that category (part of its name)
+oathkey find <query> --refresh      # download the directory again now
+oathkey mcp                         # stdio MCP server (for Claude Code)
 ```
 
-Output can be piped (`safeeasyapi list | head -1`): when the reader
+Output can be piped (`oathkey list | head -1`): when the reader
 stops early the command ends quietly with exit status 1 — no traceback,
 no "Exception ignored" noise at exit. On Windows Python reports that
 closed pipe as a plain `OSError` 22 instead of `BrokenPipeError` (a
@@ -411,7 +411,7 @@ every command and for the MCP server.
 ## A connect, annotated
 
 ```bash
-$ safeeasyapi connect stripe
+$ oathkey connect stripe
 
   Connect Stripe  (key opens in your browser)        # 1. your browser opens
                                                      #    the exact key page
@@ -441,7 +441,7 @@ The validation preview is the security hinge: you see exactly where the
 key will be sent, and the recipe must use `https://` for both the key page
 and the validation URL (a plain-`http://` recipe is rejected). If the
 validation URL belongs to a **different owner** than the key page,
-`safeeasyapi` stops and requires you to type `yes` — anything else aborts,
+`oathkey` stops and requires you to type `yes` — anything else aborts,
 and no key is ever asked for or sent:
 
 ```bash
@@ -470,7 +470,7 @@ genuinely keep their API on a second domain (Anthropic's console is
 their **built-in** recipes name that host in `validate.trusted_hosts`
 and connect without a prompt, with a one-line note. Only recipes shipped
 inside the package get that shortcut — a recipe from
-`~/.safeeasyapi/recipes` (yours, or one somebody sent you) always prompts
+`~/.oathkey/recipes` (yours, or one somebody sent you) always prompts
 when the domains differ, whatever it claims.
 
 Which names count as "anyone can register a sub-domain here" is a **compact
@@ -517,7 +517,7 @@ or any other field a space of another width or a joiner is refused too,
 and so is a joiner at the start or the end of a text, or next to a blank
 or another joiner. An emoji built with tag characters (the flag of
 England) is refused. What is unassigned is up to the Unicode tables of
-the Python that runs `safeeasyapi`: Python 3.10 knows Unicode 13, so an
+the Python that runs `oathkey`: Python 3.10 knows Unicode 13, so an
 emoji from a later version passes on Python 3.13 and not on 3.10.
 
 In the transcript above the key is shown as `sk-…` — in reality it is
@@ -546,7 +546,7 @@ is sent straight from your machine. Cloud coding agents, sandboxes and
 some company proxies add their own credentials to outgoing requests, so
 the API can answer "valid" for any key, even a made-up one. If a key you
 know is wrong gets accepted, that is the likely reason: run
-`safeeasyapi connect` in a terminal on your own computer instead.
+`oathkey connect` in a terminal on your own computer instead.
 
 ## Where the key goes
 
@@ -595,7 +595,7 @@ which a shell still runs `$(...)` and backticks and expands `$VAR`. A key
 made only of letters, digits and `_ . + / = : -` was never quoted, so
 those are unaffected. Double-quoted values are still read, and such a
 line is rewritten in the new form the next time its key is saved:
-`safeeasyapi rotate <service>` does it, and nothing else in the file
+`oathkey rotate <service>` does it, and nothing else in the file
 moves.
 
 If the same variable is set more than once in the file, the **last**
@@ -638,7 +638,7 @@ it — re-save it as UTF-8).
   actually succeeded; otherwise it says `could not restrict ACL` so you
   know the file has the folder's default permissions.
 
-`safeeasyapi forget <service>` undoes a connect: it deletes the keychain
+`oathkey forget <service>` undoes a connect: it deletes the keychain
 entry (when this OS has a keychain) and removes the `ENV_VAR=` line from
 `.env` (`--env-file` to point elsewhere), and says what it removed. If
 the variable is set more than once, every one of those lines goes —
@@ -667,12 +667,12 @@ uses what it ships with, and the key never goes through `argv`:
 
 | OS      | backend                                                            | how |
 |---------|--------------------------------------------------------------------|-----|
-| macOS   | login Keychain, via the `security` command                         | commands fed over stdin (`security -i`), generic password `safeeasyapi:<service>` / account `<ENV_VAR>` |
-| Windows | Credential Manager (Windows Vault), via `ctypes` → `advapi32` `CredWriteW`/`CredReadW`/`CredDeleteW` | generic credential `safeeasyapi:<service>`, persisted for the local machine, UTF-16-LE blob like `cmdkey` |
-| Linux   | Secret Service (GNOME Keyring / KWallet) via `secret-tool`, when installed | key on stdin; attributes `service=safeeasyapi account=<ENV_VAR> slug=<service>` |
+| macOS   | login Keychain, via the `security` command                         | commands fed over stdin (`security -i`), generic password `oathkey:<service>` / account `<ENV_VAR>` |
+| Windows | Credential Manager (Windows Vault), via `ctypes` → `advapi32` `CredWriteW`/`CredReadW`/`CredDeleteW` | generic credential `oathkey:<service>`, persisted for the local machine, UTF-16-LE blob like `cmdkey` |
+| Linux   | Secret Service (GNOME Keyring / KWallet) via `secret-tool`, when installed | key on stdin; attributes `service=oathkey account=<ENV_VAR> slug=<service>` |
 | anything else, or the tool is missing | — | no keychain: asks `[y/N]` before using the `.env` file (nothing is saved without a yes, or with no terminal) |
 
-A keychain-stored key is consumed with `safeeasyapi run <service> --
+A keychain-stored key is consumed with `oathkey run <service> --
 <command>`: the key is read back and placed in that one child process's
 environment, never printed. (Your app does not need to change — it
 still reads `$STRIPE_SECRET_KEY`.) Without a keychain backend `run`
@@ -704,14 +704,14 @@ file the link points to.
 
 ## Find public APIs
 
-SafeEasyAPI is also a discovery front door. `safeeasyapi find` searches the public
+oathkey is also a discovery front door. `oathkey find` searches the public
 APIs directory (~2,100 free APIs, cached locally for 7 days):
 
 ```bash
-safeeasyapi find "weather" --auth No        # only keyless APIs
-safeeasyapi find "crypto price" --limit 5
-safeeasyapi find "facts" --category animals # only that category
-safeeasyapi find "weather" --refresh        # download the directory again now
+oathkey find "weather" --auth No        # only keyless APIs
+oathkey find "crypto price" --limit 5
+oathkey find "facts" --category animals # only that category
+oathkey find "weather" --refresh        # download the directory again now
 ```
 
 `--auth` takes the directory's own word (`No`, `apiKey`, `OAuth`, ...) and
@@ -732,7 +732,7 @@ APIs needing a key point straight back at the tunnel:
     Weatherstack [apiKey]
       Real-time weather
       https://weatherstack.com/  (Weather)
-      needs a key — save its recipe with `safeeasyapi add`.
+      needs a key — save its recipe with `oathkey add`.
 ```
 
 ### MCP co-work skills
@@ -742,15 +742,15 @@ discovers free APIs instead of improvising or reaching for paid services:
 
 - `find_public_apis {query, auth?, category?, limit?}` — search the directory
 - `get_public_api {name}` — details plus wiring: no-auth APIs get a
-  call-it-directly note; `apiKey` APIs get the exact `safeeasyapi add` +
-  `safeeasyapi connect` flow (the agent never asks the user to paste a key)
+  call-it-directly note; `apiKey` APIs get the exact `oathkey add` +
+  `oathkey connect` flow (the agent never asks the user to paste a key)
 
 No secrets ever pass through MCP — only public how-to.
 
 ## Copy-and-go, two-value keys, every kind of check (0.4.0)
 
 **Copy-and-go** (`--clipboard`): instead of pasting, click the vendor's own
-**Copy** button. safeeasyapi notices the new, key-shaped value on the
+**Copy** button. oathkey notices the new, key-shaped value on the
 clipboard, takes it and **empties the clipboard**, then validates and
 stores it as usual; nothing is typed, pasted or shown. It looks only while
 it is waiting for a key, takes only a value that matches the field's
@@ -759,13 +759,13 @@ spaces, 8-4096 visible characters, different from what was already on the
 clipboard), and falls back to the hidden prompt after 3 minutes or when no
 clipboard tool exists (Windows needs nothing; macOS uses `pbpaste`; Linux
 `wl-paste`, `xclip` or `xsel`). Windows clipboard history (Win+V) and
-clipboard managers can keep their own copy, which safeeasyapi cannot clear.
+clipboard managers can keep their own copy, which oathkey cannot clear.
 
 **Zero-copy** (`--via-cli`): for a built-in recipe whose vendor has a CLI
-with a browser sign-in (`github` uses `gh auth login --web`), safeeasyapi
+with a browser sign-in (`github` uses `gh auth login --web`), oathkey
 runs that sign-in and reads the token from the CLI, then validates and
 stores it. The programs a recipe may run are fixed in the code
-(`recipes.CLI_PROGRAMS`); a recipe from `~/.safeeasyapi` cannot use this.
+(`recipes.CLI_PROGRAMS`); a recipe from `~/.oathkey` cannot use this.
 
 **Two-value credentials**: a recipe may list several `fields` (an App ID
 and a secret, an access key and its secret). Each is collected hidden (or
@@ -790,8 +790,8 @@ one it never checks, or puts its token endpoint on `http://`.
 Agents (and humans) forget per-service key flows and improvise imprecise
 steps. Recipes are the memory: plain JSON files with the key URL, the
 exact click path, scopes, and a validation endpoint. Teach it once with
-`safeeasyapi add`, use it forever — and Claude Code can pull the exact recipe via
-`safeeasyapi mcp` instead of guessing.
+`oathkey add`, use it forever — and Claude Code can pull the exact recipe via
+`oathkey mcp` instead of guessing.
 
 Ships with 35 recipes inside the package (so `pip install` carries
 them), each checked against the provider's own docs for the key page,
@@ -817,9 +817,9 @@ answers HTTP 200 even to a bad token), Linear (GraphQL needs a POST
 body), Shopify (per-store URL), Perplexity/Exa/Serper (no free GET
 endpoint), Fireworks (the documented list-models URL is per account).
 
-`safeeasyapi add` walks you through capturing your own (Headroom, RPX,
-Ponytail…); those are saved to `~/.safeeasyapi/recipes/`
-(`%USERPROFILE%\.safeeasyapi\recipes\` on Windows) and override a
+`oathkey add` walks you through capturing your own (Headroom, RPX,
+Ponytail…); those are saved to `~/.oathkey/recipes/`
+(`%USERPROFILE%\.oathkey\recipes\` on Windows) and override a
 built-in recipe with the same slug. `--recipes-dir` writes elsewhere.
 A recipe file may be saved with Windows (CRLF) line ends and a UTF-8
 byte-order mark, as Windows PowerShell and older Notepad write them: a
@@ -882,8 +882,8 @@ the job that opens or updates a single issue) runs it. To fix a recipe, see
 Add to Claude Code (`claude mcp add`) or `~/.claude.json`:
 
 ```json
-{ "mcpServers": { "safeeasyapi": {
-  "command": "python", "args": ["-m", "safeeasyapi", "mcp"] } } }
+{ "mcpServers": { "oathkey": {
+  "command": "python", "args": ["-m", "oathkey", "mcp"] } } }
 ```
 
 (`python` is the Windows launcher's name; on macOS/Linux use whatever
@@ -891,7 +891,7 @@ runs your Python 3.) Tools: `list_services`, `get_recipe`,
 `find_public_apis`, `get_public_api`, `request_connect`, `capture_key` and
 `needs_keys` (the agent handshake, above). The recipe tells the agent the
 exact steps and ends with: call `capture_key` (or, if that is unavailable,
-ask the person to run `safeeasyapi connect <service>`) — never ask the user
+ask the person to run `oathkey connect <service>`) — never ask the user
 to paste the key into chat.
 
 ### Agent-driven capture (`capture_key`, experimental)
@@ -943,16 +943,16 @@ Rules that make this safe enough to allow:
     your screen and presses Yes, and a browser tool that reads the key field.
 - **Who is named, and who made the tool.** The window says which AI program is asking
   ("Claude Code", "Cursor", "Codex" ...). That name is what the program **reports
-  about itself** when it connects (the MCP `clientInfo.name`); safeeasyapi cannot prove
+  about itself** when it connects (the MCP `clientInfo.name`); oathkey cannot prove
   it, so it is a label, not an identity check. An unknown name is shown cleaned (plain
   letters, 30 characters) and a missing one as "An AI program". The first line of
   every window says the tool is *free key-safe tool, made by Calas Automations,
   installed on this computer*. To check that this really is the program you installed:
-  `safeeasyapi about`, `pip show safeeasyapi` (author Calas Automations Inc.), the
-  package page https://pypi.org/project/safeeasyapi/ and the source
-  https://github.com/calasdan-sketch/safeeasyapi.
+  `oathkey about`, `pip show oathkey` (author Calas Automations Inc.), the
+  package page https://pypi.org/project/oathkey/ and the source
+  https://github.com/calasdan-sketch/oathkey.
 - **A closed window is not a No.** Only the No button, where the operating system lets
-  safeeasyapi tell (Windows, macOS, Linux zenity), counts as a refusal. A window that
+  oathkey tell (Windows, macOS, Linux zenity), counts as a refusal. A window that
   closes by itself or is closed without choosing is reported as expired/closed and
   can simply be asked again; on kdialog or an old zenity, where "No" and "closed" look
   the same, the answer is passed on as a No but never remembered for 10 minutes.
@@ -968,12 +968,12 @@ Rules that make this safe enough to allow:
   either (the key passes through them). The cost: a Homebrew or Nix copy, which
   your user owns, is refused — and the result **says so** (for example *found
   xclip at /opt/homebrew/bin/xclip but it is not a trusted install ... use
-  `safeeasyapi connect`*) instead of failing quietly.
-- **`safeeasyapi allow-agent <service>`** in a terminal is the fallback **only
+  `oathkey connect`*) instead of failing quietly.
+- **`oathkey allow-agent <service>`** in a terminal is the fallback **only
   where no window can be shown** (SSH, headless), or when the server is started
   with `SAFEEASYAPI_NO_WINDOW=1`. On a computer that can show a window the server
   does not use it. It is **advisory**: it is kept in
-  `~/.safeeasyapi/agent-consent.json` (in a 0700 folder) with an HMAC and a
+  `~/.oathkey/agent-consent.json` (in a 0700 folder) with an HMAC and a
   counter (an old copy of the file does not verify). The signing secret is in
   Windows DPAPI, the macOS keychain or the Linux Secret Service; where those work
   they are the authority and a file is never preferred over them; otherwise it is
@@ -1021,7 +1021,7 @@ is not an object, or a missing or wrongly typed required argument gets
 `-32602 Invalid params` - never a crash or `-32603` - after which the server
 simply carries on. (A tool-level miss, such as a service that has no recipe, is
 an ordinary result with `isError`.) If standard input or standard output is
-closed (`safeeasyapi mcp >&-`; `pythonw` on Windows) there is no client to talk
+closed (`oathkey mcp >&-`; `pythonw` on Windows) there is no client to talk
 to: one `error:` line on stderr and exit status 2, before any request is read,
 not a traceback.
 
@@ -1065,7 +1065,7 @@ not a traceback.
   one leeway: a space of another width and a joiner between two visible
   characters are text in a name, a step or a scope - the list of what is
   refused is in *A connect, annotated*.)
-- The only POST safeeasyapi sends is the OAuth2 token request, to the
+- The only POST oathkey sends is the OAuth2 token request, to the
   `token_url` the recipe names and shown before anything is asked for;
   it and a `query` request follow no redirect. Copy-and-go empties the
   clipboard as soon as it takes a value.
@@ -1122,7 +1122,7 @@ the package metadata and one version number everywhere, output into a pipe that 
 real thing, and the different error Windows gives, simulated), and
 never-log assertions on every output path. Tests point
 `HOME`/`USERPROFILE`/`APPDATA` at a throwaway directory, so they never
-read your real `~/.safeeasyapi` or `.env`.
+read your real `~/.oathkey` or `.env`.
 
 Windows 11 is a first-class target: the wire format of the MCP server
 is UTF-8 bytes regardless of console code page, console output is
@@ -1172,9 +1172,9 @@ every text file is opened as UTF-8.
 - Recipe catalog is curated manually — verify a new service's key URL and
   validation endpoint before trusting it. Provider dashboards move:
   if a key page URL redirects, follow it and send a fix.
-- `safeeasyapi mcp` returns recipes; the interactive key paste stays in the
+- `oathkey mcp` returns recipes; the interactive key paste stays in the
   terminal by design.
-- `forget` removes what safeeasyapi wrote and what a killed write left
+- `forget` removes what oathkey wrote and what a killed write left
   next to it; it does not find other copies of the file (editor backups,
   version-control history), and it names - rather than deletes - another
   hard link to the `.env` file, exiting 1 because the key is still there.

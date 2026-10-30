@@ -4,8 +4,8 @@ import unittest.mock
 
 import _isolation  # noqa: F401
 from _stub import Stub
-from safeeasyapi import redact as redact_mod
-from safeeasyapi import validate as validate_mod
+from oathkey import redact as redact_mod
+from oathkey import validate as validate_mod
 
 CANARY = "CANARYkey0123456789abcdef"
 
@@ -48,7 +48,7 @@ class TestRedactCase(unittest.TestCase):
 class TestClockSkew(unittest.TestCase):
     def aws(self, base):
         import copy
-        from safeeasyapi import recipes
+        from oathkey import recipes
         spec = copy.deepcopy(recipes.load_recipes(recipes.RECIPES_DIR)["aws"]["validate"])
         spec["url"] = base + "/"
         spec["trusted_hosts"] = ["127.0.0.1"]
@@ -79,7 +79,7 @@ class TestClockSkew(unittest.TestCase):
 
     def test_connect_stops_without_using_up_tries(self):
         import io
-        from safeeasyapi import connect
+        from oathkey import connect
         asked = []
         def v(spec, key):
             raise validate_mod.ClockSkew(20, True)
@@ -98,7 +98,7 @@ class TestClockSkew(unittest.TestCase):
 class TestOpenAILimited(unittest.TestCase):
     def spec(self, base):
         import copy
-        from safeeasyapi import recipes
+        from oathkey import recipes
         s = copy.deepcopy(recipes.load_recipes(recipes.RECIPES_DIR)["openai"]["validate"])
         s["url"] = base + "/v1/models"
         return s

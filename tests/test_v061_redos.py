@@ -4,7 +4,7 @@ import time
 import unittest
 
 import _isolation  # noqa: F401
-from safeeasyapi import clipboard, recipes
+from oathkey import clipboard, recipes
 
 CAT = recipes.load_recipes(recipes.RECIPES_DIR)
 BIG = 1_000_000

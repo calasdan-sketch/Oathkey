@@ -9,7 +9,7 @@ import sys
 import unittest
 from unittest import mock
 
-from safeeasyapi import cli as cli_mod
+from oathkey import cli as cli_mod
 
 
 class TestHardenStreams(unittest.TestCase):
