@@ -44,19 +44,22 @@ def _build_parser() -> argparse.ArgumentParser:
                    version=f"%(prog)s {__version__}")
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    for name, help_text in (("connect", "Connect a service (guided key setup)."),
+    for name, help_text in (("get", "One command: opens the key page, takes the key from your copy, tests it, and saves it in the OS keychain. Nothing is shown."),
+                            ("connect", "Connect a service (guided key setup)."),
                             ("rotate", "Replace the stored key for a service.")):
         c = sub.add_parser(name, help=help_text)
         c.add_argument("service", help="Service slug (see `oathkey list`).")
         c.add_argument("--env-file", default=".env",
                        help="Where to store the key with --store env "
                             "(default: .env).")
-        c.add_argument("--store", choices=["env", "keychain"], default="env",
+        c.add_argument("--store", choices=["env", "keychain"], default=None,
                        help="env: owner-only .env file (default). keychain: "
                             "the OS keychain (macOS Keychain, Windows "
                             "Credential Manager, secret-tool on Linux), "
                             "falling back to the .env file when none is "
                             "available; use `oathkey run` to consume it.")
+        c.add_argument("--no-clipboard", action="store_true",
+                       help="(get) Use the hidden paste prompt instead of copy-and-go.")
         c.add_argument("--no-browser", action="store_true",
                        help="Don't auto-open the key page.")
         c.add_argument("--clipboard", action="store_true",
@@ -657,7 +660,9 @@ def _main(argv: list[str] | None = None) -> int:
         except remote_mod.RemoteError as e:
             print(f"error: {e}", file=sys.stderr)
             return e.code
-    if args.cmd in ("connect", "rotate", "run", "forget", "remote"):
+    if args.cmd in ("get", "connect", "rotate", "run", "forget", "remote"):
+        if getattr(args, "store", None) is None:
+            args.store = "keychain" if args.cmd == "get" else "env"
         recipe = catalog.get(args.service)
         if not recipe:
             print(f"unknown service '{args.service}'.")
@@ -688,7 +693,7 @@ def _main(argv: list[str] | None = None) -> int:
                   f"{recipes_mod.printable(recipe['display'], words=True)} - "
                   f"the stored key will be replaced.\n")
         clip = None
-        if args.clipboard:
+        if args.clipboard or (args.cmd == "get" and not args.no_clipboard):
             from . import clipboard as clipboard_mod
             try:
                 clip = clipboard_mod.backend()
