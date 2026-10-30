@@ -37,7 +37,7 @@ def dialog(summary: str) -> bool | None:
             cmd = [ps, "-NoProfile", "-NonInteractive", "-Command",
                    "Add-Type -AssemblyName System.Windows.Forms; "
                    "$r=[System.Windows.Forms.MessageBox]::Show($env:SEA_MSG,"
-                   "'safeeasyapi - permission needed','YesNo','Warning','Button2'); "
+                   "'oathkey - permission needed','YesNo','Warning','Button2'); "
                    "if($r -eq 'Yes'){exit 0}else{exit 1}"]
             return subprocess.run(cmd, env=env, timeout=TIMEOUT,
                                   capture_output=True).returncode == 0
@@ -45,12 +45,12 @@ def dialog(summary: str) -> bool | None:
             r = subprocess.run(
                 ["osascript", "-e",
                  'display dialog (system attribute "SEA_MSG") with title '
-                 '"safeeasyapi - permission needed" buttons {"No","Yes"} '
+                 '"oathkey - permission needed" buttons {"No","Yes"} '
                  'default button "No" with icon caution'],
                 env=env, timeout=TIMEOUT, capture_output=True, text=True)
             return r.returncode == 0 and "button returned:Yes" in r.stdout
-        for tool, argv in (("zenity", ["--question", "--title=safeeasyapi", "--text=" + msg]),
-                           ("kdialog", ["--yesno", msg, "--title", "safeeasyapi"])):
+        for tool, argv in (("zenity", ["--question", "--title=oathkey", "--text=" + msg]),
+                           ("kdialog", ["--yesno", msg, "--title", "oathkey"])):
             if shutil.which(tool):
                 return subprocess.run([tool] + argv, timeout=TIMEOUT,
                                       capture_output=True).returncode == 0
@@ -81,7 +81,7 @@ def console(summary: str) -> bool:
         with open(dev_out, "w", encoding="utf-8") as out, \
                 open(dev_in, encoding="utf-8") as inp:
             _flush(inp)
-            out.write(f"\nsafeeasyapi needs your permission:\n  {_safe(summary)}\n"
+            out.write(f"\noathkey needs your permission:\n  {_safe(summary)}\n"
                       f"To allow, type {code} and press Enter (anything else = no): ")
             out.flush()
             return inp.readline().strip() == code

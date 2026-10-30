@@ -19,7 +19,7 @@ Auth shapes (recipes.AUTH_TYPES):
 - query:   the value as a URL query parameter (``?appid=...``); such a
            request follows NO redirect, because the key is in the URL
 - oauth2_client_credentials: POST the client id and secret to the vendor's
-           token endpoint (the ONLY POST safeeasyapi ever makes, and only to
+           token endpoint (the ONLY POST oathkey ever makes, and only to
            the token_url the recipe names), then GET validate.url with the
            temporary token - or, with token_only, judge the token answer
 - aws_sigv4: an AWS Signature Version 4 signed GET (STS GetCallerIdentity)
@@ -56,7 +56,7 @@ import urllib.request
 from . import __version__
 from .recipes import ALLOWED_METHODS, DEFAULT_FIELD, printable
 
-USER_AGENT = f"safeeasyapi/{__version__}"
+USER_AGENT = f"oathkey/{__version__}"
 DEFAULT_PORTS = {"http": 80, "https": 443}
 REJECT_DEFAULT = (401, 403)
 TOKEN_REJECT = (400, 401, 403)    # OAuth2: invalid_client is usually a 400 or 401

@@ -7,7 +7,7 @@ import threading
 import unittest
 from urllib.parse import quote
 
-from safeeasyapi import approve, broker, clients, recipes, scan
+from oathkey import approve, broker, clients, recipes, scan
 
 KEY = "wJalr" + "XUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY"      # has / and +
 RECIPE = recipes.load_recipes()["github"]

@@ -44,13 +44,13 @@ def cmd_status(catalog: dict, env_file: str, as_json: bool) -> int:
             "with_keys": sum(r["key_stored"] for r in rows),
             "audit_log_ok": ok, "audit_entries": n,
             "connected": [r["service"] for r in rows if r["key_stored"]]}
-    head = ("safeeasyapi is ready." if info["with_keys"]
-            else "Not ready yet: no key is saved. Run `safeeasyapi start`.")
+    head = ("oathkey is ready." if info["with_keys"]
+            else "Not ready yet: no key is saved. Run `oathkey start`.")
     text = (f"{head}\n"
             f"  services known: {info['services']}   with a key stored: "
             f"{info['with_keys']}\n"
             f"  connected: {', '.join(info['connected']) or 'none yet'}\n"
-            f"  activity log: {'intact' if ok else 'DAMAGED OR CHANGED - run `safeeasyapi audit show`'} "
+            f"  activity log: {'intact' if ok else 'DAMAGED OR CHANGED - run `oathkey audit show`'} "
             f"({n} entries)")
     _emit(info, as_json, text)
     return OK if ok else PROBLEM
@@ -82,7 +82,7 @@ def cmd_call(recipe: dict, args) -> int:
                           body, policy=policy, audit=audit)
     except remote.RemoteError:
         print(f"error: no key stored for '{recipe['service']}'. Run "
-              f"`safeeasyapi connect {recipe['service']}` first.", file=sys.stderr)
+              f"`oathkey connect {recipe['service']}` first.", file=sys.stderr)
         return NOT_FOUND
     except broker.BrokerError as e:
         print(f"error: {e}", file=sys.stderr)
@@ -114,7 +114,7 @@ def cmd_audit(action: str, as_json: bool, last: int = 20) -> int:
         if as_json:
             print(json.dumps(rows, indent=2))
         elif not rows:
-            print("nothing yet - no AI has used a key through safeeasyapi.")
+            print("nothing yet - no AI has used a key through oathkey.")
         for e in ([] if as_json else rows):
             when = _t.strftime("%Y-%m-%d %H:%M", _t.localtime(e.get("ts", 0)))
             print(f"{when}  {e.get('service')}  {e.get('method')} "
@@ -138,7 +138,7 @@ def cmd_serve(catalog: dict, port: int, env_file: str) -> int:
     srv = httpd.make_server(catalog, lambda r: remote.collect_values(r, env_file),
                             token, policy, audit, port=port)
     p = srv.server_address[1]
-    print(f"safeeasyapi web door is open at http://127.0.0.1:{p}\n"
+    print(f"oathkey web door is open at http://127.0.0.1:{p}\n"
           f"  token file (keep private): {tokfile}\n"
           f"  AIs send:  Authorization: Bearer <token>   GET /tools   POST /call\n"
           f"  Only this computer can reach it. Ctrl+C to close.")
@@ -150,24 +150,24 @@ def cmd_serve(catalog: dict, port: int, env_file: str) -> int:
 
 def cmd_start(catalog: dict, env_file: str) -> int:
     from . import scan as scan_mod
-    print("\nsafeeasyapi - your AI can use your keys, and never see them.\n")
+    print("\noathkey - your AI can use your keys, and never see them.\n")
     d = scan_mod.doctor()
     print(scan_mod.format_doctor(d))
     res = scan_mod.scan(["."], include_home=True)
     n = len(res["findings"])
     if n:
         print(f"\nHeads up: {n} place(s) where a key is lying around in plain "
-              "text. Run `safeeasyapi scan` to see where (it never shows the "
+              "text. Run `oathkey scan` to see where (it never shows the "
               "key).")
     else:
         print("\nNo loose keys found nearby. Good.")
     have = [s for s, r in catalog.items() if _have_key(r, env_file)]
     if have:
         print(f"\nConnected already: {', '.join(sorted(have))}.")
-        print("Next: run `safeeasyapi install` to plug it into Claude, Cursor or "
-              "VS Code (or `safeeasyapi serve` for other AI tools). Then fully "
+        print("Next: run `oathkey install` to plug it into Claude, Cursor or "
+              "VS Code (or `oathkey serve` for other AI tools). Then fully "
               "quit and reopen that app.")
     else:
         print("\nNext: connect your first service, for example:\n"
-              "  safeeasyapi connect github --store keychain")
+              "  oathkey connect github --store keychain")
     return OK if d["ok"] else PROBLEM

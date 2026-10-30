@@ -1,9 +1,9 @@
-"""`safeeasyapi remote` / `trust-server` / `deploy`: use a stored key on ANOTHER
+"""`oathkey remote` / `trust-server` / `deploy`: use a stored key on ANOTHER
 machine, over ssh.
 
-    safeeasyapi trust-server root@203.0.113.7            # once per server
-    safeeasyapi remote --as calas github root@203.0.113.7 -- git -C /opt/app pull
-    safeeasyapi deploy --dir /opt/app --as calas root@203.0.113.7
+    oathkey trust-server root@203.0.113.7            # once per server
+    oathkey remote --as calas github root@203.0.113.7 -- git -C /opt/app pull
+    oathkey deploy --dir /opt/app --as calas root@203.0.113.7
 
 The key is read here (OS keychain first, then the .env file), sent to the
 other machine on ssh's standard input, turned into an environment variable
@@ -61,7 +61,7 @@ class RemoteError(Exception):
 
 
 def home_dir() -> str:
-    return os.path.join(os.path.expanduser("~"), ".safeeasyapi")
+    return os.path.join(os.path.expanduser("~"), ".oathkey")
 
 
 def check_host(host: str) -> str:
@@ -113,7 +113,7 @@ def confirm_host(host: str, service: str, ask=input, isatty=None) -> None:
     if not tty:
         raise RemoteError(
             f"'{host}' has not been confirmed for '{service}' yet. Run "
-            f"`safeeasyapi trust-server {host}` yourself in a terminal first "
+            f"`oathkey trust-server {host}` yourself in a terminal first "
             "(a key is never sent to a server nobody confirmed).", 1)
     answer = ask(f"  Send your '{service}' key to {host}? [y/N] ").strip().lower()
     if answer not in ("y", "yes"):
@@ -151,10 +151,10 @@ def collect_values(recipe: dict, env_file: str, backend=None) -> dict:
         if not value:
             raise RemoteError(
                 f"no stored key for '{recipe['service']}' ({var}). Run "
-                f"`safeeasyapi connect {recipe['service']}` first.", 1)
+                f"`oathkey connect {recipe['service']}` first.", 1)
         if "\n" in value or "\r" in value or "\0" in value:
             raise RemoteError(f"the stored {var} has a line break in it; "
-                              "run `safeeasyapi rotate` to replace it.", 1)
+                              "run `oathkey rotate` to replace it.", 1)
         values[var] = value
     return values
 
@@ -163,7 +163,7 @@ def build_script(recipe: dict, command: list[str], run_as: str | None = None) ->
     """The shell text that runs on the far side. Contains NO secret: it only
     reads the values from its own standard input, one per line."""
     if not command:
-        raise RemoteError("no command: safeeasyapi remote <service> <host> "
+        raise RemoteError("no command: oathkey remote <service> <host> "
                           "-- <command>", 2)
     parts = []
     for i, var in enumerate(recipes_mod.env_vars(recipe)):
@@ -245,7 +245,7 @@ def ssh_command(host: str, script: str, extra: list[str] | None = None,
 def explain_failure(code: int, host: str) -> None:
     if code == 255:
         print(f"error: ssh could not connect or log in to {host}. Likely causes: "
-              "the server does not trust this PC yet (run `safeeasyapi "
+              "the server does not trust this PC yet (run `oathkey "
               f"trust-server {host}`), wrong address or port, a firewall, or the "
               f"server's key changed. Run `ssh {host} true` to see ssh's own "
               "message.", file=sys.stderr)
@@ -298,7 +298,7 @@ def ensure_ssh_access(host: str, runner=subprocess.run, out=print) -> str:
         return key
     if not os.path.exists(key):
         r = runner(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C",
-                    "safeeasyapi-" + _safe_name(host), "-f", key])
+                    "oathkey-" + _safe_name(host), "-f", key])
         if r.returncode != 0:
             raise RemoteError("could not make an ssh key (is the OpenSSH client "
                               "installed?).", 1)
@@ -313,7 +313,7 @@ def ensure_ssh_access(host: str, runner=subprocess.run, out=print) -> str:
         out("  Could not install it automatically. Paste this ONE line into the "
             f"server's own console (typing works even where pasting does not):\n\n"
             f"    mkdir -p ~/.ssh && echo '{pub}' >> ~/.ssh/authorized_keys\n\n"
-            f"  then run `safeeasyapi trust-server {host}` again.")
+            f"  then run `oathkey trust-server {host}` again.")
         raise RemoteError("the server does not trust this PC yet.", 1)
     out(f"  {host} now trusts this PC.")
     return key

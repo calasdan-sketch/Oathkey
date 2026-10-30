@@ -1,6 +1,6 @@
-"""One command to plug safeeasyapi into the AI tools people use.
+"""One command to plug oathkey into the AI tools people use.
 
-`safeeasyapi install` finds Claude Desktop, Cursor, VS Code and Claude Code
+`oathkey install` finds Claude Desktop, Cursor, VS Code and Claude Code
 config files, shows exactly what it would add, backs the file up, merges
 (never overwrites your other servers) and writes atomically. No keys are
 ever written to these files. It uses the full path of this Python so a
@@ -15,11 +15,11 @@ import sys
 import tempfile
 import time
 
-NAME = "safeeasyapi"
+NAME = "oathkey"
 
 
 def server_entry() -> dict:
-    return {"command": sys.executable, "args": python_flags() + ["-m", "safeeasyapi", "mcp"]}
+    return {"command": sys.executable, "args": python_flags() + ["-m", "oathkey", "mcp"]}
 
 
 def python_flags() -> list[str]:
@@ -134,12 +134,12 @@ def run(names, yes: bool, ask=input, out=print, **kw) -> int:
     if not chosen:
         out("no AI tools found. Name one: " + ", ".join(tg))
     elif done:
-        out("\nRestart the AI tool so it loads safeeasyapi.")
+        out("\nRestart the AI tool so it loads oathkey.")
     return 0
 
 
 def remove(names, yes: bool, ask=input, out=print, **kw) -> int:
-    """Take safeeasyapi out of the AI tools' config files (other servers stay)."""
+    """Take oathkey out of the AI tools' config files (other servers stay)."""
     tg = targets(**kw)
     chosen = names or list(tg)
     for n in chosen:
@@ -166,5 +166,5 @@ def remove(names, yes: bool, ask=input, out=print, **kw) -> int:
         b = apply({"path": path, "present": True, "new": new})
         out(f"    done. Backup: {b}")
     out("\nRestart the AI tool. Your saved keys were not touched "
-        "(`safeeasyapi forget <service>` removes one).")
+        "(`oathkey forget <service>` removes one).")
     return 0

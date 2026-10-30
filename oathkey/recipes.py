@@ -50,7 +50,7 @@ More auth shapes, each naming the fields it uses (default "key"):
      "access_key_field": "access_key_id", "secret_key_field": "secret_access_key"}
 
 Every field must be used by the auth, so nothing is collected that the
-check does not prove. The token_url gets the only POST safeeasyapi makes.
+check does not prove. The token_url gets the only POST oathkey makes.
 
 "cli_token" (BUILT-IN recipes only) gets the key from the vendor's own CLI
 after its browser sign-in, so nothing is copied at all:
@@ -66,16 +66,16 @@ import unicodedata
 import urllib.parse
 
 # Built-in recipes ship inside the package (so `pip install .` carries
-# them); recipes you capture with `safeeasyapi add` go to the user dir,
+# them); recipes you capture with `oathkey add` go to the user dir,
 # which also wins when both define the same service slug.
 RECIPES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                            "recipes")
 
 
 def user_recipes_dir() -> str:
-    """~/.safeeasyapi/recipes, resolved at call time (honours HOME /
+    """~/.oathkey/recipes, resolved at call time (honours HOME /
     USERPROFILE overrides)."""
-    return os.path.join(os.path.expanduser("~"), ".safeeasyapi", "recipes")
+    return os.path.join(os.path.expanduser("~"), ".oathkey", "recipes")
 
 REQUIRED = ("service", "display", "key_url", "env_var", "steps", "validate")
 VALIDATE_REQUIRED = ("method", "url", "auth", "expect")
@@ -443,7 +443,7 @@ def validate_recipe(data: dict) -> dict:
         except ValueError:
             # urlsplit refuses some malformed addresses ("https://[bad/").
             # Say so as a recipe problem, not as a traceback out of
-            # `safeeasyapi add` or a whole broken catalog.
+            # `oathkey add` or a whole broken catalog.
             raise RecipeError(
                 f"{label} is not a valid URL: {url}") from None
         if scheme != "https":
@@ -468,7 +468,7 @@ def _load_dir(directory: str, recipes: dict[str, dict],
             validate_recipe(data)
         except (json.JSONDecodeError, RecipeError, OSError, UnicodeDecodeError,
                 AttributeError, TypeError) as e:
-            sys.stderr.write(f"[safeeasyapi] skipping bad recipe "
+            sys.stderr.write(f"[oathkey] skipping bad recipe "
                              f"{printable(fname)}: {printable(e)}\n")
             continue
         # Only recipes shipped INSIDE the package may vouch for a
@@ -488,7 +488,7 @@ def load_recipes(directory: str | None = None) -> dict[str, dict]:
 
     With `directory`, only that directory is read. Without it, the
     built-in recipes are loaded first and the user directory
-    (~/.safeeasyapi/recipes) on top, so a user recipe overrides a
+    (~/.oathkey/recipes) on top, so a user recipe overrides a
     built-in one with the same slug."""
     recipes: dict[str, dict] = {}
     if directory is not None:

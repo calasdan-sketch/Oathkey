@@ -29,11 +29,11 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from unittest import mock
 
 import _isolation  # noqa: F401  (fake HOME/USERPROFILE for the whole run)
-from safeeasyapi import clipboard as clip_mod
-from safeeasyapi import connect as connect_mod
-from safeeasyapi import keychain as keychain_mod
-from safeeasyapi import recipes as recipes_mod
-from safeeasyapi import validate as validate_mod
+from oathkey import clipboard as clip_mod
+from oathkey import connect as connect_mod
+from oathkey import keychain as keychain_mod
+from oathkey import recipes as recipes_mod
+from oathkey import validate as validate_mod
 
 APP, SECRET = "FAKE-APP-ID-0001", "FAKE-SECRET-0002"
 

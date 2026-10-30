@@ -1,4 +1,4 @@
-"""Opt-in OS keychain storage (`safeeasyapi connect --store keychain`).
+"""Opt-in OS keychain storage (`oathkey connect --store keychain`).
 
 No third-party `keyring` package - each platform uses what it ships with:
 
@@ -16,7 +16,7 @@ No third-party `keyring` package - each platform uses what it ships with:
   the owner-only `.env` file and says so.
 
 The entry is keyed by service slug + env var, so one keychain can hold
-several services. Keys are read back only by `safeeasyapi run`, which
+several services. Keys are read back only by `oathkey run`, which
 injects them into a child process's environment - never printed.
 """
 
@@ -29,7 +29,7 @@ import sys
 
 from .recipes import printable
 
-TARGET_PREFIX = "safeeasyapi"
+TARGET_PREFIX = "oathkey"
 # How long an OS tool (security, secret-tool) may take to answer. A keyring
 # that is waiting for a dialog nobody sees would otherwise hold us forever.
 TOOL_TIMEOUT = 30
@@ -179,7 +179,7 @@ def _windows(op: str, service: str, account: str, key: str | None,
         cred.Flags = 0
         cred.Type = CRED_TYPE_GENERIC
         cred.TargetName = target
-        cred.Comment = "stored by safeeasyapi"
+        cred.Comment = "stored by oathkey"
         cred.CredentialBlobSize = len(blob)
         cred.CredentialBlob = ct.cast(buf, ct.POINTER(ct.c_ubyte))
         cred.Persist = CRED_PERSIST_LOCAL_MACHINE
@@ -247,7 +247,7 @@ def store(service: str, env_var: str, key: str, backend: str | None = None,
 
 def read(service: str, env_var: str, backend: str | None = None,
          run=subprocess.run, ctypes_mod=None) -> str | None:
-    """The stored key, or None when absent. For `safeeasyapi run` only -
+    """The stored key, or None when absent. For `oathkey run` only -
     callers must never print it."""
     backend = backend or detect_backend()
     if backend is None:

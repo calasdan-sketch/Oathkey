@@ -5,7 +5,7 @@ Tools:
   get_recipe {service}     -> {display, key_url, steps, scopes, env_var, docs}
   find_public_apis {query, auth?, category?, limit?}
                            -> free public APIs matching a task
-  get_public_api {name}    -> details + how to wire it via SafeEasyAPI
+  get_public_api {name}    -> details + how to wire it via Oathkey
 
 This is what stops the agent forgetting per-service steps or improvising
 imprecise instructions: the recipe is the memory. No secrets ever pass
@@ -24,7 +24,7 @@ from . import __version__
 from . import publicapis as pa_mod
 from . import recipes as recipes_mod
 
-SERVER_INFO = {"name": "safeeasyapi", "version": __version__}
+SERVER_INFO = {"name": "oathkey", "version": __version__}
 
 INVALID_REQUEST = -32600
 METHOD_NOT_FOUND = -32601
@@ -65,8 +65,8 @@ def _tool_defs() -> list[dict]:
         {"name": "get_public_api",
          "description": ("Get full details for one public API plus how to "
                          "wire it: no-auth APIs can be called directly; "
-                         "apiKey APIs should go through `safeeasyapi add` + "
-                         "`safeeasyapi connect` so the key is stored securely."),
+                         "apiKey APIs should go through `oathkey add` + "
+                         "`oathkey connect` so the key is stored securely."),
          "inputSchema": {"type": "object",
                          "properties": {"name": {"type": "string"}},
                          "required": ["name"]}},
@@ -124,8 +124,8 @@ def _call_api(catalog: dict, args: dict) -> dict:
     try:
         # never a .env found in the folder the AI app happened to start in
         # (an agent could plant one); only the keychain or a file the person
-        # named in SAFEEASYAPI_ENV_FILE
-        env_file = (os.environ.get("SAFEEASYAPI_ENV_FILE")
+        # named in OATHKEY_ENV_FILE
+        env_file = (os.environ.get("OATHKEY_ENV_FILE")
                     or os.path.join(remote.home_dir(), "no-env-file"))
         values = remote.collect_values(recipe, env_file)
         audit = broker.AuditLog(os.path.join(remote.home_dir(), "audit.log"))
@@ -135,7 +135,7 @@ def _call_api(catalog: dict, args: dict) -> dict:
         return fail(str(e))
     except remote.RemoteError:
         return fail("No key is saved for '%s'. Tell the person to run "
-                    "`safeeasyapi connect %s --store keychain` in a terminal. "
+                    "`oathkey connect %s --store keychain` in a terminal. "
                     "Never ask them to paste a key into the chat."
                     % (recipe["service"], recipe["service"]))
     return {"content": [{"type": "text", "text": json.dumps(result)}]}
@@ -344,7 +344,7 @@ def handle(request, catalog: dict[str, dict],
             return err(INVALID_PARAMS, f"Invalid params: {problem}")
         if name == "list_services":
             from . import remote as _remote
-            _envf = (os.environ.get("SAFEEASYAPI_ENV_FILE")
+            _envf = (os.environ.get("OATHKEY_ENV_FILE")
                      or os.path.join(_remote.home_dir(), "no-env-file"))
 
             def _has(r):
@@ -369,7 +369,7 @@ def handle(request, catalog: dict[str, dict],
                 return ok({"content": [{"type": "text", "text": err_text}],
                            "isError": True})
             hint = ("\n\nTo complete the connection, run in a terminal: "
-                    f"`safeeasyapi connect {recipe['service']}` — it opens the key "
+                    f"`oathkey connect {recipe['service']}` — it opens the key "
                     "page, validates the key, and stores it securely. "
                     "Never ask the user to paste the key into chat.")
             return ok({"content": [{"type": "text",
@@ -415,14 +415,14 @@ def handle(request, catalog: dict[str, dict],
             elif entry["auth"] == "apiKey":
                 detail["wiring"] = (
                     "Needs an API key. Do NOT ask the user to paste it. "
-                    "Run `safeeasyapi add` in a terminal to save this service's key "
+                    "Run `oathkey add` in a terminal to save this service's key "
                     "recipe (use the docs URL below as the key page), then "
-                    f"`safeeasyapi connect <service>` to store the key securely. "
+                    f"`oathkey connect <service>` to store the key securely. "
                     f"Docs: {detail['url']}")
             else:
                 detail["wiring"] = (
                     f"Auth type '{entry['auth']}' — check the docs for the "
-                    f"flow, then save the credential recipe with `safeeasyapi add`. "
+                    f"flow, then save the credential recipe with `oathkey add`. "
                     f"Docs: {detail['url']}")
             return ok({"content": [{"type": "text",
                                     "text": json.dumps(detail)}]})
@@ -441,7 +441,7 @@ def serve(catalog: dict[str, dict] | None = None,
     standard input or output is closed."""
     stdin = stdin if stdin is not None else sys.stdin
     stdout = stdout if stdout is not None else sys.stdout
-    # A process started with a stream shut (`safeeasyapi mcp >&-`; pythonw on
+    # A process started with a stream shut (`oathkey mcp >&-`; pythonw on
     # Windows) has None for sys.stdin / sys.stdout: the first read or write
     # would end in an AttributeError traceback. There is no client to talk to.
     for stream, which, so in (

@@ -3,7 +3,7 @@ requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "safeeasyapi"
+name = "oathkey"
 version = "0.4.0"
 description = "The safe tunnel for API keys: guided setup, validation, and .env storage."
 readme = "README.md"
@@ -26,14 +26,14 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/calasdan-sketch/safeeasyapi"
-Issues = "https://github.com/calasdan-sketch/safeeasyapi/issues"
+Homepage = "https://github.com/calasdan-sketch/oathkey"
+Issues = "https://github.com/calasdan-sketch/oathkey/issues"
 
 [project.scripts]
-safeeasyapi = "safeeasyapi.cli:main"
+oathkey = "oathkey.cli:main"
 
 [tool.setuptools]
-packages = ["safeeasyapi"]
+packages = ["oathkey"]
 
 [tool.setuptools.package-data]
-safeeasyapi = ["recipes/*.json"]
+oathkey = ["recipes/*.json"]

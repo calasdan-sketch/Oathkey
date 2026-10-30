@@ -2,7 +2,7 @@
 
 Importing this module points HOME / USERPROFILE / APPDATA / LOCALAPPDATA /
 XDG_* at a throwaway directory for the whole test process, so no test can
-read or write the real user's ~/.safeeasyapi (user recipes, directory
+read or write the real user's ~/.oathkey (user recipes, directory
 cache) or their real .env. The directory is removed at exit with a
 cleanup that tolerates read-only files (Windows).
 """
@@ -113,8 +113,8 @@ def _cleanup() -> None:
 
 
 _TEMP_DIRS: list = []
-FAKE_HOME = os.environ.get("SAFEEASYAPI_TEST_HOME") or tempfile.mkdtemp(prefix="seh")
+FAKE_HOME = os.environ.get("OATHKEY_TEST_HOME") or tempfile.mkdtemp(prefix="seh")
 for _var in ENV_VARS:
     os.environ[_var] = FAKE_HOME
-os.environ["SAFEEASYAPI_TEST_HOME"] = FAKE_HOME  # subprocesses share it
+os.environ["OATHKEY_TEST_HOME"] = FAKE_HOME  # subprocesses share it
 atexit.register(_cleanup)

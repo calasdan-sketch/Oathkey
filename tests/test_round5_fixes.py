@@ -17,7 +17,7 @@
    coding agents and proxies can inject credentials and make any key "valid".
 8  packaging metadata (classifiers, keywords, project URLs) and one version:
    __version__, pyproject, the MCP serverInfo and both User-Agents agree.
-9  `safeeasyapi ... | head -1` (a closed pipe) ends quietly: no traceback,
+9  `oathkey ... | head -1` (a closed pipe) ends quietly: no traceback,
    no "Exception ignored" at exit, no exit status 120.
 9b on Windows a closed pipe is not a BrokenPipeError: the flush (or, with
    `python -u`, print() itself) raises a plain OSError(EINVAL). That is
@@ -47,14 +47,14 @@ from contextlib import redirect_stderr, redirect_stdout
 from unittest import mock
 
 import _isolation
-from safeeasyapi import __version__
-from safeeasyapi import cli as cli_mod
-from safeeasyapi import connect as connect_mod
-from safeeasyapi import mcp as mcp_mod
-from safeeasyapi import publicapis as publicapis_mod
-from safeeasyapi import recipes as recipes_mod
-from safeeasyapi import store as store_mod
-from safeeasyapi import validate as validate_mod
+from oathkey import __version__
+from oathkey import cli as cli_mod
+from oathkey import connect as connect_mod
+from oathkey import mcp as mcp_mod
+from oathkey import publicapis as publicapis_mod
+from oathkey import recipes as recipes_mod
+from oathkey import store as store_mod
+from oathkey import validate as validate_mod
 
 FAKE_KEY = "sk-test-THIS-IS-A-FAKE-KEY-999"
 KEY = FAKE_KEY.encode("ascii")
@@ -747,7 +747,7 @@ class TestBrokenPipe(unittest.TestCase):
         out = io.StringIO()
         code, err = self.run_main(["list"], out)
         self.assertEqual((code, err), (0, ""))
-        self.assertIn("safeeasyapi connect <service>", out.getvalue())
+        self.assertIn("oathkey connect <service>", out.getvalue())
         with self.assertRaises(SystemExit) as cm:
             self.run_main(["--version"], io.StringIO())
         self.assertEqual(cm.exception.code, 0)
@@ -765,7 +765,7 @@ class TestBrokenPipe(unittest.TestCase):
             os.close(r)                       # nobody will ever read this
             try:
                 proc = subprocess.Popen(
-                    [sys.executable, "-m", "safeeasyapi"] + argv, stdout=w,
+                    [sys.executable, "-m", "oathkey"] + argv, stdout=w,
                     stderr=subprocess.PIPE,
                     stdin=subprocess.PIPE if stdin is not None else None,
                     cwd=_isolation.REPO, env=env)
@@ -1202,7 +1202,7 @@ class TestReadmeValidationNote(unittest.TestCase):
             self.assertIn(phrase, section)
 
 
-REPO_URL = "https://github.com/calasdan-sketch/safeeasyapi"
+REPO_URL = "https://github.com/calasdan-sketch/oathkey"
 
 
 class TestPackagingMetadata(unittest.TestCase):
@@ -1254,7 +1254,7 @@ class TestPackagingMetadata(unittest.TestCase):
 
 
 class TestOneVersion(unittest.TestCase):
-    """The version lives in safeeasyapi/__init__.py and pyproject.toml; every
+    """The version lives in oathkey/__init__.py and pyproject.toml; every
     other place that prints it reads it from there, so a bump cannot leave a
     stale copy behind (the public-APIs User-Agent still said 0.2.0)."""
 
@@ -1271,13 +1271,13 @@ class TestOneVersion(unittest.TestCase):
 
     def test_mcp_server_info_reports_it(self):
         info = handle(request("initialize", {}))["result"]["serverInfo"]
-        self.assertEqual(info, {"name": "safeeasyapi", "version": __version__})
+        self.assertEqual(info, {"name": "oathkey", "version": __version__})
 
     def test_validation_user_agent_carries_it(self):
         spec = {"url": "https://acme.test/me", "auth": {"type": "bearer"}}
         req = validate_mod._build_request(spec, FAKE_KEY)
         self.assertEqual(req.get_header("User-agent"),
-                         f"safeeasyapi/{__version__}")
+                         f"oathkey/{__version__}")
 
     def test_directory_download_user_agent_carries_it(self):
         seen = []
@@ -1301,7 +1301,7 @@ class TestOneVersion(unittest.TestCase):
                 mock.patch.object(publicapis_mod.urllib.request, "urlopen",
                                   fake_urlopen):
             publicapis_mod.fetch(refresh=True)
-        self.assertEqual(seen, [f"safeeasyapi/{__version__}"])
+        self.assertEqual(seen, [f"oathkey/{__version__}"])
 
 
 if __name__ == "__main__":

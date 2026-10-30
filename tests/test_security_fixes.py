@@ -15,9 +15,9 @@ import shutil
 import unittest
 
 import _isolation  # noqa: F401  (fake HOME/USERPROFILE for the whole run)
-from safeeasyapi import connect as connect_mod
-from safeeasyapi import mcp as mcp_mod
-from safeeasyapi import recipes as recipes_mod
+from oathkey import connect as connect_mod
+from oathkey import mcp as mcp_mod
+from oathkey import recipes as recipes_mod
 
 FAKE_KEY = "sk-test-THIS-IS-A-FAKE-KEY-999"
 

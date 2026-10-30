@@ -1,4 +1,4 @@
-﻿"""`safeeasyapi scan` and `safeeasyapi doctor`.
+"""`oathkey scan` and `oathkey doctor`.
 
 scan: look for API keys lying around in places an AI assistant (or a thief)
 can read: project files, .env files, AI-tool config and settings files, shell
@@ -121,7 +121,7 @@ def scan(paths: list[str], home: str | None = None, include_home: bool = True) -
         if found and any(norm.endswith(a) for a in AGENT_FILES):
             warnings.append({"file": f, "why": "an AI-tool settings/config file holds a "
                              "key. Keys saved here are readable by the assistant and often "
-                             "get committed. Move it to the keychain: `safeeasyapi connect`."})
+                             "get committed. Move it to the keychain: `oathkey connect`."})
         if base == ".env" or base.startswith(".env."):
             if os.name != "nt":
                 try:
@@ -148,7 +148,7 @@ def format_report(result: dict) -> str:
         lines.append(f"    - {w['file']}: {w['why']}")
     if result["findings"]:
         lines.append("\n  What to do: treat each key above as exposed - make a new one "
-                     "(`safeeasyapi rotate <service>`), delete the old one at the "
+                     "(`oathkey rotate <service>`), delete the old one at the "
                      "vendor, and keep the new one out of files.")
     else:
         lines.append("  Nothing key-shaped found. (This cannot see inside git history, "
@@ -165,7 +165,7 @@ def doctor(env=None, which=shutil.which) -> dict:
         checks.append({"check": name, "ok": ok, "detail": detail, "fix": fix})
 
     add("python", sys.version_info >= (3, 10), platform.python_version(),
-        "safeeasyapi needs Python 3.10 or newer.")
+        "oathkey needs Python 3.10 or newer.")
     backend = keychain_mod.detect_backend()
     add("keychain", backend is not None, keychain_mod.label(backend) if backend else "none",
         "Without an OS keychain, keys are kept in a .env file (owner-only).")
@@ -246,11 +246,11 @@ def format_git(res: dict) -> str:
         seen.add(k)
         lines.append(f"    ! {f['kind']}  {f['file']}  commit {f['commit']}  {f['hint']}")
     lines.append("    Fix: treat these keys as leaked - replace them at the provider "
-                 "(`safeeasyapi rotate`), then clean history if the repo is shared.")
+                 "(`oathkey rotate`), then clean history if the repo is shared.")
     return "\n".join(lines)
 
 
-HOOK_MARK = "# safeeasyapi pre-commit"
+HOOK_MARK = "# oathkey pre-commit"
 
 
 def install_hook(repo: str = ".") -> str:
@@ -269,7 +269,7 @@ def install_hook(repo: str = ".") -> str:
     _flag = "-P" if _sys.version_info >= (3, 11) else "-I"
     body = (f"#!/bin/sh\n{HOOK_MARK}\n"
             f"# blocks the commit if a key is staged, and if the scanner itself fails\n"
-            f"\"{py}\" {_flag} -m safeeasyapi scan --staged || {{ echo 'commit blocked by safeeasyapi' >&2; exit 1; }}\n")
+            f"\"{py}\" {_flag} -m oathkey scan --staged || {{ echo 'commit blocked by oathkey' >&2; exit 1; }}\n")
     with open(path, "w", encoding="utf-8", newline="\n") as f:
         f.write(body)
     try:

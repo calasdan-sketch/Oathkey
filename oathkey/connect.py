@@ -143,7 +143,7 @@ def _print_steps(recipe: dict, out=None) -> None:
 def render_validation_preview(recipe: dict, out=None) -> None:
     """Print exactly where the key will be sent for validation — the HTTP
     method and the full URL. Shown BEFORE the key is ever asked for, so a
-    poisoned recipe can't turn `safeeasyapi connect` into a key harvest."""
+    poisoned recipe can't turn `oathkey connect` into a key harvest."""
     out = out or sys.stdout
     v = recipe["validate"]
     auth = v.get("auth", {})
@@ -293,7 +293,7 @@ def _require_cross_domain_confirmation(recipe: dict, out,
         if recipe.get("_builtin") and host in trusted:
             # A built-in (reviewed, shipped-with-the-code) recipe may vouch for
             # its vendor's second domain: api.anthropic.com for a key page on
-            # claude.com. A recipe from ~/.safeeasyapi never gets this shortcut.
+            # claude.com. A recipe from ~/.oathkey never gets this shortcut.
             out.write(f"  (validation host {printable(describe_domain(host))} is "
                       f"this vendor's API domain — built-in recipe)\n")
             continue
@@ -563,4 +563,4 @@ def _partly(saved: list[str]) -> str:
     if not saved:
         return "Nothing was written."
     return ("Only part was written: " + "; ".join(saved) +
-            " - run `safeeasyapi forget` for this service and connect again.")
+            " - run `oathkey forget` for this service and connect again.")

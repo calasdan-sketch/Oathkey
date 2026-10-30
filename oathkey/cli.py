@@ -1,4 +1,4 @@
-"""SafeEasyAPI CLI: `safeeasyapi` - the safe tunnel for API keys."""
+"""Oathkey CLI: `oathkey` - the safe tunnel for API keys."""
 
 from __future__ import annotations
 
@@ -37,7 +37,7 @@ def _harden_streams() -> None:
 
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        prog="safeeasyapi",
+        prog="oathkey",
         description="Safe tunnel for API keys: guided, validated, "
                     "securely stored. The key is never displayed or logged.")
     p.add_argument("--version", action="version",
@@ -47,7 +47,7 @@ def _build_parser() -> argparse.ArgumentParser:
     for name, help_text in (("connect", "Connect a service (guided key setup)."),
                             ("rotate", "Replace the stored key for a service.")):
         c = sub.add_parser(name, help=help_text)
-        c.add_argument("service", help="Service slug (see `safeeasyapi list`).")
+        c.add_argument("service", help="Service slug (see `oathkey list`).")
         c.add_argument("--env-file", default=".env",
                        help="Where to store the key with --store env "
                             "(default: .env).")
@@ -56,7 +56,7 @@ def _build_parser() -> argparse.ArgumentParser:
                             "the OS keychain (macOS Keychain, Windows "
                             "Credential Manager, secret-tool on Linux), "
                             "falling back to the .env file when none is "
-                            "available; use `safeeasyapi run` to consume it.")
+                            "available; use `oathkey run` to consume it.")
         c.add_argument("--no-browser", action="store_true",
                        help="Don't auto-open the key page.")
         c.add_argument("--clipboard", action="store_true",
@@ -83,7 +83,7 @@ def _build_parser() -> argparse.ArgumentParser:
                                    "in its environment (never printed).")
     r.add_argument("service", help="Service slug.")
     r.add_argument("command", nargs="*",
-                   help="command after -- : safeeasyapi run stripe -- python app.py")
+                   help="command after -- : oathkey run stripe -- python app.py")
 
     rm = sub.add_parser("remote", help="Use a stored key on another machine over "
                                         "ssh (key goes over stdin, never on a command line).")
@@ -96,7 +96,7 @@ def _build_parser() -> argparse.ArgumentParser:
     rm.add_argument("--ssh-arg", action="append", default=[],
                     help="Extra ssh argument, e.g. --ssh-arg=-i --ssh-arg=~/.ssh/key")
     rm.add_argument("command", nargs="*",
-                    help="command after -- : safeeasyapi remote github root@host -- git pull")
+                    help="command after -- : oathkey remote github root@host -- git pull")
 
     sc = sub.add_parser("scan", help="Look for API keys lying around where an AI (or a "
                                      "thief) can read them. Never prints a key.")
@@ -132,13 +132,13 @@ def _build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("mcp", help="Run the MCP server on stdio (for Claude Code).")
 
-    ins = sub.add_parser("install", help="Plug safeeasyapi into your AI tools (Claude "
+    ins = sub.add_parser("install", help="Plug oathkey into your AI tools (Claude "
                                          "Desktop, Cursor, VS Code, Claude Code). Shows "
                                          "the change and asks first.")
     ins.add_argument("targets", nargs="*", help="claude-desktop, cursor, claude-code, vscode "
                                                 "(default: the ones found)")
     ins.add_argument("--yes", action="store_true", help="Do not ask.")
-    un = sub.add_parser("uninstall", help="Remove safeeasyapi from your AI tools' settings "
+    un = sub.add_parser("uninstall", help="Remove oathkey from your AI tools' settings "
                                           "(your saved keys are not touched).")
     un.add_argument("targets", nargs="*")
     un.add_argument("--yes", action="store_true", help="Do not ask.")
@@ -178,7 +178,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def _cmd_list(catalog: dict) -> int:
     if not catalog:
-        print("no recipes yet - add one with `safeeasyapi add`.")
+        print("no recipes yet - add one with `oathkey add`.")
         return 0
     print("\n  services with saved key recipes:\n")
     for slug in sorted(catalog):
@@ -187,7 +187,7 @@ def _cmd_list(catalog: dict) -> int:
         print(f"    {recipes_mod.printable(slug):14} "
               f"{recipes_mod.printable(r['display'], words=True):38} -> "
               f"{', '.join(recipes_mod.printable(v) for v in recipes_mod.env_vars(r))}")
-    print("\n  `safeeasyapi connect <service>` to set one up.\n")
+    print("\n  `oathkey connect <service>` to set one up.\n")
     return 0
 
 
@@ -294,7 +294,7 @@ def _cmd_find(args) -> int:
         print(f"      {desc}")
         print(f"      {url}  ({category})")
         if e["auth"] == "apiKey":
-            print("      needs a key - save its recipe with `safeeasyapi add`.")
+            print("      needs a key - save its recipe with `oathkey add`.")
     print()
     return 0
 
@@ -318,7 +318,7 @@ def keychain_store(recipe: dict, env_file: str, out=None,
             return connect_mod.store_in_env_file(env_file)(env_var, key)
         return (f"stored {env_var} in the {keychain.label(used)} "
                 f"(never displayed, never logged); use it with "
-                f"`safeeasyapi run {recipe['service']} -- <command>`")
+                f"`oathkey run {recipe['service']} -- <command>`")
     return _store
 
 
@@ -379,13 +379,13 @@ def _cmd_forget(recipe: dict, env_file: str, out=None,
             f"  \u2717 could not remove the {keychain.label(backend)} "
             f"entry: {keychain_problem}.\n"
             f"    The key may still be stored there \u2014 run "
-            f"`safeeasyapi forget {service}` again when it answers.\n")
+            f"`oathkey forget {service}` again when it answers.\n")
     if env_problem:
         problems.append(
             f"  \u2717 could not rewrite {recipes_mod.printable(env_file)}: "
             f"{recipes_mod.printable(env_problem)}.\n"
             f"    The key may still be stored there - fix that and run "
-            f"`safeeasyapi forget {service}` again.\n")
+            f"`oathkey forget {service}` again.\n")
     for path, why in stuck:
         problems.append(
             f"  \u2717 could not remove {recipes_mod.printable(path)}: "
@@ -399,7 +399,7 @@ def _cmd_forget(recipe: dict, env_file: str, out=None,
             f"(hard links): {_describe_links(links)}.\n"
             f"    They still hold the old contents, {env_var} included - "
             f"rewriting a file cannot change its other names.\n"
-            f"    safeeasyapi does not delete files it did not make; delete "
+            f"    oathkey does not delete files it did not make; delete "
             f"them yourself if they are stray backups.\n")
     if not removed:
         for text in problems:
@@ -428,7 +428,7 @@ def _cmd_run(recipe: dict, command: list[str]) -> int:
     if cmd and cmd[0] == "--":
         cmd = cmd[1:]
     if not cmd:
-        print("error: no command: safeeasyapi run <service> -- <command>",
+        print("error: no command: oathkey run <service> -- <command>",
               file=sys.stderr)
         return 2
     backend = keychain_mod.detect_backend()
@@ -460,7 +460,7 @@ def _cmd_run(recipe: dict, command: list[str]) -> int:
     except keychain_mod.KeychainError:
         print(f"error: no key for '{recipe['service']}' in the "
               f"{keychain_mod.label(backend)} - run "
-              f"`safeeasyapi connect {recipe['service']} --store keychain`.",
+              f"`oathkey connect {recipe['service']} --store keychain`.",
               file=sys.stderr)
         return 1
 
@@ -493,7 +493,7 @@ def is_closed_pipe(exc: BaseException) -> bool:
 
 
 def _after_broken_pipe() -> int:
-    """The reader of our output went away (``safeeasyapi list | head -1``).
+    """The reader of our output went away (``oathkey list | head -1``).
     That is not worth a traceback: stop quietly. Python flushes stdout again
     when it exits and would fail a second time ("Exception ignored in ...",
     exit status 120), so fd 1 is pointed at the null device first - the
@@ -612,7 +612,7 @@ def _main(argv: list[str] | None = None) -> int:
                 print(f"error: {g['error']}", file=sys.stderr)
                 return 2
             if g["findings"]:
-                print("safeeasyapi: a key looks like it is about to be committed:\n"
+                print("oathkey: a key looks like it is about to be committed:\n"
                       + scan_mod.format_git(g), file=sys.stderr)
                 return 1
             return 0

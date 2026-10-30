@@ -20,9 +20,9 @@ import types
 import unittest
 
 import _isolation  # noqa: F401  (fake HOME/USERPROFILE for the whole run)
-from safeeasyapi import cli as cli_mod
-from safeeasyapi import keychain as keychain_mod
-from safeeasyapi import store as store_mod
+from oathkey import cli as cli_mod
+from oathkey import keychain as keychain_mod
+from oathkey import store as store_mod
 
 KEY = "sk-forget-me-7731"
 NO_KEYCHAIN = types.SimpleNamespace(detect_backend=lambda: None,

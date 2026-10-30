@@ -64,7 +64,7 @@ def make_server(catalog: dict, get_values, token: str, policy, audit=None,
     call_fn = call_fn or broker.call
 
     class Handler(BaseHTTPRequestHandler):
-        server_version = "safeeasyapi"
+        server_version = "oathkey"
         sys_version = ""
         timeout = 15                       # a stalled client cannot hold a thread forever
 

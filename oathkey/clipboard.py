@@ -5,7 +5,7 @@ key-shaped value on the clipboard, takes it and EMPTIES the clipboard, so
 the key is not left there for the next paste or another program. Nothing
 is typed or pasted, and the value is never shown.
 
-It only looks while `safeeasyapi connect --clipboard` is waiting for a key,
+It only looks while `oathkey connect --clipboard` is waiting for a key,
 and only takes a value that:
   - matches the field's pattern, when the recipe gives one; otherwise
   - looks like a key: one line, no spaces, 8 to 4096 visible characters,

@@ -1,7 +1,7 @@
 import json
 import os
 
-from safeeasyapi import cli, scan
+from oathkey import cli, scan
 
 # built at run time so this test file itself never contains a key-shaped string
 GH = "gh" + "o_" + "B" * 36

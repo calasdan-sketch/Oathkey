@@ -3,7 +3,7 @@ import subprocess
 
 import pytest
 
-from safeeasyapi import cli, remote
+from oathkey import cli, remote
 
 GITHUB = {"service": "github", "env_var": "GITHUB_TOKEN",
           "fields": [{"env_var": "GITHUB_TOKEN", "name": "key", "label": "token"}]}

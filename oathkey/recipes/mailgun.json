@@ -9,7 +9,7 @@
     "Sign in to Mailgun; this is Profile menu → API Security",
     "Under 'Mailgun API keys' click 'Add new key'",
     "Give it a description and a role, click 'Create Key' and copy it — it is shown exactly once",
-    "EU account? Your API host is api.eu.mailgun.net — save your own recipe with that validation URL (`safeeasyapi add`)"
+    "EU account? Your API host is api.eu.mailgun.net — save your own recipe with that validation URL (`oathkey add`)"
   ],
   "validate": {
     "auth": {

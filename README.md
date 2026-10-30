@@ -1,11 +1,11 @@
-# SafeEasyAPI (`safeeasyapi`)
+# Oathkey (`oathkey`)
 
 The safe tunnel for API keys. Connecting a website tool usually means 40
 minutes of hunting through dashboards, imprecise docs, and fumbling a
-secret into the right file. `safeeasyapi` turns it into one command:
+secret into the right file. `oathkey` turns it into one command:
 
 ```bash
-safeeasyapi connect github
+oathkey connect github
 ```
 
 It opens the exact key page, walks the precise saved steps, takes the key
@@ -19,37 +19,37 @@ never logged, never in shell history.
 Zero dependencies — Python 3.10+ stdlib only.
 
 ```bash
-pip install git+https://github.com/calasdan-sketch/safeeasyapi
-safeeasyapi --version
+pip install git+https://github.com/calasdan-sketch/oathkey
+oathkey --version
 ```
 
-That installs the `safeeasyapi` command (`py -m safeeasyapi` / `python -m
-safeeasyapi` works too). From a checkout: `pip install .`
+That installs the `oathkey` command (`py -m oathkey` / `python -m
+oathkey` works too). From a checkout: `pip install .`
 
 **Windows:** run it from PowerShell or Windows Terminal. Under Git Bash /
 mintty the hidden key prompt (`getpass`) may echo what you type or appear
 to hang, because mintty is not a Windows console; if you must use Git
-Bash, prefix the command with `winpty` (`winpty safeeasyapi connect
+Bash, prefix the command with `winpty` (`winpty oathkey connect
 stripe`).
 
 ## Commands
 
 ```bash
-safeeasyapi list                        # services with saved recipes
-safeeasyapi connect <service>           # guided key setup -> .env
-safeeasyapi connect <service> --env-file /path/to/.env
-safeeasyapi connect <service> --store keychain   # OS keychain instead of .env
-safeeasyapi connect <service> --clipboard        # copy-and-go: click Copy, no pasting
-safeeasyapi connect github --via-cli    # zero-copy: the vendor CLI's browser sign-in
-safeeasyapi run <service> -- <command>  # run with a keychain-stored key in its env
-safeeasyapi rotate <service>            # replace a stored key
-safeeasyapi forget <service>            # remove the key: OS keychain entry + .env line(s)
-safeeasyapi add                         # capture a new service recipe interactively
-safeeasyapi find <query>                # find free public APIs for a task
-safeeasyapi mcp                         # stdio MCP server (for Claude Code)
+oathkey list                        # services with saved recipes
+oathkey connect <service>           # guided key setup -> .env
+oathkey connect <service> --env-file /path/to/.env
+oathkey connect <service> --store keychain   # OS keychain instead of .env
+oathkey connect <service> --clipboard        # copy-and-go: click Copy, no pasting
+oathkey connect github --via-cli    # zero-copy: the vendor CLI's browser sign-in
+oathkey run <service> -- <command>  # run with a keychain-stored key in its env
+oathkey rotate <service>            # replace a stored key
+oathkey forget <service>            # remove the key: OS keychain entry + .env line(s)
+oathkey add                         # capture a new service recipe interactively
+oathkey find <query>                # find free public APIs for a task
+oathkey mcp                         # stdio MCP server (for Claude Code)
 ```
 
-Output can be piped (`safeeasyapi list | head -1`): when the reader
+Output can be piped (`oathkey list | head -1`): when the reader
 stops early the command ends quietly with exit status 1 — no traceback,
 no "Exception ignored" noise at exit. On Windows Python reports that
 closed pipe as a plain `OSError` 22 instead of `BrokenPipeError` (a
@@ -59,7 +59,7 @@ every command and for the MCP server.
 ## A connect, annotated
 
 ```bash
-$ safeeasyapi connect stripe
+$ oathkey connect stripe
 
   Connect Stripe  (key opens in your browser)        # 1. your browser opens
                                                      #    the exact key page
@@ -85,7 +85,7 @@ The validation preview is the security hinge: you see exactly where the
 key will be sent, and the recipe must use `https://` for both the key page
 and the validation URL (a plain-`http://` recipe is rejected). If the
 validation URL belongs to a **different owner** than the key page,
-`safeeasyapi` stops and requires you to type `yes` — anything else aborts,
+`oathkey` stops and requires you to type `yes` — anything else aborts,
 and no key is ever asked for or sent:
 
 ```bash
@@ -114,7 +114,7 @@ genuinely keep their API on a second domain (Anthropic's console is
 their **built-in** recipes name that host in `validate.trusted_hosts`
 and connect without a prompt, with a one-line note. Only recipes shipped
 inside the package get that shortcut — a recipe from
-`~/.safeeasyapi/recipes` (yours, or one somebody sent you) always prompts
+`~/.oathkey/recipes` (yours, or one somebody sent you) always prompts
 when the domains differ, whatever it claims.
 
 Which names count as "anyone can register a sub-domain here" is a **compact
@@ -161,7 +161,7 @@ or any other field a space of another width or a joiner is refused too,
 and so is a joiner at the start or the end of a text, or next to a blank
 or another joiner. An emoji built with tag characters (the flag of
 England) is refused. What is unassigned is up to the Unicode tables of
-the Python that runs `safeeasyapi`: Python 3.10 knows Unicode 13, so an
+the Python that runs `oathkey`: Python 3.10 knows Unicode 13, so an
 emoji from a later version passes on Python 3.13 and not on 3.10.
 
 In the transcript above the key is shown as `sk-…` — in reality it is
@@ -190,7 +190,7 @@ is sent straight from your machine. Cloud coding agents, sandboxes and
 some company proxies add their own credentials to outgoing requests, so
 the API can answer "valid" for any key, even a made-up one. If a key you
 know is wrong gets accepted, that is the likely reason: run
-`safeeasyapi connect` in a terminal on your own computer instead.
+`oathkey connect` in a terminal on your own computer instead.
 
 ## Where the key goes
 
@@ -239,7 +239,7 @@ which a shell still runs `$(...)` and backticks and expands `$VAR`. A key
 made only of letters, digits and `_ . + / = : -` was never quoted, so
 those are unaffected. Double-quoted values are still read, and such a
 line is rewritten in the new form the next time its key is saved:
-`safeeasyapi rotate <service>` does it, and nothing else in the file
+`oathkey rotate <service>` does it, and nothing else in the file
 moves.
 
 If the same variable is set more than once in the file, the **last**
@@ -282,7 +282,7 @@ it — re-save it as UTF-8).
   actually succeeded; otherwise it says `could not restrict ACL` so you
   know the file has the folder's default permissions.
 
-`safeeasyapi forget <service>` undoes a connect: it deletes the keychain
+`oathkey forget <service>` undoes a connect: it deletes the keychain
 entry (when this OS has a keychain) and removes the `ENV_VAR=` line from
 `.env` (`--env-file` to point elsewhere), and says what it removed. If
 the variable is set more than once, every one of those lines goes —
@@ -305,12 +305,12 @@ uses what it ships with, and the key never goes through `argv`:
 
 | OS      | backend                                                            | how |
 |---------|--------------------------------------------------------------------|-----|
-| macOS   | login Keychain, via the `security` command                         | commands fed over stdin (`security -i`), generic password `safeeasyapi:<service>` / account `<ENV_VAR>` |
-| Windows | Credential Manager (Windows Vault), via `ctypes` → `advapi32` `CredWriteW`/`CredReadW`/`CredDeleteW` | generic credential `safeeasyapi:<service>`, persisted for the local machine, UTF-16-LE blob like `cmdkey` |
-| Linux   | Secret Service (GNOME Keyring / KWallet) via `secret-tool`, when installed | key on stdin; attributes `service=safeeasyapi account=<ENV_VAR> slug=<service>` |
+| macOS   | login Keychain, via the `security` command                         | commands fed over stdin (`security -i`), generic password `oathkey:<service>` / account `<ENV_VAR>` |
+| Windows | Credential Manager (Windows Vault), via `ctypes` → `advapi32` `CredWriteW`/`CredReadW`/`CredDeleteW` | generic credential `oathkey:<service>`, persisted for the local machine, UTF-16-LE blob like `cmdkey` |
+| Linux   | Secret Service (GNOME Keyring / KWallet) via `secret-tool`, when installed | key on stdin; attributes `service=oathkey account=<ENV_VAR> slug=<service>` |
 | anything else, or the tool is missing | — | falls back to the `.env` file and says so |
 
-A keychain-stored key is consumed with `safeeasyapi run <service> --
+A keychain-stored key is consumed with `oathkey run <service> --
 <command>`: the key is read back and placed in that one child process's
 environment, never printed. (Your app does not need to change — it
 still reads `$STRIPE_SECRET_KEY`.) Without a keychain backend `run`
@@ -341,12 +341,12 @@ file the link points to.
 
 ## Find public APIs
 
-SafeEasyAPI is also a discovery front door. `safeeasyapi find` searches the public
+Oathkey is also a discovery front door. `oathkey find` searches the public
 APIs directory (~2,100 free APIs, cached locally for 7 days):
 
 ```bash
-safeeasyapi find "weather" --auth No        # only keyless APIs
-safeeasyapi find "crypto price" --limit 5
+oathkey find "weather" --auth No        # only keyless APIs
+oathkey find "crypto price" --limit 5
 ```
 
 APIs needing a key point straight back at the tunnel:
@@ -355,7 +355,7 @@ APIs needing a key point straight back at the tunnel:
     Weatherstack [apiKey]
       Real-time weather
       https://weatherstack.com/  (Weather)
-      needs a key — save its recipe with `safeeasyapi add`.
+      needs a key — save its recipe with `oathkey add`.
 ```
 
 ### MCP co-work skills
@@ -365,15 +365,15 @@ discovers free APIs instead of improvising or reaching for paid services:
 
 - `find_public_apis {query, auth?, category?, limit?}` — search the directory
 - `get_public_api {name}` — details plus wiring: no-auth APIs get a
-  call-it-directly note; `apiKey` APIs get the exact `safeeasyapi add` +
-  `safeeasyapi connect` flow (the agent never asks the user to paste a key)
+  call-it-directly note; `apiKey` APIs get the exact `oathkey add` +
+  `oathkey connect` flow (the agent never asks the user to paste a key)
 
 No secrets ever pass through MCP — only public how-to.
 
 ## Copy-and-go, two-value keys, every kind of check (0.4.0)
 
 **Copy-and-go** (`--clipboard`): instead of pasting, click the vendor's own
-**Copy** button. safeeasyapi notices the new, key-shaped value on the
+**Copy** button. oathkey notices the new, key-shaped value on the
 clipboard, takes it and **empties the clipboard**, then validates and
 stores it as usual; nothing is typed, pasted or shown. It looks only while
 it is waiting for a key, takes only a value that matches the field's
@@ -382,13 +382,13 @@ spaces, 8-4096 visible characters, different from what was already on the
 clipboard), and falls back to the hidden prompt after 3 minutes or when no
 clipboard tool exists (Windows needs nothing; macOS uses `pbpaste`; Linux
 `wl-paste`, `xclip` or `xsel`). Windows clipboard history (Win+V) and
-clipboard managers can keep their own copy, which safeeasyapi cannot clear.
+clipboard managers can keep their own copy, which oathkey cannot clear.
 
 **Zero-copy** (`--via-cli`): for a built-in recipe whose vendor has a CLI
-with a browser sign-in (`github` uses `gh auth login --web`), safeeasyapi
+with a browser sign-in (`github` uses `gh auth login --web`), oathkey
 runs that sign-in and reads the token from the CLI, then validates and
 stores it. The programs a recipe may run are fixed in the code
-(`recipes.CLI_PROGRAMS`); a recipe from `~/.safeeasyapi` cannot use this.
+(`recipes.CLI_PROGRAMS`); a recipe from `~/.oathkey` cannot use this.
 
 **Two-value credentials**: a recipe may list several `fields` (an App ID
 and a secret, an access key and its secret). Each is collected hidden (or
@@ -413,8 +413,8 @@ one it never checks, or puts its token endpoint on `http://`.
 Agents (and humans) forget per-service key flows and improvise imprecise
 steps. Recipes are the memory: plain JSON files with the key URL, the
 exact click path, scopes, and a validation endpoint. Teach it once with
-`safeeasyapi add`, use it forever — and Claude Code can pull the exact recipe via
-`safeeasyapi mcp` instead of guessing.
+`oathkey add`, use it forever — and Claude Code can pull the exact recipe via
+`oathkey mcp` instead of guessing.
 
 Ships with 35 recipes inside the package (so `pip install` carries
 them), each checked against the provider's own docs for the key page,
@@ -440,9 +440,9 @@ answers HTTP 200 even to a bad token), Linear (GraphQL needs a POST
 body), Shopify (per-store URL), Perplexity/Exa/Serper (no free GET
 endpoint), Fireworks (the documented list-models URL is per account).
 
-`safeeasyapi add` walks you through capturing your own (Headroom, RPX,
-Ponytail…); those are saved to `~/.safeeasyapi/recipes/`
-(`%USERPROFILE%\.safeeasyapi\recipes\` on Windows) and override a
+`oathkey add` walks you through capturing your own (Headroom, RPX,
+Ponytail…); those are saved to `~/.oathkey/recipes/`
+(`%USERPROFILE%\.oathkey\recipes\` on Windows) and override a
 built-in recipe with the same slug. `--recipes-dir` writes elsewhere.
 A slug is `[a-z0-9][a-z0-9_-]{0,63}` — it becomes the file name, so
 `../../evil` is refused — and the expected status codes must be numbers
@@ -461,14 +461,14 @@ a provider does not answer 401/403 (Google and Resend say 400, Brave
 Add to Claude Code (`claude mcp add`) or `~/.claude.json`:
 
 ```json
-{ "mcpServers": { "safeeasyapi": {
-  "command": "python", "args": ["-m", "safeeasyapi", "mcp"] } } }
+{ "mcpServers": { "oathkey": {
+  "command": "python", "args": ["-m", "oathkey", "mcp"] } } }
 ```
 
 (`python` is the Windows launcher's name; on macOS/Linux use whatever
 runs your Python 3.) Tools: `list_services`, `get_recipe`,
 `find_public_apis`, `get_public_api`. The recipe tells the agent the
-exact steps and ends with: run `safeeasyapi connect <service>` in a
+exact steps and ends with: run `oathkey connect <service>` in a
 terminal — never ask the user to paste the key into chat. The server
 speaks JSON-RPC 2.0 properly: notifications (`notifications/cancelled`,
 `notifications/initialized`, anything without an `id`) are never
@@ -479,7 +479,7 @@ typed required argument gets `-32602 Invalid params` — never a crash or
 `-32603` — after which the server simply carries on. (A tool-level miss,
 such as a service that has no recipe, is an ordinary result with
 `isError`.) If standard input or standard output is closed
-(`safeeasyapi mcp >&-`; `pythonw` on Windows) there is no client to talk
+(`oathkey mcp >&-`; `pythonw` on Windows) there is no client to talk
 to: one `error:` line on stderr and exit status 2, before any request is
 read, not a traceback.
 
@@ -513,7 +513,7 @@ read, not a traceback.
   one leeway: a space of another width and a joiner between two visible
   characters are text in a name, a step or a scope - the list of what is
   refused is in *A connect, annotated*.)
-- The only POST safeeasyapi sends is the OAuth2 token request, to the
+- The only POST oathkey sends is the OAuth2 token request, to the
   `token_url` the recipe names and shown before anything is asked for;
   it and a `query` request follow no redirect. Copy-and-go empties the
   clipboard as soon as it takes a value.
@@ -563,7 +563,7 @@ the package metadata and one version number everywhere, output into a pipe that 
 real thing, and the different error Windows gives, simulated), and
 never-log assertions on every output path. Tests point
 `HOME`/`USERPROFILE`/`APPDATA` at a throwaway directory, so they never
-read your real `~/.safeeasyapi` or `.env`.
+read your real `~/.oathkey` or `.env`.
 
 Windows 11 is a first-class target: the wire format of the MCP server
 is UTF-8 bytes regardless of console code page, console output is
@@ -578,9 +578,9 @@ every text file is opened as UTF-8.
 - Recipe catalog is curated manually — verify a new service's key URL and
   validation endpoint before trusting it. Provider dashboards move:
   if a key page URL redirects, follow it and send a fix.
-- `safeeasyapi mcp` returns recipes; the interactive key paste stays in the
+- `oathkey mcp` returns recipes; the interactive key paste stays in the
   terminal by design.
-- `forget` removes what safeeasyapi wrote and what a killed write left
+- `forget` removes what oathkey wrote and what a killed write left
   next to it; it does not find other copies of the file (editor backups,
   version-control history), and it names - rather than deletes - another
   hard link to the `.env` file, exiting 1 because the key is still there.

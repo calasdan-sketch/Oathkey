@@ -29,7 +29,7 @@ _ROW_RE = re.compile(
 
 # --- terminal-escape sanitization -------------------------------------
 # Community directory strings are printed straight into the user's
-# terminal by `safeeasyapi find` and embedded in MCP stdout, so they must never
+# terminal by `oathkey find` and embedded in MCP stdout, so they must never
 # carry control sequences: `\x1b]0;…\x07` (OSC window-title hijack),
 # `\x1b[2J` (screen clear), `\x1b[6n` (device-status-report exfil), etc.
 # Every print path for directory data goes through sanitize_display.
@@ -57,7 +57,7 @@ def sanitize_display(text):
 
 
 def cache_path() -> str:
-    d = os.path.expanduser("~/.safeeasyapi")
+    d = os.path.expanduser("~/.oathkey")
     os.makedirs(d, exist_ok=True)
     return os.path.join(d, "public-apis.md")
 
@@ -70,7 +70,7 @@ def fetch(refresh: bool = False) -> str:
             with open(path, encoding="utf-8") as f:
                 return f.read()
     req = urllib.request.Request(SOURCE_URL,
-                                 headers={"User-Agent": f"safeeasyapi/{__version__}"})
+                                 headers={"User-Agent": f"oathkey/{__version__}"})
     with urllib.request.urlopen(req, timeout=30) as resp:
         text = resp.read().decode("utf-8", errors="replace")
     with open(path, "w", encoding="utf-8") as f:

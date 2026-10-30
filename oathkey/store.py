@@ -91,15 +91,15 @@ PROTECTION_WINDOWS = "owner-only ACL"
 PROTECTION_WINDOWS_FAILED = ("could not restrict ACL - icacls failed; the file "
                              "has the folder's default permissions")
 
-LINK_REASON = ("it is a link to another file, so safeeasyapi will not edit it "
+LINK_REASON = ("it is a link to another file, so oathkey will not edit it "
                "- delete the link, or point --env-file at the real file")
 NOT_TEXT_REASON = ("it is not a plain UTF-8 text file (Windows PowerShell's > "
-                   "saves UTF-16), so safeeasyapi will not edit it - save it "
+                   "saves UTF-16), so oathkey will not edit it - save it "
                    "as UTF-8 first")
 
 
 class EnvFileRefused(OSError):
-    """The .env file is one safeeasyapi will not edit: a link, or not plain
+    """The .env file is one oathkey will not edit: a link, or not plain
     text. Nothing was changed. ``strerror`` is a single plain-language
     sentence with the reason and the way out; ``filename`` is the path.
     An OSError so every existing "could not save" handler already copes."""
@@ -554,7 +554,7 @@ def store_key(env_var: str, key: str, env_file: str = ".env") -> tuple[str, bool
 
 
 def remove_key(env_var: str, env_file: str = ".env") -> int:
-    """Delete every ENV_VAR= line from env_file (for `safeeasyapi forget`)
+    """Delete every ENV_VAR= line from env_file (for `oathkey forget`)
     and return how many there were: 0 (false) when the variable is not
     there. All of them, not just the one that takes effect - otherwise an
     older line would spring back and the "forgotten" key would still be
@@ -597,7 +597,7 @@ def other_links(path: str) -> OtherLinks | None:
     Why it matters for `forget`: a file is rewritten by renaming a new one
     over it, and that leaves every other name of the OLD file as it was - old
     contents, key included. Those names (a `.env.bak` made with `ln`, a
-    backup tool's snapshot) are not safeeasyapi's to delete; it can only say
+    backup tool's snapshot) are not oathkey's to delete; it can only say
     they are there. Call this BEFORE rewriting: afterwards `path` is a new
     file with one name."""
     try:
