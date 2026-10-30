@@ -168,7 +168,7 @@ def cmd_serve(catalog: dict, port: int, env_file: str) -> int:
 # ---- start: the first five minutes ------------------------------------------------
 
 def cmd_start(catalog: dict, env_file: str) -> int:
-    from . import scan as scan_mod
+    from . import gitscan as scan_mod
     print("\noathkey - your AI can use your keys, and never see them.\n")
     d = scan_mod.doctor()
     print(scan_mod.format_doctor(d))

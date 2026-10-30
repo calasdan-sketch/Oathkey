@@ -20,6 +20,30 @@ call-broker line.
   and the connection summary is `overview`.
 - **Changed:** a custom recipe may replace a built-in one only if it talks to the
   same server; otherwise it is ignored with a message.
+- **Changed: the Claude Code hook is stricter.** It now also watches MCP tool calls
+  (every text in their arguments), refuses an agent running `oathkey remote`,
+  `deploy`, `trust-server`, `export`, `run`, `serve` or `call`, refuses wildcard
+  paths that could expand to `~/.oathkey` (`~/.*/keys/x`), refuses writes to
+  `.claude/settings.json`, `.claude/settings.local.json`, `~/.claude.json` and
+  `.mcp.json`, refuses a shell command over 100,000 characters unread, and
+  `hook install` now blocks the call if the hook itself fails (`--fail-open` to
+  opt out). Run `oathkey hook install` again to update an installed hook.
+- **Changed: sending a key to a server asks in a pop-up window** that shows the
+  server's key fingerprint (the terminal only when no window can be shown); the
+  key-bearing ssh connection then accepts only the key you confirmed
+  (`StrictHostKeyChecking=yes`). `export --yes` counts only at a real terminal;
+  elsewhere a window must be clicked.
+- **Changed: `install` and `setup-agent` write `--default-store keychain`**, and the
+  MCP server defaults to the keychain when there is one, so a key an AI captures
+  is one `call_api` can use. `rotate` replaces the key where it is stored.
+  An unknown service name exits 3 with a "Did you mean" line.
+- **Fixed:** `oathkey start`; `remote ... -- cmd` after `--project-dir`; the web door
+  binds its port exclusively on Windows; the pop-up helper runs with a fixed
+  environment. Known limits are listed in SECURITY.md.
+- **A fresh start for the rename.** Nothing is migrated from the old `safeeasyapi`
+  names: no data, keychain entries or settings. To move over, re-run
+  `oathkey get <service>` and `oathkey install`, and remove any old `safeeasyapi`
+  hook or MCP entry by hand.
 - No independent security review has been done yet.
 
 ## 0.7.5

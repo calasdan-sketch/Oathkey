@@ -54,7 +54,22 @@ from . import recipes as recipes_mod
 #   overwrite the person's keys. Templates (.env.example) stay writable, and
 #   OATHKEY_HOOK_ALLOW_WRITE=1 turns the write check off. Glob (names
 #   only) is not matched.
-MATCHER = "Read|Grep|Bash|PowerShell|Monitor|Edit|Write|MultiEdit|NotebookEdit"
+MATCHER = "Read|Grep|Bash|PowerShell|Monitor|Edit|Write|MultiEdit|NotebookEdit|mcp__.*"
+# what earlier versions wrote; still recognised (is_ours goes by the marker), and
+# `hook install` rewrites it in place
+LEGACY_MATCHERS = ("Read|Grep|Bash|PowerShell|Monitor|Edit|Write|MultiEdit|NotebookEdit",
+                   "Read|Grep|Bash|PowerShell|Monitor")
+SHELL_TOOLS = frozenset({"Bash", "PowerShell", "Monitor"})
+KNOWN_TOOLS = frozenset({"Read", "Grep", "Edit", "Write", "MultiEdit", "NotebookEdit"}) | SHELL_TOOLS
+# A command longer than this is refused unread: the checks below are regexes,
+# and a huge command could keep them busy until the hook times out. Other
+# text (an MCP tool's arguments) is checked in overlapping windows.
+MAX_COMMAND = 100_000
+CHUNK = 20_000
+OVERLAP = 2_000
+SCAN_BUDGET = 600_000        # characters of non-shell text checked per call
+MAX_STRINGS = 2_000
+MAX_DEPTH = 20
 WRITE_TOOLS = frozenset({"Edit", "Write", "MultiEdit", "NotebookEdit"})
 ALLOW_WRITE_VAR = "OATHKEY_HOOK_ALLOW_WRITE"
 MARKER = "oathkey hook"      # the statusMessage that marks our handler
@@ -92,6 +107,16 @@ WRITE_REASON = (
     "oathkey connect <service>  (or edit the file yourself).")
 
 
+OVERSIZE_REASON = (
+    "oathkey blocked this because the command is {n} characters long, more than "
+    "the {limit} the hook can check safely. Put the long part in a file with the "
+    "Write tool and run a short command, or ask the person to run it.")
+
+PROTECTED_REASON = (
+    "oathkey blocked this because {what} decides which hooks and tools your AI "
+    "may run, so only the person should change it. Do not try another way. Tell "
+    "the person what change you need and let them make it.")
+
 STEAL_REASON = (
     "oathkey blocked this because it would {what}. Stored keys must stay "
     "out of the chat. Do not try another way. Call the oathkey tool "
@@ -102,8 +127,13 @@ STEAL_REASON = (
 # (regex, what it does). They are matched against the whole command text.
 _SAFE = r"(?:^|[\s;&|`(\"'])"
 STEAL_RULES = (
-    (re.compile(r"oathkey\b(?:(?!\s--\s)[^\n;&|])*\s--no-r\w*", re.I),
+    (re.compile(r"oathkey\b(?:(?!\s--\s)[^\n;&|]){0,300}\s--no-r\w*", re.I),
      "run a command with the key and turn output hiding off"),
+    (re.compile(r"(?:(?:^|[\s;&|`(\"'/\\])oathkey(?:\.exe)?|\s-\w*m\s+oathkey(?:\.(?:cli|__main__))?)"
+                r"(?:\s+--project-dir(?:\s+|=)\S+)*\s+"
+                r"(?:remote|deploy|trust-server|export|run|serve|call)(?![\w-])", re.I),
+     "run an oathkey command that uses or sends a stored key (remote, deploy, "
+     "trust-server, export, run, serve, call: only the person runs those)"),
     (re.compile(_SAFE + r"secret-tool\s+(?:lookup|search)\b", re.I), "read the Linux keyring"),
     (re.compile(_SAFE + r"security\s+(?:find-\w+-password|dump-keychain|export)\b", re.I),
      "read the macOS keychain"),
@@ -146,12 +176,37 @@ def _squash(text: str) -> tuple[str, str]:
 _DOT_TOKEN = re.compile(r"(?:^|[\s/\\~=:;&|(<>'\"`])(\.[^\s/\\;&|<>()'\"`=]*)")
 
 
+_DOT_WILD_PATH = re.compile(
+    r"(?:^|[\s/\\~=:;&|(<>'\"`])(\.[^\s/\\;&|<>()'\"`=]*)[/\\][^\s/\\;&|<>()'\"`=]")
+
+
+def _wild_dot_into_path(text: str) -> bool:
+    """A word of only dots and wildcards that could be `.oathkey`, followed by
+    a path into it: `~/.*/x`, `~/.???????/keys/*`, `~\\.*\\http.token`. A bare
+    `.*` (no path after it) is left alone so `ls -a` and `ls .*` still work."""
+    for word in _DOT_WILD_PATH.findall(text):
+        if not re.search(r"[*?\[]", word):
+            continue
+        if re.search(r"[A-Za-z0-9_]", re.sub(r"\[[^\]]*\]", "", word)):
+            continue                                 # has literal letters: the check below
+        try:
+            if fnmatch.fnmatchcase(".oathkey", word):
+                return True
+        except re.error:
+            continue
+    return False
+
+
 def globs_to_our_folder(text: str) -> bool:
     """Does a path word in `text` use wildcards that could expand to the
     `.oathkey` folder? (`~/.safe*/*`, `.s*/c*`, `.saf?easyapi/*`,
     `tar c ~/.safe*`.) A word that is only wildcards (`.*`) is left alone: that
     would stop every `ls -a`. Known false positive: `ls .s*` (and any `.s*`
-    style word) is refused, because it could expand to the folder."""
+    style word) is refused, because it could expand to the folder. A word of
+    only dots and wildcards counts when a path into the folder follows it
+    (`~/.*/keys/x`)."""
+    if _wild_dot_into_path(text):
+        return True
     for word in _DOT_TOKEN.findall(text):
         if not re.search(r"[*?\[]", word):
             continue
@@ -238,7 +293,56 @@ def touched_text(payload: dict) -> list[str]:
         # text it carries (a command, or a WebSocket address) except the note
         return [v for k, v in args.items()
                 if isinstance(v, str) and k != "description"]
+    if isinstance(tool, str) and tool.startswith("mcp__"):
+        # an MCP tool (mcp__server__tool): its arguments are arbitrary, so look
+        # at every string in them, however deeply nested
+        return _all_strings(args)
     return []
+
+
+def _all_strings(value, depth: int = 0, out: list | None = None) -> list[str]:
+    """Every string (keys too) inside nested dicts and lists, with a cap on
+    depth and on how many are collected."""
+    out = [] if out is None else out
+    if len(out) >= MAX_STRINGS or depth > MAX_DEPTH:
+        return out
+    if isinstance(value, str):
+        out.append(value)
+    elif isinstance(value, dict):
+        for k, v in value.items():
+            _all_strings(k, depth + 1, out)
+            _all_strings(v, depth + 1, out)
+    elif isinstance(value, (list, tuple)):
+        for v in value:
+            _all_strings(v, depth + 1, out)
+    return out
+
+
+def _pieces(text: str, budget: list):
+    """`text` whole when short, else overlapping windows, so no check ever runs
+    over more than CHUNK characters. `budget` (a one-item list) is the
+    characters still allowed to be checked in this call."""
+    if len(text) <= CHUNK:
+        budget[0] -= len(text)
+        yield text
+        return
+    step = CHUNK - OVERLAP
+    for i in range(0, len(text), step):
+        if budget[0] <= 0:
+            return
+        piece = text[i:i + CHUNK]
+        budget[0] -= len(piece)
+        yield piece
+
+
+def too_long(payload) -> int | None:
+    """The length of a shell command that is too long to check, else None."""
+    if not isinstance(payload, dict) or payload.get("tool_name") not in SHELL_TOOLS:
+        return None
+    for text in touched_text(payload):
+        if len(text) > MAX_COMMAND:
+            return len(text)
+    return None
 
 
 def decide(payload) -> str | None:
@@ -265,10 +369,33 @@ def decide_steal(payload) -> str | None:
     do to a stored key (see STEAL_RULES)."""
     if not isinstance(payload, dict):
         return None
+    budget = [SCAN_BUDGET]
     for text in touched_text(payload):
-        what = steals_key(text)
-        if what:
-            return what
+        for piece in _pieces(text, budget):
+            what = steals_key(piece)
+            if what:
+                return what
+    return None
+
+
+_PROTECTED_RE = re.compile(
+    r"(?:^|/)(?:\.claude/settings(?:\.local)?\.json|\.mcp\.json|\.claude\.json)\Z", re.I)
+
+
+def decide_protected_write(payload) -> str | None:
+    """The settings file an Edit / Write / MultiEdit / NotebookEdit call would
+    change, if it is one that controls hooks and MCP servers
+    (.claude/settings.json, .claude/settings.local.json, .mcp.json,
+    ~/.claude.json), else None. OATHKEY_HOOK_ALLOW_WRITE=1 turns it off."""
+    if not isinstance(payload, dict) or payload.get("tool_name") not in WRITE_TOOLS:
+        return None
+    if writes_allowed():
+        return None
+    for text in touched_text(payload):
+        norm = re.sub(r"/+", "/", text.strip().replace("\\", "/"))
+        norm = re.sub(r"::\$DATA\Z", "", norm, flags=re.I).rstrip(" .")
+        if _PROTECTED_RE.search(norm):
+            return norm.rsplit("/", 1)[-1] if "/" in norm else norm
     return None
 
 
@@ -308,6 +435,9 @@ def check(stdin_text: str) -> tuple[int, str]:
     .env file name and, if one is there, the call is refused. Only when that
     finds nothing is it a non-blocking error (status 1): a broken hook must
     not stop all work unless you installed it with --fail-closed."""
+    if len(stdin_text) > 2 * SCAN_BUDGET:
+        # only ever look at a bounded amount: the start and the end
+        stdin_text = stdin_text[:SCAN_BUDGET] + " " + stdin_text[-SCAN_BUDGET:]
     try:
         payload = json.loads(stdin_text)
     except (ValueError, RecursionError):
@@ -317,12 +447,23 @@ def check(stdin_text: str) -> tuple[int, str]:
         if hits:
             what = recipes_mod.printable(hits[0])
             return 0, json.dumps(decision_json(REASON.format(what=f"'{what}'"))) + "\n"
-        what = steals_key(flat)
-        if what:
-            return 0, json.dumps(decision_json(STEAL_REASON.format(what=what))) + "\n"
+        budget = [SCAN_BUDGET]
+        for piece in _pieces(flat, budget):
+            what = steals_key(piece)
+            if what:
+                return 0, json.dumps(decision_json(STEAL_REASON.format(what=what))) + "\n"
         return 1, ""
+    size = too_long(payload)
+    if size is not None:
+        return 0, json.dumps(decision_json(
+            OVERSIZE_REASON.format(n=size, limit=MAX_COMMAND))) + "\n"
     name = decide(payload)
     if name is None:
+        target = decide_protected_write(payload)
+        if target:
+            what = recipes_mod.printable(target)
+            return 0, json.dumps(decision_json(
+                PROTECTED_REASON.format(what=f"'{what}'"))) + "\n"
         what = decide_steal(payload)
         if what:
             return 0, json.dumps(decision_json(STEAL_REASON.format(what=what))) + "\n"
@@ -425,7 +566,7 @@ def hook_command() -> str:
     return " ".join(_shell_quote(a) for a in hook_argv())
 
 
-def hook_handler(shell_form: bool | None = None, fail_closed: bool = False) -> dict:
+def hook_handler(shell_form: bool | None = None, fail_closed: bool = True) -> dict:
     """The handler Claude Code stores: on Windows the documented exec form
     (`command` is the program, `args` its arguments, no shell, so a backslash
     or a space in the path cannot be mangled); elsewhere the shell string,
@@ -710,7 +851,7 @@ def cmd_hook(args, out=None, err=None, run=subprocess.run) -> int:
         had_file = os.path.exists(path)
         if action == "install":
             handler = hook_handler(shell_form=True if getattr(args, "shell_form", False) else None,
-                                   fail_closed=getattr(args, "fail_closed", False))
+                                   fail_closed=not getattr(args, "fail_open", False))
             result = merge_install(data, handler)
             backup = None
             if result != "unchanged":
@@ -719,8 +860,12 @@ def cmd_hook(args, out=None, err=None, run=subprocess.run) -> int:
                       f": the oathkey hook in {shown}\n")
             out.write(_backup_note(backup, getattr(args, "project", False)))
             out.write("  From now on Claude Code asks it before every Read, Grep, Bash, "
-                      "PowerShell, Monitor, Edit, Write, MultiEdit and NotebookEdit call, "
-                  "and it refuses .env files.\n")
+                      "PowerShell, Monitor, Edit, Write, MultiEdit, NotebookEdit and MCP "
+                      "tool call, and it refuses .env files, oathkey's own store and "
+                      "commands that would use a stored key.\n")
+            if handler.get("onFailure") == "block":
+                out.write("  If the hook itself breaks or times out, the call is blocked "
+                          "(fail closed). Use --fail-open to let calls through instead.\n")
             if getattr(args, "project", False):
                 out.write("  This is the project's settings file: commit it if you want the "
                           "team to have the hook. Your hook's backups are kept outside the "
@@ -779,9 +924,11 @@ def _status(args, out, run) -> int:
             tested = self_test(expected, run)
         notes = []
         if group.get("matcher") != MATCHER:
-            notes.append("OUTDATED: it does not watch Edit, Write, MultiEdit and "
-                         "NotebookEdit like this version does (run "
-                         "`oathkey hook install` to update it)")
+            notes.append("OUTDATED: it does not watch every tool this version does "
+                         "(MCP tools among them; run `oathkey hook install` to update it)")
+        if handler.get("onFailure") != "block":
+            notes.append("it fails open: if the hook breaks, calls go through "
+                         "(`oathkey hook install` makes it block)")
         same = (handler.get("command") == expected["command"]
                 and handler.get("args") == expected.get("args"))
         if not same:

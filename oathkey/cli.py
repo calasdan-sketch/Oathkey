@@ -41,8 +41,9 @@ def _harden_streams() -> None:
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="oathkey",
-        description="Safe tunnel for API keys: guided, validated, "
-                    "securely stored. The key is never displayed or logged.",
+        description="Let your AI use your API keys without holding them: guided "
+                    "setup, validated, kept in the OS keychain. The key is "
+                    "never displayed or logged.",
         epilog="Start here: `oathkey scan` finds keys that leaked into "
                "files an AI agent can read. `oathkey connect <service>` "
                "sets a key up safely.")
@@ -114,11 +115,15 @@ def _build_parser() -> argparse.ArgumentParser:
                            help="Write the hook as one command string, for a "
                                 "Claude Code too old to know `args` (Windows "
                                 "only; elsewhere this is already the default).")
+            h.add_argument("--fail-open", action="store_true",
+                           help="If the hook itself fails or times out, let the "
+                                "tool call through. The default is to block it "
+                                "(onFailure: block; needs Claude Code 2.1.295 or "
+                                "later).")
             h.add_argument("--fail-closed", action="store_true",
-                           help="Block the tool call if the hook itself fails "
-                                "or times out (onFailure: block; needs Claude "
-                                "Code 2.1.295 or later). Without it a broken "
-                                "hook lets the call through.")
+                           help="The default now (kept so old commands still work): "
+                                "block the tool call if the hook itself fails "
+                                "or times out.")
     hsub.add_parser("check", help="The hook itself: reads Claude Code's JSON "
                                   "on stdin. Not for typing by hand.")
 
@@ -283,10 +288,10 @@ def _build_parser() -> argparse.ArgumentParser:
     ski.add_argument("--yes", action="store_true", help="Replace a different existing file without asking.")
 
     mc = sub.add_parser("mcp", help="Run the MCP server on stdio (for Claude Code).")
-    mc.add_argument("--default-store", choices=["env", "keychain"], default="env",
+    mc.add_argument("--default-store", choices=["env", "keychain"], default=None,
                     help="Where agent-captured keys go unless oathkey.json says "
-                         "otherwise (setup-agent uses keychain for clients that have "
-                         "no .env hook).")
+                         "otherwise (default: the OS keychain when there is one, "
+                         "else a .env file). The call_api tool only reads the keychain.")
     sa = sub.add_parser("setup-agent", help="Show or write the MCP entry for an AI client "
                                             "(absolute Python path).")
     sa.add_argument("client", choices=["claude-code", "claude-desktop", "cursor", "codex", "gemini"])
@@ -737,14 +742,50 @@ def main(argv: list[str] | None = None) -> int:
         return _interrupted()
 
 
+def split_remote(argv: list[str]) -> tuple[list[str], list]:
+    """Split `... remote SERVICE HOST -- COMMAND` at the `--`, wherever the
+    `remote` word is: only global options (--project-dir DIR) may come first."""
+    i = 0
+    while i < len(argv):
+        a = argv[i]
+        if a == "--project-dir":
+            i += 2
+        elif a.startswith("--project-dir=") or a == "--version":
+            i += 1
+        else:
+            break
+    if i < len(argv) and argv[i] == "remote" and "--" in argv[i:]:
+        j = argv.index("--", i)
+        return argv[:j], argv[j + 1:]
+    return argv, []
+
+
+def _keychain_available() -> bool:
+    try:
+        return keychain_mod.detect_backend() is not None
+    except Exception:
+        return False
+
+
+def _store_where_key_lives(recipe: dict) -> str:
+    """"keychain" when the OS keychain already holds this service's key, else
+    "env": a rotated key replaces the old one where it is."""
+    try:
+        backend = keychain_mod.detect_backend()
+        if backend:
+            for var in recipes_mod.env_vars(recipe):
+                if keychain_mod.read(recipe["service"], var, backend):
+                    return "keychain"
+    except Exception:
+        pass
+    return "env"
+
+
 def _main(argv: list[str] | None = None) -> int:
     _harden_streams()
     parser = _build_parser()
     argv = list(sys.argv[1:] if argv is None else argv)
-    tail: list = []
-    if argv and argv[0] == "remote" and "--" in argv:
-        i = argv.index("--")
-        argv, tail = argv[:i], argv[i + 1:]
+    argv, tail = split_remote(argv)
     args = parser.parse_args(argv)
     if args.cmd == "remote":
         args.command = tail
@@ -791,9 +832,10 @@ def _main(argv: list[str] | None = None) -> int:
     if args.cmd == "add":
         return _cmd_add(args.recipes_dir)
     if args.cmd == "mcp":
-        if args.default_store != "env":
+        store = args.default_store or ("keychain" if _keychain_available() else "env")
+        if store != "env":
             from . import capture as capture_mod
-            capture_mod.set_manager(capture_mod.Manager(default_store=args.default_store))
+            capture_mod.set_manager(capture_mod.Manager(default_store=store))
         return mcp_mod.serve(catalog)
     if args.cmd == "setup-agent":
         from . import agentsetup
@@ -818,7 +860,7 @@ def _main(argv: list[str] | None = None) -> int:
         args.clipboard = args.clipboard or not args.no_clipboard
         if args.store is None:
             args.store = "keychain"
-    if getattr(args, "store", "env") is None:
+    if getattr(args, "store", "env") is None and args.cmd != "rotate":
         args.store = "env"
     if args.cmd in ("connect", "rotate", "forget", "export") and getattr(args, "env_file", None) is None:
         args.env_file = _project_env_file()
@@ -853,13 +895,14 @@ def _main(argv: list[str] | None = None) -> int:
     if args.cmd in ("connect", "rotate", "run", "forget"):
         recipe = catalog.get(args.service)
         if not recipe:
-            # only a short plain name is echoed back: a long or odd one could
-            # be a key typed in the wrong place
+            # exit 3 and the short "Did you mean" line; only a short plain
+            # name is echoed back (a long or odd one could be a key typed in
+            # the wrong place)
             shown = (args.service if len(args.service) <= 24
                      and recipes_mod.SLUG_RE.match(args.service) else "(not shown)")
-            print(f"unknown service '{shown}'.")
-            _cmd_list(catalog)
-            return 1
+            return extras.unknown_service(catalog, shown)
+        if args.cmd == "rotate" and args.store is None:
+            args.store = _store_where_key_lives(recipe)
         if args.cmd == "run":
             from . import manifest as manifest_mod
             env_file, prefer = args.env_file, "keychain"

@@ -152,6 +152,7 @@ class ExportNamesTheTarget(unittest.TestCase):
             __import__("oathkey.recipes", fromlist=["x"]).RECIPES_DIR)
         code = export.cmd_export(args, cat, ask=lambda p: prompts.append(p) or ask,
                                  interactive=lambda: True, out=out, which=lambda n: "/f/" + n,
+                                 window=lambda *a: None,      # no pop-up in tests
                                  run=run, read_fn=lambda *a: None, backend="fake")
         return code, out.getvalue(), calls, prompts
 

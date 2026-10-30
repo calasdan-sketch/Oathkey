@@ -17,6 +17,8 @@ import shutil
 import subprocess
 import sys
 
+from . import safeexec
+
 TIMEOUT = 120
 MAX_SHOWN = 900      # broker refuses requests whose description is longer
 
@@ -49,10 +51,21 @@ def _safe(text: str, limit: int = MAX_SHOWN) -> str:
     return s if len(s) <= limit else s[:limit] + "...[+%d more characters]" % (len(s) - limit)
 
 
+def _window_env(msg: str) -> dict:
+    """The environment the pop-up helper runs with: a fixed, minimal one (the
+    same as dialog.py's), never the caller's, so a PATH, LD_PRELOAD or
+    PYTHON* variable an AI-tool config set cannot reach the helper."""
+    if os.name == "nt":
+        root = _system_root()
+        return {"SystemRoot": root, "windir": root,
+                "PATH": os.path.join(root, "System32"), "SEA_MSG": msg}
+    return dict(safeexec.env(), SEA_MSG=msg)
+
+
 def dialog(summary: str) -> bool | None:
     """True/False from a pop-up, or None if no pop-up could be shown."""
     msg = _safe(summary) + "\n\nAllow this?"
-    env = dict(os.environ, SEA_MSG=msg)
+    env = _window_env(msg)
     try:
         if os.name == "nt":
             ps = _tool(os.path.join(_system_root(), "System32", "WindowsPowerShell",

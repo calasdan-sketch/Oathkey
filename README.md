@@ -1,6 +1,6 @@
 # oathkey
 
-**Let your AI use your API keys without ever holding them.**
+**Let your AI use your API keys through oathkey without ever holding them.**
 
 - The key sits in your computer's own keychain. When your AI needs an API, it asks oathkey to make the call.
 - Replies are cleaned of the key. Anything other than a read (GET) waits for your click. Every call is logged.
@@ -9,13 +9,18 @@
 
 ## Try it in 60 seconds
 
+Need pipx? https://pipx.pypa.io
+
 ```
 pipx install oathkey
+oathkey doctor                # is it working? checks the keychain and activity log, then attacks itself once
 oathkey get github            # opens the key page; you click Copy; oathkey tests it and saves it
 oathkey call github GET /user # a window asks once to allow github reads: click Yes. Prints the answer, never the key
 oathkey selftest              # watch oathkey attack itself; prints how many attacks it stopped
 oathkey install               # plug it into Claude, Cursor or VS Code, then restart that app
 ```
+
+When a key page asks which permissions to give, pick read-only or the minimum it offers.
 
 Now ask your AI: *"Who am I on GitHub?"* It uses your key through oathkey and never holds it.
 To see what it did: `oathkey audit show`.
@@ -25,7 +30,7 @@ To see what it did: `oathkey audit show`.
 
 ## Why not just put the key in a `.env` file?
 
-AI coding tools read files in your project, and they paste what they read into a chat that someone else's computer sees. A key in a file, a chat or a config can leak in seconds. With oathkey your AI never receives the key: it stays in your computer's keychain and oathkey adds it to the request itself. `oathkey get` will not leave a key in a file in your project folder.
+AI coding tools read files in your project, and they paste what they read into a chat that someone else's computer sees. A key in a file, a chat or a config can leak in seconds. With oathkey your AI never receives the key: it stays in your computer's keychain and oathkey adds it to the request itself. `oathkey get` will not leave a key in a file in your project folder unless you agree to the fallback (it asks first, and only when no keychain works).
 
 ## How it works
 
@@ -66,7 +71,7 @@ oathkey uses only Python's own standard library, and a test in the repository ([
 
 **Security**
 
-- `selftest`, `doctor`, `scan`, `scan-git`, `hook` (stops Claude Code reading `.env` files) as above.
+- `selftest`, `doctor`, `scan`, `scan-git`, `hook` (stops Claude Code reading `.env` files and running oathkey commands that use a key; it blocks the call if it breaks, unless you install it with `hook install --fail-open`) as above.
 
 **Advanced**
 
@@ -77,11 +82,13 @@ oathkey uses only Python's own standard library, and a test in the repository ([
 - `remote`, `trust-server`, `deploy` - use a key on your own server over ssh.
 - `add` - make your own service recipe. `find` - look for free public APIs.
 
+Coming from the old `safeeasyapi` name? 0.8.0 is a fresh start: nothing is migrated. Re-run `oathkey get <service>` and `oathkey install`, and remove any old `safeeasyapi` hook or MCP entry by hand.
+
 Many commands accept `--json` (try `list`, `overview`, `selftest`, `doctor`, `audit`). Exit codes: 0 fine, 1 problem, 2 wrong usage, 3 service not found, 5 refused by policy, 7 network problem.
 
 ## Services
 
-35 services are built in, from GitHub and Stripe to OpenAI and AWS. `oathkey list` shows them all.
+36 services are built in, from GitHub and Stripe to OpenAI and AWS. `oathkey list` shows them all.
 
 Not listed? `oathkey add` makes a recipe in a minute. A recipe cannot send a built-in service's key to a different server.
 
@@ -94,7 +101,7 @@ It reduces risk; it does not remove it, and no independent security review has b
 - **The clipboard.** `get` empties it right away, but other programs or clipboard-history tools may see the key while it is there.
 - **A log that can't be rewritten.** The log shows accidents and casual edits. Someone running as you could rewrite it.
 
-The full list is in [SECURITY.md](https://github.com/calasdan-sketch/oathkey/blob/main/SECURITY.md). The longer user guide (every flag, where keys are stored, two-value keys, testing) is in [docs/guide.md](https://github.com/calasdan-sketch/oathkey/blob/main/docs/guide.md).
+More known limits (a GET can read other secrets through a vendor's own endpoints, the log is only tamper-evident, and others) are listed under "Known limits" in [SECURITY.md]. The full list is in [SECURITY.md](https://github.com/calasdan-sketch/oathkey/blob/main/SECURITY.md). The longer user guide (every flag, where keys are stored, two-value keys, testing) is in [docs/guide.md](https://github.com/calasdan-sketch/oathkey/blob/main/docs/guide.md).
 
 ## License
 

@@ -50,6 +50,20 @@ the clipboard, tests it and stores it.
    not run it yourself with a stored key.
 6. Call `request_connect` again to confirm the status is `present`.
 
+## Use the key
+
+Once a service is connected you never need the key to use it. Call the `call_api`
+tool with `service`, `method`, `path`, and optionally `query_json` and `body_json`
+(both JSON text). oathkey adds the key, calls the service's real address and hands
+back the answer with the key removed.
+
+- Reads (GET) are fine. For anything that creates, changes or deletes (POST, PUT,
+  PATCH, DELETE), ask the person first; oathkey also shows them a window.
+- If a request is refused, do not retry it, reword it or try another route. Tell
+  the person what was refused and stop.
+- If there is no key for the service, say so and ask them to run
+  `oathkey get <service>`; do not ask for the key.
+
 ## In the browser
 
 - Never look at the key: no tool that returns page content, the DOM, an

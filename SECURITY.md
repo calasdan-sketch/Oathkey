@@ -27,6 +27,17 @@ oathkey is built so an AI agent can use your API keys without being handed them.
 - **The clipboard.** Copy-and-go (`oathkey get`) empties the clipboard right after taking the key, but other programs and clipboard-history tools can read it while it is there and may keep their own copy. If that worries you, use `--no-clipboard` (hidden typing instead).
 - **A tamper-proof log.** The activity log is tamper-evident, not tamper-proof. Edits, deleted lines, a cut-off end and a deleted file are detected (a small second file remembers how many entries there should be), but someone running as you can rewrite both files. Nothing is anchored outside your account yet.
 
+## Known limits
+These are known and not fixed. They are listed so you can judge for yourself.
+- **A GET can read other secrets.** oathkey hides the key it added, but a read-only call to a vendor's own endpoints (a settings, tokens or environment listing) can return other secrets, and those are not recognised. Use read-only, minimum-permission keys, and do not connect services whose reads expose secrets.
+- **The activity log is only tamper-evident against casual edits.** It has no secret key and nothing outside your account holds a copy, so someone running as you can rebuild it so that it verifies.
+- **The OAuth token fetch is not pinned to the address it checked** (see above). It is checked to be public, ignores proxies and never follows redirects, but a DNS answer could change between the check and the connection.
+- **`OATHKEY_ENV_FILE` can point `call_api` at a file.** The MCP server reads it from its own environment, which the AI app's config sets. An agent that can edit that config (the Claude Code hook now refuses writes to `.claude/settings.json`, `.mcp.json` and `~/.claude.json`, but not to other apps' config files) could point it at a `.env` it planted, or a recipe in `~/.oathkey/recipes`.
+- **`serve`.** On Windows the port is now bound exclusively, but the token file's permissions rely on your user profile's folder permissions (Windows ignores the 0600 mode); on macOS and Linux `~/.oathkey` is made owner-only (0700) when oathkey creates it. Any program running as you can still read the token.
+- **The MCP server handles one request at a time.** A slow call or an approval window nobody answers holds up the AI's other requests until it times out. That is a nuisance, not a leak.
+- **The Claude Code hook is a speed bump.** It reads the text of a call. A program that builds its command at run time, a tool it is not attached to, or an AI app other than Claude Code gets past it. A shell command over 100,000 characters is refused unread, and very large text sent to an MCP tool is only checked in part.
+- **Pop-ups can be clicked by a program that drives your screen**, and a window helper such as `zenity` is trusted if it sits in a system folder owned by root.
+
 ## Check it yourself
 
 - `oathkey selftest` attacks oathkey with a made-up key and a pretend server (no network, no real key) and prints PASS or FAIL for each attack. It checks the rules listed above only; it cannot show that nothing else can go wrong.

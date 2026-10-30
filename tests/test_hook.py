@@ -331,4 +331,4 @@ class TestCommand(unittest.TestCase):
         entry = hook_mod.hook_entry(hook_mod.hook_handler(shell_form=True))
         self.assertEqual(set(entry), {"matcher", "hooks"})
         self.assertEqual(set(entry["hooks"][0]),
-                         {"type", "command", "timeout", "statusMessage"})
+                         {"type", "command", "timeout", "statusMessage", "onFailure"})

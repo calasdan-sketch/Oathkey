@@ -1,15 +1,22 @@
-"""Stdio MCP server: give Claude Code the exact recipe instead of a guess.
+"""Stdio MCP server: give the agent the exact recipe, and let it use a key
+without holding it.
 
-Tools:
-  list_services            -> [{service, display, env_var}]
+Tools (8):
+  list_services            -> [{service, display, env_var, connected}]
   get_recipe {service}     -> {display, key_url, steps, scopes, env_var, docs}
   find_public_apis {query, auth?, category?, limit?}
                            -> free public APIs matching a task
   get_public_api {name}    -> details + how to wire it via oathkey
+  request_connect {service}-> what to do to connect a service
+  capture_key {service, action}
+                           -> the person clicks Copy; oathkey takes the key
+  needs_keys {project?}    -> which keys a project is missing
+  call_api {service, method, path, query_json?, body_json?}
+                           -> one brokered call; the key is added by oathkey
+                              and removed from the answer; writes ask the person
 
-This is what stops the agent forgetting per-service steps or improvising
-imprecise instructions: the recipe is the memory. No secrets ever pass
-through here — recipes contain only public how-to.
+Recipes contain only public how-to. A key never passes through here as text
+the agent can read: capture_key stores it, call_api uses it and scrubs it.
 """
 
 from __future__ import annotations
@@ -230,9 +237,6 @@ def _call_api(catalog: dict, args: dict) -> dict:
                     "Never ask them to paste a key into the chat."
                     % (recipe["service"], recipe["service"]))
     return {"content": [{"type": "text", "text": json.dumps(result)}]}
-
-
-_TYPE_WORDS = {"string": "a string", "integer": "an integer"}
 
 
 def _has_type(value, json_type: str) -> bool:

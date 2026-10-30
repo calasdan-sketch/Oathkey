@@ -873,7 +873,8 @@ class TestMcpDefaultStore(unittest.TestCase):
     def test_the_default_leaves_the_manager_alone(self):
         capture_mod.set_manager(None)
         self.addCleanup(capture_mod.set_manager, None)
-        with mock.patch.object(mcp_mod, "serve", return_value=0):
+        with mock.patch.object(cli_mod, "_keychain_available", return_value=False), \
+                mock.patch.object(mcp_mod, "serve", return_value=0):
             cli_mod.main(["mcp"])
         self.assertEqual(capture_mod.default_manager().default_store, "env")
 
@@ -904,7 +905,8 @@ class TestSetupAgent(unittest.TestCase):
         e = agentsetup.server_entry("cursor", True)
         self.assertEqual(e["command"], os.path.abspath(sys.executable))
         self.assertEqual(e["args"][-2:], ["--default-store", "keychain"])
-        self.assertNotIn("--default-store", agentsetup.server_entry("claude-code", True)["args"])
+        self.assertEqual(agentsetup.server_entry("claude-code", True)["args"][-2:],
+                         ["--default-store", "keychain"])
         self.assertNotIn("--default-store", agentsetup.server_entry("cursor", False)["args"])
 
     def test_config_paths(self):

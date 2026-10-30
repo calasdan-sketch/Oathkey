@@ -28,6 +28,7 @@ import shlex
 import subprocess
 import sys
 
+from . import dialog as dialog_mod
 from . import keychain as keychain_mod
 from . import recipes as recipes_mod
 from . import store as store_mod
@@ -64,6 +65,16 @@ def home_dir() -> str:
     return os.path.join(os.path.expanduser("~"), ".oathkey")
 
 
+def private_dir(path: str) -> None:
+    """Make the folder (owner-only where the OS has such modes)."""
+    os.makedirs(path, mode=0o700, exist_ok=True)
+    if os.name == "posix":
+        try:
+            os.chmod(path, 0o700)
+        except OSError:
+            pass
+
+
 def check_host(host: str) -> str:
     if not _HOST.fullmatch(host or ""):
         raise RemoteError(f"'{host}' is not a plain user@host address.", 2)
@@ -97,27 +108,113 @@ def remember_host(host: str, service: str) -> None:
     data.setdefault(host, [])
     if service not in data[host]:
         data[host].append(service)
-    os.makedirs(home_dir(), exist_ok=True)
+    private_dir(home_dir())
     tmp = _hosts_path() + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
     os.replace(tmp, _hosts_path())
 
 
-def confirm_host(host: str, service: str, ask=input, isatty=None) -> None:
-    """A person must say yes, on a real terminal, before a key goes to a server
-    for the first time. An agent or script cannot answer this."""
+def ssh_port(ssh_args: list[str] | None) -> str | None:
+    """The port named in the extra ssh arguments (-p N, -oPort=N), if any."""
+    args = list(ssh_args or [])
+    for i, a in enumerate(args):
+        if a == "-p" and i + 1 < len(args) and args[i + 1].isdigit():
+            return args[i + 1]
+        value = a[2:] if a.startswith("-o") and len(a) > 2 else (
+            args[i + 1] if a == "-o" and i + 1 < len(args) else "")
+        name, _, val = value.partition("=")
+        if name.strip().lower() == "port" and val.strip().isdigit():
+            return val.strip()
+    return None
+
+
+def scan_host_key(host: str, port: str | None = None, runner=subprocess.run):
+    """(fingerprints text or None, known_hosts lines or None): what the server
+    at `host` shows right now, as `ssh-keyscan` sees it."""
+    name = host.rsplit("@", 1)[-1].strip("[]")
+    cmd = ["ssh-keyscan", "-T", "10", "-t", "ed25519,ecdsa,rsa"]
+    if port:
+        cmd += ["-p", port]
+    try:
+        done = runner(cmd + [name], capture_output=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return None, None
+    lines = [ln for ln in done.stdout.decode("utf-8", "replace").splitlines()
+             if ln.strip() and not ln.startswith("#")]
+    if done.returncode != 0 or not lines:
+        return None, None
+    keytext = "\n".join(lines) + "\n"
+    try:
+        fp = runner(["ssh-keygen", "-l", "-f", "-"], input=keytext.encode("utf-8"),
+                    capture_output=True, timeout=15)
+    except (OSError, subprocess.SubprocessError):
+        return None, keytext
+    shown = []
+    for ln in fp.stdout.decode("utf-8", "replace").splitlines():
+        m = re.search(r"(SHA256:\S+)\s.*\((\w+)\)\s*$", ln)
+        if m:
+            shown.append(f"{m.group(2)} {m.group(1)}")
+    return ("; ".join(shown[:3]) or None), keytext
+
+
+def pin_host_key(keytext: str | None, runner=subprocess.run, known_hosts_path=None) -> None:
+    """Put the keys the person just confirmed into ~/.ssh/known_hosts (unless
+    that server is already there), so ssh can then be told to accept ONLY
+    them (StrictHostKeyChecking=yes)."""
+    if not keytext:
+        return
+    path = known_hosts_path or os.path.join(os.path.expanduser("~"), ".ssh", "known_hosts")
+    name = keytext.split(None, 1)[0]
+    try:
+        found = runner(["ssh-keygen", "-F", name, "-f", path], capture_output=True, timeout=15)
+        if found.returncode == 0 and found.stdout.strip():
+            return
+    except (OSError, subprocess.SubprocessError):
+        pass
+    os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+    existing = ""
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            existing = f.read()
+    except OSError:
+        pass
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(("\n" if existing and not existing.endswith("\n") else "") + keytext)
+
+
+def confirm_host(host: str, service: str, ask=input, isatty=None, window=None,
+                 scan=None, pin=None, ssh_args: list[str] | None = None) -> None:
+    """A person must say yes before a key goes to a server for the first time:
+    in a pop-up window when one can be shown (it names the server and its key
+    fingerprint), otherwise on a real terminal. An agent or script cannot
+    answer either. The keys the person saw are then pinned, and the key-bearing
+    ssh connection accepts only those."""
     if service in known_hosts().get(host, []):
         return
-    tty = sys.stdin.isatty() if isatty is None else isatty
-    if not tty:
-        raise RemoteError(
-            f"'{host}' has not been confirmed for '{service}' yet. Run "
-            f"`oathkey trust-server {host}` yourself in a terminal first "
-            "(a key is never sent to a server nobody confirmed).", 1)
-    answer = ask(f"  Send your '{service}' key to {host}? [y/N] ").strip().lower()
-    if answer not in ("y", "yes"):
+    fingerprint, keytext = (scan or scan_host_key)(host, ssh_port(ssh_args))
+    seen = (f"The server's key fingerprint: {fingerprint}" if fingerprint
+            else "The server's key fingerprint could not be read.")
+    window = window or dialog_mod.confirm
+    answer = window("oathkey - send a key to a server?",
+                    f"Send your '{service}' key to {host}?\n\n{seen}\n\n"
+                    "Say Yes only if this is your own server.")
+    if answer is True:
+        pass
+    elif answer is not None:                 # No, closed, or nobody answered
         raise RemoteError("cancelled - nothing was sent.", 1)
+    else:                                    # no window can be shown here
+        tty = sys.stdin.isatty() if isatty is None else isatty
+        if not tty:
+            raise RemoteError(
+                f"'{host}' has not been confirmed for '{service}' yet. Run "
+                f"`oathkey trust-server {host}` yourself in a terminal first "
+                "(a key is never sent to a server nobody confirmed).", 1)
+        shown = recipes_mod.printable(seen)
+        reply = ask(f"  {shown}\n  Send your '{service}' key to {host}? [y/N] ").strip().lower()
+        if reply not in ("y", "yes"):
+            raise RemoteError("cancelled - nothing was sent.", 1)
+    (pin or pin_host_key)(keytext)
     remember_host(host, service)
 
 
@@ -238,7 +335,9 @@ def ssh_command(host: str, script: str, extra: list[str] | None = None,
     # user-supplied options come FIRST: ssh keeps the first value it sees
     return (["ssh", "-T"] + list(extra or []) + ident
             + ["-o", "BatchMode=yes", "-o", "ConnectTimeout=15",
-               "-o", "StrictHostKeyChecking=accept-new"]
+               # the server was confirmed by a person and its key pinned
+               # (confirm_host), so the key-bearing connection accepts only that
+               "-o", "StrictHostKeyChecking=yes"]
             + ["--", host, "sh -c " + shlex.quote(script)])
 
 
@@ -246,7 +345,8 @@ def explain_failure(code: int, host: str) -> None:
     if code == 255:
         print(f"error: ssh could not connect or log in to {host}. Likely causes: "
               "the server does not trust this PC yet (run `oathkey "
-              f"trust-server {host}`), wrong address or port, a firewall, or the "
+              f"trust-server {host}`), this server's key is not in your known_hosts "
+              "(trust-server adds it), wrong address or port, a firewall, or the "
               f"server's key changed. Run `ssh {host} true` to see ssh's own "
               "message.", file=sys.stderr)
     elif code == 127:
@@ -258,12 +358,14 @@ def explain_failure(code: int, host: str) -> None:
 
 def run_remote(recipe: dict, host: str, command: list[str], env_file: str = ".env",
                run_as: str | None = None, ssh_args: list[str] | None = None,
-               runner=subprocess.run, backend=None, ask=input, isatty=None) -> int:
+               runner=subprocess.run, backend=None, ask=input, isatty=None,
+               window=None, scan=None, pin=None) -> int:
     check_host(host)
     if command and command[0] == "--":
         command = command[1:]
     script = build_script(recipe, command, run_as)
-    confirm_host(host, recipe["service"], ask=ask, isatty=isatty)
+    confirm_host(host, recipe["service"], ask=ask, isatty=isatty, window=window,
+                 scan=scan, pin=pin, ssh_args=ssh_args)
     values = collect_values(recipe, env_file, backend)
     payload = "".join(values[v] + "\n" for v in recipes_mod.env_vars(recipe))
     argv = ssh_command(host, script, ssh_args, key_for(host))
@@ -283,7 +385,8 @@ def ensure_ssh_access(host: str, runner=subprocess.run, out=print) -> str:
     password prompt in the person's own terminal), and prove it works."""
     check_host(host)
     keydir = os.path.join(home_dir(), "keys")
-    os.makedirs(keydir, exist_ok=True)
+    private_dir(home_dir())
+    private_dir(keydir)
     key = os.path.join(keydir, _safe_name(host) + "_ed25519")
 
     def works() -> bool:

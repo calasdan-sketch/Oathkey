@@ -416,7 +416,8 @@ class TestExportFlow(unittest.TestCase):
         out = io.StringIO()
         args = A(env_file=os.path.join(d, ".env"), **kw)
         code = export_mod.cmd_export(args, CAT, out=out, which=lambda n: "/fake/" + n, run=run,
-                                     read_fn=lambda *a: None, backend="fake")
+                                     read_fn=lambda *a: None, backend="fake",
+                                     interactive=lambda: True)
         return code, out.getvalue()
 
     def test_value_goes_on_stdin_and_never_in_argv_or_output(self):
@@ -464,7 +465,7 @@ class TestExportFlow(unittest.TestCase):
         d = proj(f"GROQ_API_KEY={KEY}\n")
         out = io.StringIO()
         code = export_mod.cmd_export(A(env_file=os.path.join(d, ".env"), yes=False), CAT, ask=lambda p: "",
-                                     interactive=lambda: True, out=out, which=lambda n: "/f/" + n,
+                                     window=lambda *a: None, interactive=lambda: True, out=out, which=lambda n: "/f/" + n,
                                      run=lambda *a, **k: self.fail("must not run"),
                                      read_fn=lambda *a: None, backend="fake")
         self.assertEqual(code, 1)
@@ -474,7 +475,7 @@ class TestExportFlow(unittest.TestCase):
         d = proj(f"GROQ_API_KEY={KEY}\n")
         out = io.StringIO()
         code = export_mod.cmd_export(A(env_file=os.path.join(d, ".env"), yes=False),
-                                     CAT, interactive=lambda: False, out=out, which=lambda n: "/f/" + n,
+                                     CAT, window=lambda *a: None, interactive=lambda: False, out=out, which=lambda n: "/f/" + n,
                                      run=lambda *a, **k: self.fail("must not run"),
                                      read_fn=lambda *a: None, backend="fake")
         self.assertEqual(code, 1)
@@ -484,7 +485,7 @@ class TestExportFlow(unittest.TestCase):
         d = proj(f"GROQ_API_KEY={KEY}\n")
         calls = []
         code = export_mod.cmd_export(A(env_file=os.path.join(d, ".env"), yes=False), CAT, ask=lambda p: "y",
-                                     interactive=lambda: True, out=io.StringIO(), which=lambda n: "/f/" + n,
+                                     window=lambda *a: None, interactive=lambda: True, out=io.StringIO(), which=lambda n: "/f/" + n,
                                      run=lambda argv, input=None, **k: calls.append(1) or subprocess.CompletedProcess(argv, 0, b"", b""),
                                      read_fn=lambda *a: None, backend="fake")
         self.assertEqual((code, calls), (0, [1]))
@@ -497,7 +498,8 @@ class TestExportFlow(unittest.TestCase):
             return subprocess.CompletedProcess(argv, 0, b"", b"")
         d = proj("TWILIO_ACCOUNT_SID=ACaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\nTWILIO_AUTH_TOKEN=tok1234567\n")
         code = export_mod.cmd_export(A(service="twilio", env_file=os.path.join(d, ".env")), CAT, out=io.StringIO(),
-                                     which=lambda n: "/f/" + n, run=run, read_fn=lambda *a: None, backend="fake")
+                                     which=lambda n: "/f/" + n, run=run, read_fn=lambda *a: None, backend="fake",
+                                     interactive=lambda: True)
         self.assertEqual((code, sorted(names)), (0, ["TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN"]))
 
     def test_timeout_is_a_message(self):
@@ -549,7 +551,8 @@ class TestExportWithAFakeGh(unittest.TestCase):
         d = proj(f"GROQ_API_KEY={KEY}\n")
         env = dict(os.environ, PATH=bindir + os.pathsep + os.environ["PATH"], PYTHONPATH=_isolation.REPO)
         p = subprocess.run([sys.executable, "-c",
-                            "import sys; from oathkey.cli import main; sys.exit(main(sys.argv[1:]))",
+                            "import sys; from oathkey import dialog; dialog.confirm = lambda *a, **k: True; "
+                            "from oathkey.cli import main; sys.exit(main(sys.argv[1:]))",
                             "export", "groq", "--to", "github", "--repo", "me/app", "--yes"],
                            cwd=d, capture_output=True, text=True, env=env, timeout=60)
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)

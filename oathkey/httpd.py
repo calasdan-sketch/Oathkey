@@ -17,6 +17,7 @@ import hmac
 import json
 import os
 import secrets
+import socket
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -52,11 +53,29 @@ def load_or_make_token(path: str) -> str:
     except OSError:
         pass
     tok = secrets.token_urlsafe(32)
-    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    folder = os.path.dirname(path) or "."
+    os.makedirs(folder, mode=0o700, exist_ok=True)
+    if os.name == "posix":
+        try:
+            os.chmod(folder, 0o700)
+        except OSError:
+            pass
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w", encoding="ascii") as f:
         f.write(tok + "\n")
     return tok
+
+
+class DoorServer(ThreadingHTTPServer):
+    """On Windows, SO_REUSEADDR lets another program bind the very same port
+    and take the door's connections; ask for the port exclusively instead."""
+    allow_reuse_address = os.name != "nt"
+
+    def server_bind(self):
+        exclusive = getattr(socket, "SO_EXCLUSIVEADDRUSE", None)
+        if os.name == "nt" and exclusive is not None:
+            self.socket.setsockopt(socket.SOL_SOCKET, exclusive, 1)
+        super().server_bind()
 
 
 def make_server(catalog: dict, get_values, token: str, policy, audit=None,
@@ -138,7 +157,7 @@ def make_server(catalog: dict, get_values, token: str, policy, audit=None,
             except Exception:
                 return self._send(500, {"error": "internal error"})
 
-    srv = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    srv = DoorServer(("127.0.0.1", port), Handler)
     srv.daemon_threads = True
     return srv
 

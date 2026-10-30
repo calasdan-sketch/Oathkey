@@ -495,7 +495,7 @@ class TestHookNeverRunsWhatItReads(Settings):
 
 class TestTheMatcher(unittest.TestCase):
     def test_powershell_and_monitor_are_covered(self):
-        self.assertEqual(hook_mod.MATCHER, "Read|Grep|Bash|PowerShell|Monitor|Edit|Write|MultiEdit|NotebookEdit")
+        self.assertEqual(hook_mod.MATCHER, "Read|Grep|Bash|PowerShell|Monitor|Edit|Write|MultiEdit|NotebookEdit|mcp__.*")
         self.assertTrue(hook_mod.check(call("PowerShell", command="Get-Content .env"))[1])
         self.assertTrue(hook_mod.check(call("PowerShell", command="gc C:\\app\\.env.local"))[1])
         self.assertTrue(hook_mod.check(call("Monitor", command="tail -f .env", timeout_ms=1000))[1])
@@ -615,9 +615,9 @@ class TestWindowsCommand(unittest.TestCase):
                 mock.patch("sysconfig.get_path", lambda _n: _isolation.mktemp()):
             self.assertIsNone(hook_mod.console_script())
 
-    def test_fail_closed_is_opt_in(self):
-        self.assertNotIn("onFailure", hook_mod.hook_handler())
-        self.assertEqual(hook_mod.hook_handler(fail_closed=True)["onFailure"], "block")
+    def test_fail_closed_is_the_default(self):
+        self.assertEqual(hook_mod.hook_handler()["onFailure"], "block")
+        self.assertNotIn("onFailure", hook_mod.hook_handler(fail_closed=False))
 
 
 # ------------------------------------------------------------ hook: 9, oversize
@@ -636,7 +636,15 @@ class TestBigAndBrokenInput(unittest.TestCase):
         self.assertEqual(json.loads(out)["hookSpecificOutput"]["permissionDecision"], "deny")
 
     def test_an_innocent_big_payload_passes(self):
-        self.assertEqual(self.run_check(call("Bash", command="echo " + "a" * 1_200_000))[:2], (0, ""))
+        # a big write (its content is not scanned) is fine ...
+        self.assertEqual(self.run_check(call("Write", file_path="/a/b.txt",
+                                             content="a" * 1_200_000))[:2], (0, ""))
+
+    def test_a_huge_shell_command_is_refused_unread(self):
+        # ... but a shell command too long to check safely is refused, not waved through
+        code, out, _ = self.run_check(call("Bash", command="echo " + "a" * 1_200_000))
+        self.assertEqual(code, 0)
+        self.assertIn("deny", out)
 
     def test_text_that_is_not_json_is_searched_for_env_names(self):
         code, out, _ = self.run_check('{"tool_name": "Bash", "tool_input": {"command": "cat .env"')

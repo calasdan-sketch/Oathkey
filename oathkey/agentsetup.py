@@ -39,7 +39,7 @@ HONEST = """
 
 def server_entry(client: str, keychain_ok: bool) -> dict:
     args = ["-m", "oathkey", "mcp"]
-    if client != "claude-code" and keychain_ok:
+    if keychain_ok:
         args += ["--default-store", "keychain"]
     return {"command": os.path.abspath(sys.executable), "args": args}
 
@@ -188,8 +188,9 @@ def cmd_setup_agent(args, out=None, home: str | None = None, cwd: str | None = N
                 out.write(f"  \u2713 wrote the oathkey entry to {shown} "
                           f"(your other entries are kept). Restart the client.\n")
     out.write(HONEST)
-    if client != "claude-code" and not keychain_ok:
-        out.write("  No OS keychain was found, so keys will go to a .env file.\n")
+    if not keychain_ok:
+        out.write("  No OS keychain was found, so keys will go to a .env file "
+                  "(the call_api tool cannot use those).\n")
     return 0
 
 

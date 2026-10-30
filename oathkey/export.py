@@ -22,6 +22,7 @@ import re
 import subprocess
 import sys
 
+from . import dialog as dialog_mod
 from . import keychain as keychain_mod
 from . import procs
 from . import recipes as recipes_mod
@@ -130,7 +131,8 @@ def send(argv: list[str], value: str, run=subprocess.run) -> tuple[bool, str]:
 
 
 def cmd_export(args, catalog: dict, ask=None, interactive=None, out=None,
-               which=None, run=subprocess.run, read_fn=None, backend=None) -> int:
+               which=None, run=subprocess.run, read_fn=None, backend=None,
+               window=None) -> int:
     out = out or sys.stdout
     recipe = catalog.get(args.service)
     if recipe is None:
@@ -178,14 +180,27 @@ def cmd_export(args, catalog: dict, ask=None, interactive=None, out=None,
     out.write(f"  About to send {names} to {target}.\n"
               f"  The value goes to `{program}` through a pipe - never on a command line, "
               f"never on screen.\n")
-    if not args.yes:
-        if interactive is None:
-            interactive = lambda: bool(sys.stdin and sys.stdin.isatty())
-        if not interactive():
-            out.write("  There is no terminal to ask, so nothing was sent. Add --yes to agree.\n")
+    if interactive is None:
+        interactive = lambda: bool(sys.stdin and sys.stdin.isatty())
+    at_terminal = interactive()
+    if not (args.yes and at_terminal):
+        # --yes counts only at a real terminal. Anywhere else (a script, an AI's
+        # shell, a pipe) a person must answer in a window.
+        answer = (window or dialog_mod.confirm)(
+            "oathkey - send a key?", f"Send {names} to {target}?\n\n"
+            f"The value goes to `{program}` through a pipe, never on screen.")
+        if answer is True:
+            pass
+        elif answer is not None:
+            out.write("  cancelled - nothing was sent.\n")
             values.clear()
             return 1
-        if not safeprompt.ask(
+        elif not at_terminal:
+            out.write("  There is no window and no terminal to ask on, so nothing was "
+                      "sent. (--yes only counts at a real terminal.)\n")
+            values.clear()
+            return 1
+        elif not safeprompt.ask(
                 f"  Send it to {where}? [y/N]: ", out, enter_means=False, reader=ask,
                 if_key="That looked like a key. Do not paste it here. "
                        "Type y or n."):

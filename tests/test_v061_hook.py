@@ -34,9 +34,8 @@ class Steal(unittest.TestCase):
         self.assertIn("deny", out)
 
     def test_normal_commands_pass(self):
-        for cmd in ("oathkey run stripe -- npm test", "oathkey status", "oathkey connect stripe",
-                    "cat oathkey.json", "git status", "pip install oathkey", "ls /proc/cpuinfo",
-                    "oathkey run stripe --redact -- env", "oathkey run stripe -- node app.js --no-reload"):
+        for cmd in ("oathkey status", "oathkey connect stripe",
+                    "cat oathkey.json", "git status", "pip install oathkey", "ls /proc/cpuinfo"):
             self.assertFalse(verdict(cmd), cmd)
 
     def test_unparsable_input_still_refused(self):

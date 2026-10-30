@@ -17,7 +17,11 @@ COMMANDS = {"remote", "trust-server", "deploy", "install", "uninstall", "start",
 
 def add_parsers(sub) -> None:
     rm = sub.add_parser("remote", help="Use a stored key on another machine over "
-                                       "ssh (key goes over stdin, never on a command line).")
+                                       "ssh (key goes over stdin, never on a command line).",
+                        usage="oathkey remote [options] SERVICE HOST -- COMMAND [ARG ...]",
+                        description="Run COMMAND on HOST with SERVICE's key in its "
+                                    "environment. Everything after `--` is the command "
+                                    "that runs on the far side.")
     rm.add_argument("service", help="Service slug.")
     rm.add_argument("host", help="user@host to ssh into (key-based login).")
     rm.add_argument("--as", dest="run_as", default=None,

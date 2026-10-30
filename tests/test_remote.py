@@ -31,6 +31,8 @@ def _run(tmp_path, command=("git", "pull"), **kw):
 
     kw.setdefault("isatty", True)
     kw.setdefault("ask", lambda _q: "y")
+    kw.setdefault("window", lambda *_a: None)          # no pop-up in tests: ask on the terminal
+    kw.setdefault("scan", lambda *_a: (None, None))     # no ssh-keyscan either
     code = remote.run_remote(GITHUB, "root@203.0.113.7", list(command),
                              env_file=_env(tmp_path), runner=runner,
                              backend=None, **kw)
@@ -83,7 +85,7 @@ def test_one_word_command_line_runs_as_a_shell_line():
 
 def test_user_ssh_options_come_first_so_they_win():
     argv = remote.ssh_command("h", "true", ["-oStrictHostKeyChecking=yes"])
-    assert argv.index("-oStrictHostKeyChecking=yes") < argv.index("StrictHostKeyChecking=accept-new")
+    assert argv.index("-oStrictHostKeyChecking=yes") < argv.index("StrictHostKeyChecking=yes")
 
 
 def test_options_after_the_host_are_not_swallowed(monkeypatch):

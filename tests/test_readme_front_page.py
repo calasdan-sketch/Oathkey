@@ -68,7 +68,9 @@ class FrontPageTests(unittest.TestCase):
                 if os.path.isfile(path) and name.endswith((".py", ".md", ".json")):
                     self.assertNotIn(old, _read(folder, name).lower(), path)
         for name in ("README.md", "SECURITY.md", "pyproject.toml"):
-            self.assertNotIn(old, _read(name).lower(), name)
+            text = "\n".join(line for line in _read(name).splitlines()
+                             if not line.startswith("Coming from the old"))  # the one migration line
+            self.assertNotIn(old, text.lower(), name)
 
     def test_version_matches_pyproject(self):
         from oathkey import __version__

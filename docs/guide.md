@@ -1,6 +1,6 @@
 > This is the full guide. The short front page is the [README](../README.md).
 
-# oathkey (`oathkey`)
+# oathkey
 
 **Quickstart**
 
@@ -33,19 +33,18 @@ one of those is in the agent's memory and its conversation log. Radware
 worked. `oathkey scan` finds them in seconds and tells you what to
 do about each.
 
-The safe tunnel for API keys. Connecting a website tool usually means 40
-minutes of hunting through dashboards, imprecise docs, and fumbling a
-secret into the right file. `oathkey` turns it into one command:
+oathkey lets your AI use your API keys without holding them, and gets a key
+set up in one command. Connecting a website tool usually means 40 minutes of
+hunting through dashboards, imprecise docs, and fumbling a secret into the
+right file. `oathkey get github` does it in one step: it opens the exact key
+page, takes the key when you click Copy (or from hidden typing), **validates it
+with a test API call**, and saves it in your OS keychain.
 
-```bash
-oathkey connect github
-```
-
-It opens the exact key page, walks the precise saved steps, takes the key
-with hidden input, **validates it with a test API call**, and writes it
-straight to `.env` with owner-only permissions — or, with
-`--store keychain`, into your OS keychain. The key is never displayed,
-never logged, never in shell history.
+`oathkey connect github` is the older, longer way: it walks the saved steps and
+writes the key to `.env` with owner-only permissions unless you add
+`--store keychain`. If the keychain does not work, it asks before using `.env`
+instead; nothing is saved to a file without your yes. The key is never
+displayed, never logged, never in shell history.
 
 ## One flow: from the vendor's dashboard into your project
 
@@ -277,18 +276,30 @@ oathkey hook uninstall          # take it out again
 
 This adds a Claude Code "PreToolUse hook": a small check Claude Code runs
 before every Read, Grep, Bash, PowerShell, Monitor, Edit, Write, MultiEdit
-and NotebookEdit call. If the call touches a `.env` file (`.env`,
+and NotebookEdit call, and every MCP tool call (`mcp__...`, where it looks at
+every text in the call's arguments). If the call touches a `.env` file (`.env`,
 `.env.local`, `prod.env`, `.envrc`) it says no and tells the agent why, in
 plain words. Templates (`.env.example`, `.env.sample`, `.env.template`) are
 allowed, for reading and writing.
+
+It also refuses, for an agent: running `oathkey remote`, `deploy`,
+`trust-server`, `export`, `run`, `serve` or `call` (also as `python -m oathkey
+...`; only you run those; `list`, `selftest`, `doctor`, `scan`, `scan-git`,
+`overview`, `audit show`, `--version` and `--help` are fine); wildcard paths
+that could expand to the `~/.oathkey` folder (`~/.*/keys/x`); and writing
+`.claude/settings.json`, `.claude/settings.local.json`, `~/.claude.json` or
+`.mcp.json`, which control which hooks and tools run. A shell command longer
+than 100,000 characters is refused unread (it could otherwise keep the hook
+busy until it times out).
 
 Writing is refused too (since 0.5.2): a real key an agent types into `.env`
 has passed through the agent, which is what this tool exists to prevent, and a
 `Write` can overwrite your keys. The agent is told: "Claude can't write to
 .env - your keys stay out of the chat. Run: oathkey connect <service> (or
 edit the file yourself)." If your `.env` holds nothing secret and you want the
-agent to edit it, start Claude Code with `OATHKEY_HOOK_ALLOW_WRITE=1` in
-its environment (only writes are allowed; reads stay refused). `Glob` is not
+agent to edit it (or those settings files), start Claude Code with
+`OATHKEY_HOOK_ALLOW_WRITE=1` in its environment (only writes are allowed;
+reads stay refused). `Glob` is not
 matched: it lists names only.
 
 Upgrading from 0.5.0 or 0.5.1: run `oathkey hook install` again. It
@@ -323,13 +334,14 @@ JSON on stdin (all of it, however big) and prints the answer. Restart Claude
 Code after installing.
 
 **If the hook itself fails** (it cannot start, crashes, times out, or is sent
-something it cannot parse), Claude Code lets the tool call through: that is
-"fail-open", the default. Input that is too big or not valid JSON is first
-searched for a `.env` file name as plain text and refused if one is there.
-If you would rather block everything when the hook is broken, install with
-`--fail-closed` (it sets `"onFailure": "block"`; needs Claude Code 2.1.295 or
-later; a missing or broken `oathkey` then blocks every call until you fix
-or uninstall it).
+something it cannot parse), `oathkey hook install` now makes Claude Code block
+the tool call: "fail-closed", the default since 0.8.0 (it sets
+`"onFailure": "block"`; needs Claude Code 2.1.295 or later; a missing or broken
+`oathkey` then blocks every call until you fix or uninstall it). Input that is
+not valid JSON is first searched for a `.env` file name as plain text and
+refused if one is there. If you would rather let calls through when the hook is
+broken, install with `--fail-open`. `hook status` says when an installed hook
+fails open or does not watch MCP tools, and `hook install` updates it in place.
 
 ### What this hook does NOT stop
 
@@ -358,12 +370,17 @@ file (`echo .env >> .gitignore`). Keep keys out of the files too:
 ## Commands
 
 ```bash
+oathkey install | uninstall         # plug oathkey into (or out of) Claude Desktop, Cursor, Claude Code, VS Code
+oathkey start                       # first run: check this computer, look for loose keys, say what is next
+oathkey overview [--json]           # what is connected, and is the activity log intact
+oathkey doctor [--json]             # is this computer ready (keychain, ssh, git, a quick self-attack)
+oathkey trust-server user@host      # make a server trust this PC (used by remote and deploy)
 oathkey scan [PATH]                 # find keys an AI agent can read (offline)
 oathkey scan --validate [--yes]     # also check if they still work (sends them; asks first)
 oathkey scan --json | --sarif       # machine-readable reports
 oathkey scan --fail-on live         # exit 1 only for keys that still work
 oathkey scan --all                  # every text file, not only agent-readable ones
-oathkey hook install [--project]    # stop Claude Code reading .env files
+oathkey hook install [--project] [--fail-open]    # stop Claude Code reading .env files (blocks if the hook breaks, unless --fail-open)
 oathkey hook status | uninstall     # check it / remove it (--settings FILE for another file)
 oathkey list                        # services with saved recipes
 oathkey connect <service>           # guided key setup -> .env
@@ -389,7 +406,7 @@ oathkey allow-agent <service>       # your one-time yes (terminal route; the nor
 oathkey allow-agent <service> --env-file .env.local   # let the agent write to this .env-style file (default: .env only; terminal route only)
 oathkey setup-agent claude-code|claude-desktop|cursor|codex|gemini [--write]   # the MCP entry, with this Python's absolute path
 oathkey skill install --for cursor|codex|gemini|all   # the rules file for that client (marked block, never overwrites yours)
-oathkey mcp --default-store keychain   # where agent-captured keys go (setup-agent sets it for clients without the .env hook)
+oathkey mcp --default-store keychain   # where agent-captured keys go (default: the keychain when there is one; install and setup-agent write it)
 oathkey allow-agent <service> --allow-clipboard-history   # ... and accept Windows' clipboard history (terminal route only; with a window, turn history off)
 oathkey allow-agent --list | --revoke [service]   # what is allowed in this project / take it back
 oathkey doctor-recipes [service ...] [--json] [--timeout S] [--my-recipes]   # have recipe addresses rotted?
@@ -795,7 +812,7 @@ exact click path, scopes, and a validation endpoint. Teach it once with
 `oathkey add`, use it forever — and Claude Code can pull the exact recipe via
 `oathkey mcp` instead of guessing.
 
-Ships with 35 recipes inside the package (so `pip install` carries
+Ships with 36 recipes inside the package (so `pip install` carries
 them), each checked against the provider's own docs for the key page,
 the validation endpoint and the auth header, and smoke-tested live with
 a fake key (every one answers with a clean "key rejected"):
@@ -889,9 +906,11 @@ Add to Claude Code (`claude mcp add`) or `~/.claude.json`:
 ```
 
 (`python` is the Windows launcher's name; on macOS/Linux use whatever
-runs your Python 3.) Tools: `list_services`, `get_recipe`,
-`find_public_apis`, `get_public_api`, `request_connect`, `capture_key` and
-`needs_keys` (the agent handshake, above). The recipe tells the agent the
+runs your Python 3.) Eight tools: `list_services`, `get_recipe`,
+`find_public_apis`, `get_public_api`, `request_connect`, `capture_key`,
+`needs_keys` (the agent handshake, above) and `call_api` (make a brokered call
+with a saved key: service, method, path, optional `query_json` and `body_json`;
+it reads the OS keychain only, and anything but a GET asks you first). The recipe tells the agent the
 exact steps and ends with: call `capture_key` (or, if that is unavailable,
 ask the person to run `oathkey connect <service>`) — never ask the user
 to paste the key into chat.
@@ -1168,14 +1187,12 @@ every text file is opened as UTF-8.
   `EnableClipboardHistory` registry value). The agent handshake was exercised
   over the MCP wire format and with a stand-in client, not inside a running
   Claude Code.
-- Keychain storage is best effort and opt-in (`--store keychain`); the
-  `.env` file is the default and the fallback. No Doppler / Vault
-  backends.
+- Keychain storage is best effort. `get` saves to the keychain; `connect` saves
+  to `.env` unless you add `--store keychain`; when the keychain fails, `.env` is
+  used only if you agree. No Doppler / Vault backends.
 - Recipe catalog is curated manually — verify a new service's key URL and
   validation endpoint before trusting it. Provider dashboards move:
   if a key page URL redirects, follow it and send a fix.
-- `oathkey mcp` returns recipes; the interactive key paste stays in the
-  terminal by design.
 - `forget` removes what oathkey wrote and what a killed write left
   next to it; it does not find other copies of the file (editor backups,
   version-control history), and it names - rather than deletes - another

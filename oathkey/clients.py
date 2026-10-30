@@ -18,8 +18,23 @@ import time
 NAME = "oathkey"
 
 
-def server_entry() -> dict:
-    return {"command": sys.executable, "args": python_flags() + ["-m", "oathkey", "mcp"]}
+def _keychain_available() -> bool:
+    try:
+        from . import keychain as keychain_mod
+        return keychain_mod.detect_backend() is not None
+    except Exception:
+        return False
+
+
+def server_entry(keychain_ok: bool | None = None) -> dict:
+    """The MCP entry. Keys an AI captures go to the OS keychain when there is
+    one: that is the only place the `call_api` tool looks for them."""
+    if keychain_ok is None:
+        keychain_ok = _keychain_available()
+    args = python_flags() + ["-m", "oathkey", "mcp"]
+    if keychain_ok:
+        args += ["--default-store", "keychain"]
+    return {"command": sys.executable, "args": args}
 
 
 def python_flags() -> list[str]:
@@ -49,12 +64,12 @@ def targets(env=None, home=None, cwd=None) -> dict:
     return out
 
 
-def merged(existing: dict, key: str) -> dict:
+def merged(existing: dict, key: str, entry: dict | None = None) -> dict:
     new = json.loads(json.dumps(existing))
     new.setdefault(key, {})
     if not isinstance(new[key], dict):
         raise ValueError(f"'{key}' in that file is not an object; not touching it")
-    new[key][NAME] = server_entry()
+    new[key][NAME] = entry or server_entry()
     return new
 
 
@@ -68,9 +83,10 @@ def plan(path: str, key: str) -> dict:
         existing = json.loads(text) if text.strip() else {}
         if not isinstance(existing, dict):
             raise ValueError("that file is not a JSON object; not touching it")
-    new = merged(existing, key)
+    entry = server_entry()
+    new = merged(existing, key, entry)
     return {"path": path, "present": present, "existing": existing, "new": new,
-            "already": existing.get(key, {}).get(NAME) == server_entry(),
+            "already": existing.get(key, {}).get(NAME) == entry,
             "others": sorted(k for k in existing.get(key, {}) if k != NAME)}
 
 
