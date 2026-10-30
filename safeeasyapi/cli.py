@@ -127,6 +127,12 @@ def _build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("mcp", help="Run the MCP server on stdio (for Claude Code).")
 
+    ins = sub.add_parser("install", help="Plug safeeasyapi into your AI tools (Claude "
+                                         "Desktop, Cursor, VS Code, Claude Code). Shows "
+                                         "the change and asks first.")
+    ins.add_argument("targets", nargs="*", help="claude-desktop, cursor, claude-code, vscode "
+                                                "(default: the ones found)")
+    ins.add_argument("--yes", action="store_true", help="Do not ask.")
     sub.add_parser("start", help="First run: check this computer, look for loose "
                                  "keys, and say what to do next.")
     stt = sub.add_parser("status", help="What is connected, and is the activity log intact.")
@@ -559,6 +565,9 @@ def _main(argv: list[str] | None = None) -> int:
         return _cmd_add(args.recipes_dir)
     if args.cmd == "mcp":
         return mcp_mod.serve(catalog)
+    if args.cmd == "install":
+        from . import clients
+        return clients.run(args.targets, args.yes)
     if args.cmd in ("start", "status", "audit", "call", "serve"):
         from . import cmds
         if args.cmd == "start":

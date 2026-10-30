@@ -1,0 +1,121 @@
+"""One command to plug safeeasyapi into the AI tools people use.
+
+`safeeasyapi install` finds Claude Desktop, Cursor, VS Code and Claude Code
+config files, shows exactly what it would add, backs the file up, merges
+(never overwrites your other servers) and writes atomically. No keys are
+ever written to these files. It uses the full path of this Python so a
+look-alike program on PATH cannot take its place.
+"""
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import sys
+import tempfile
+import time
+
+NAME = "safeeasyapi"
+
+
+def server_entry() -> dict:
+    return {"command": sys.executable, "args": ["-m", "safeeasyapi", "mcp"]}
+
+
+def targets(env=None, home=None, cwd=None) -> dict:
+    env = os.environ if env is None else env
+    home = home or os.path.expanduser("~")
+    cwd = cwd or os.getcwd()
+    out = {}
+    if os.name == "nt":
+        appdata = env.get("APPDATA") or os.path.join(home, "AppData", "Roaming")
+        out["claude-desktop"] = (os.path.join(appdata, "Claude", "claude_desktop_config.json"), "mcpServers")
+    elif sys.platform == "darwin":
+        out["claude-desktop"] = (os.path.join(home, "Library", "Application Support",
+                                              "Claude", "claude_desktop_config.json"), "mcpServers")
+    else:
+        out["claude-desktop"] = (os.path.join(home, ".config", "Claude",
+                                              "claude_desktop_config.json"), "mcpServers")
+    out["cursor"] = (os.path.join(home, ".cursor", "mcp.json"), "mcpServers")
+    out["claude-code"] = (os.path.join(cwd, ".mcp.json"), "mcpServers")
+    out["vscode"] = (os.path.join(cwd, ".vscode", "mcp.json"), "servers")
+    return out
+
+
+def merged(existing: dict, key: str) -> dict:
+    new = json.loads(json.dumps(existing))
+    new.setdefault(key, {})
+    if not isinstance(new[key], dict):
+        raise ValueError(f"'{key}' in that file is not an object; not touching it")
+    new[key][NAME] = server_entry()
+    return new
+
+
+def plan(path: str, key: str) -> dict:
+    """What would change. Never writes."""
+    present = os.path.exists(path)
+    existing = {}
+    if present:
+        with open(path, encoding="utf-8-sig") as f:
+            text = f.read()
+        existing = json.loads(text) if text.strip() else {}
+        if not isinstance(existing, dict):
+            raise ValueError("that file is not a JSON object; not touching it")
+    new = merged(existing, key)
+    return {"path": path, "present": present, "existing": existing, "new": new,
+            "already": existing.get(key, {}).get(NAME) == server_entry(),
+            "others": sorted(k for k in existing.get(key, {}) if k != NAME)}
+
+
+def apply(p: dict) -> str | None:
+    """Write p['new'] atomically; returns the backup path (or None)."""
+    path = p["path"]
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    backup = None
+    if p["present"]:
+        backup = f"{path}.bak-{time.strftime('%Y%m%d-%H%M%S')}"
+        shutil.copy2(path, backup)
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path) or ".", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(p["new"], f, indent=2)
+            f.write("\n")
+        os.replace(tmp, path)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+        raise
+    return backup
+
+
+def run(names, yes: bool, ask=input, out=print, **kw) -> int:
+    tg = targets(**kw)
+    chosen = names or [n for n, (path, _) in tg.items()
+                       if os.path.exists(path) or n in ("claude-code",)]
+    done = 0
+    for n in chosen:
+        if n not in tg:
+            out(f"unknown target '{n}'. Choose from: {', '.join(tg)}")
+            return 2
+        path, key = tg[n]
+        try:
+            p = plan(path, key)
+        except (ValueError, OSError) as e:
+            out(f"  {n}: skipped - {e}")
+            continue
+        if p["already"]:
+            out(f"  {n}: already set up.")
+            continue
+        out(f"  {n}: will add '{NAME}' to {path}"
+            + (f" (keeps your other servers: {', '.join(p['others'])})" if p["others"] else ""))
+        if not yes and ask(f"    go ahead? [y/N] ").strip().lower() not in ("y", "yes"):
+            out("    skipped.")
+            continue
+        b = apply(p)
+        out(f"    done." + (f" Backup: {b}" if b else ""))
+        done += 1
+    if not chosen:
+        out("no AI tools found. Name one: " + ", ".join(tg))
+    elif done:
+        out("\nRestart the AI tool so it loads safeeasyapi.")
+    return 0
