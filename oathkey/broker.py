@@ -12,6 +12,7 @@ approval and why the log exists. See SECURITY.md.
 """
 from __future__ import annotations
 
+import contextlib
 import functools
 import hashlib
 import http.client
@@ -36,6 +37,34 @@ WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 _PATH_OK = re.compile(r"/[A-Za-z0-9._~!$&'()*+,;=:@%/-]*")
 _EXPOSED_HEADERS = ("content-type", "content-length", "retry-after",
                     "x-ratelimit-remaining", "x-ratelimit-reset", "location")
+
+MAX_REVIEW = 900     # longest request description a person can really read
+
+# AWS "GET" requests can still mint new credentials (GetSessionToken,
+# AssumeRole, ...). For signed AWS services only plain look-ups are allowed.
+_SIGV4_STS_OK = {"GetCallerIdentity"}
+_SIGV4_OK_PREFIX = ("Describe", "List")
+_SIGV4_OK_EXACT = {"GetCallerIdentity", "GetAccountSummary"}
+
+
+def check_sigv4_action(recipe: dict, url: str) -> None:
+    spec = (recipe.get("validate") or {}).get("auth", {})
+    q = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query, keep_blank_values=True)
+    actions = q.get("Action", [])
+    if len(actions) > 1:
+        raise BrokerError("more than one Action; refused", 5)
+    action = actions[0] if actions else ""
+    if spec.get("service") == "sts":
+        if action not in _SIGV4_STS_OK:
+            raise BrokerError("through this tool, AWS STS may only be asked "
+                              "'GetCallerIdentity' (other STS actions create new "
+                              "keys); refused", 5)
+    elif action and not (action in _SIGV4_OK_EXACT or action.startswith(_SIGV4_OK_PREFIX)):
+        raise BrokerError(f"AWS action '{action[:40]}' is not a plain look-up; refused", 5)
+
+
+def _clean(text, limit=80) -> str:
+    return "".join(c if c.isprintable() else "?" for c in str(text))[:limit]
 
 
 class BrokerError(Exception):
@@ -95,8 +124,19 @@ def is_public_ip(text: str) -> bool:
         ip = ipaddress.ip_address(text)
     except ValueError:
         return False
-    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped:
-        ip = ip.ipv4_mapped
+    if isinstance(ip, ipaddress.IPv6Address):
+        # IPv6 forms that carry an IPv4 address inside: judge that one too
+        inner = []
+        if ip.ipv4_mapped:
+            inner.append(ip.ipv4_mapped)
+        if ip.sixtofour:
+            inner.append(ip.sixtofour)
+        if ip.teredo:
+            inner.extend(ip.teredo)
+        if ip in ipaddress.ip_network("64:ff9b::/96"):
+            inner.append(ipaddress.IPv4Address(int(ip) & 0xFFFFFFFF))
+        if inner:
+            return all(is_public_ip(str(i)) for i in inner)
     return ip.is_global and not ip.is_multicast
 
 
@@ -224,13 +264,14 @@ NO_APPROVAL = ("The person did not approve this (or no approval window could "
 def describe(recipe: dict, method: str, host: str, url: str, data) -> str:
     """What the person is asked to approve. Shows everything that matters."""
     parts = urllib.parse.urlsplit(url)
-    q = urllib.parse.parse_qsl(parts.query)
+    q = urllib.parse.parse_qsl(parts.query, keep_blank_values=True)
     text = f"{method} https://{host}{parts.path}"
     if q:
-        text += "  query: " + ", ".join(f"{k}={v[:30]}" for k, v in q[:8])
+        text += "  query: " + ", ".join(f"{k}={v[:60]}" for k, v in q)
     if data:
-        text += (f"  body: {len(data)} bytes, starts: "
-                 f"{data[:80].decode('utf-8', 'replace')!r}")
+        text += (f"  body: {len(data)} bytes, sha256 "
+                 f"{hashlib.sha256(data).hexdigest()[:12]}, starts: "
+                 f"{data[:160].decode('utf-8', 'replace')!r}")
     return f"Using your '{recipe['service']}' key:  " + text
 
 
@@ -251,11 +292,21 @@ def call(recipe: dict, values: dict, method: str, path: str,
     method = str(method).upper()
     if method not in READ_METHODS | WRITE_METHODS:
         raise BrokerError("method not supported", 5)
-    host, url = build_url(recipe, path, query)
+    try:
+        host, url = build_url(recipe, path, query)
+    except BrokerError:
+        _log(audit, recipe, method, "?", _clean(path), 0, 0, "refused")
+        raise
     auth_type = (recipe.get("validate") or {}).get("auth", {}).get("type", "bearer")
     if method in WRITE_METHODS and auth_type == "aws_sigv4":
         raise BrokerError("this service signs requests; only reads are "
                           "supported through the broker", 5)
+    if auth_type == "aws_sigv4":
+        try:
+            check_sigv4_action(recipe, url)
+        except BrokerError:
+            _log(audit, recipe, method, host, _clean(path), 0, 0, "refused")
+            raise
 
     data = None
     if body is not None:
@@ -276,6 +327,11 @@ def call(recipe: dict, values: dict, method: str, path: str,
     with policy.lock:
         if method in WRITE_METHODS and not policy.allow_write:
             summary = describe(recipe, method, host, url, data)
+            if len(summary) > MAX_REVIEW:
+                _log(audit, recipe, method, host, path, 0, 0, "refused")
+                raise BrokerError("This request is too long for you to review "
+                                  "safely, so it was refused. Ask for something "
+                                  "smaller.", 5)
             if not policy.ask(summary):
                 _log(audit, recipe, method, host, path, 0, 0, "denied")
                 raise BrokerError(NO_APPROVAL, 5)
@@ -301,7 +357,11 @@ def call(recipe: dict, values: dict, method: str, path: str,
     if data is not None:
         req.data = data
         req.add_header("Content-Type", "application/json")
-    ip = resolve_public(host, 443, resolver)
+    try:
+        ip = resolve_public(host, 443, resolver)
+    except BrokerError:
+        _log(audit, recipe, method, host, path, 0, 0, "refused")
+        raise
 
     started = time.time()
     try:
@@ -343,9 +403,50 @@ def call(recipe: dict, values: dict, method: str, path: str,
 def _log(audit, recipe, method, host, path, status, size, result, ms=0):
     if audit is None:
         return
-    audit.write({"service": recipe.get("service"), "method": method,
-                 "host": host, "path": path.split("?")[0], "status": status,
-                 "bytes": size, "result": result, "ms": ms})
+    try:
+        audit.write({"service": recipe.get("service"), "method": method,
+                     "host": host, "path": path.split("?")[0], "status": status,
+                     "bytes": size, "result": result, "ms": ms})
+    except OSError:
+        pass            # ready() already refused to act when the log is unwritable
+
+
+@contextlib.contextmanager
+def _file_lock(path: str):
+    """One writer at a time across processes (MCP + serve + call may all run).
+    If the lock cannot be taken we carry on: the in-process lock still holds."""
+    fd = None
+    locked = False
+    try:
+        fd = os.open(path + ".lock", os.O_RDWR | os.O_CREAT, 0o600)
+        if os.name == "nt":
+            import msvcrt
+            for _ in range(100):
+                try:
+                    os.lseek(fd, 0, 0)
+                    msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+                    locked = True
+                    break
+                except OSError:
+                    time.sleep(0.05)
+        else:
+            import fcntl
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            locked = True
+    except OSError:
+        pass
+    try:
+        yield
+    finally:
+        if fd is not None:
+            try:
+                if locked and os.name == "nt":
+                    import msvcrt
+                    os.lseek(fd, 0, 0)
+                    msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+            except OSError:
+                pass
+            os.close(fd)
 
 
 class AuditLog:
@@ -381,8 +482,48 @@ class AuditLog:
             raise BrokerError("The activity log cannot be written, so "
                               "nothing was sent.", 5) from None
 
+    @property
+    def anchor_path(self) -> str:
+        return self.path + ".head"
+
+    def _count(self) -> int:
+        n = 0
+        try:
+            with open(self.path, "rb") as f:
+                for line in f.read().splitlines():
+                    try:
+                        json.loads(line)["hash"]
+                        n += 1
+                    except (ValueError, KeyError, TypeError):
+                        continue
+        except OSError:
+            pass
+        return n
+
+    def _read_anchor(self):
+        try:
+            with open(self.anchor_path, encoding="utf-8") as f:
+                count, h = f.read().split()
+            return int(count), h
+        except (OSError, ValueError):
+            return None
+
+    def _save_anchor(self, count: int, h: str) -> None:
+        """A second small file holding how many entries there should be and
+        the last hash, so cutting the end off the log (or deleting it) shows.
+        Someone running as you can rewrite both files; this catches accidents
+        and casual tampering, not a determined attacker (see SECURITY.md)."""
+        tmp = self.anchor_path + ".tmp"
+        try:
+            with open(tmp, "w", encoding="utf-8") as f:
+                f.write(f"{count} {h}\n")
+            os.replace(tmp, self.anchor_path)
+        except OSError:
+            pass
+
     def write(self, entry: dict) -> None:
-        with AuditLog._lock:                    # one writer at a time here
+        with AuditLog._lock, _file_lock(self.path):   # one writer at a time
+            count = self._count()
             entry = dict(entry, ts=int(time.time()), prev=self._last_hash())
             entry["hash"] = hashlib.sha256(
                 json.dumps(entry, sort_keys=True).encode()).hexdigest()
@@ -392,6 +533,7 @@ class AuditLog:
                 os.fsync(fd)
             finally:
                 os.close(fd)
+            self._save_anchor(count + 1, entry["hash"])
 
     def verify(self) -> tuple[bool, int]:
         prev, n = "0" * 64, 0
@@ -405,7 +547,11 @@ class AuditLog:
                         return False, n
                     prev, n = h, n + 1
         except FileNotFoundError:
-            return True, 0
+            a = self._read_anchor()
+            return (a is None or a[0] == 0), 0
         except (ValueError, KeyError):
             return False, n
+        a = self._read_anchor()
+        if a is not None and (n < a[0] or (n == a[0] and prev != a[1])):
+            return False, n            # entries were cut off or replaced
         return True, n

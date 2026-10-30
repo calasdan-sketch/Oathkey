@@ -359,7 +359,12 @@ def _ask_one(field: dict, single: bool, prompt, out, clip, taken: set) -> str | 
             value = None
             out.write("\n")
         if value:
-            out.write(f"  got the {label} ({len(value)} characters) - clipboard emptied\n")
+            if clipboard_mod.is_empty(get):
+                out.write(f"  got the {label} ({len(value)} characters) - clipboard "
+                          "emptied (a clipboard-history tool may still keep a copy)\n")
+            else:
+                out.write(f"  got the {label} ({len(value)} characters) - but I could "
+                          "NOT empty the clipboard; copy something else now\n")
             return value
         out.write("  nothing key-shaped was copied - type or paste it instead:\n")
     text = "  Paste your API key (hidden): " if single else f"  Paste the {label} (hidden): "

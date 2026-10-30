@@ -141,11 +141,34 @@ def _normalize(text: str) -> str:
     return re.sub(r"\s+", "", t)
 
 
+def _squash(text: str) -> str:
+    """Only letters and digits, lower case. Defeats dashes, dots, zero-width
+    characters, NUL bytes (UTF-16 text), accents and upper/lower-case games."""
+    import re
+    import unicodedata
+    t = unicodedata.normalize("NFKD", text.replace("\x00", ""))
+    return re.sub(r"[^0-9a-z]", "", t.lower())
+
+
+def _extra_forms(secret: str) -> list[str]:
+    import base64
+    import codecs
+    raw = secret.encode("utf-8")
+    out = [codecs.encode(secret, "rot13")]
+    out.append(base64.b32encode(raw).decode().rstrip("="))
+    out.append(base64.b32hexencode(raw).decode().rstrip("="))
+    out.append(base64.b85encode(raw).decode())
+    out.append(base64.a85encode(raw).decode())
+    return out
+
+
 def loosely_contains(text: str, secrets) -> bool:
     """True if, after undoing common disguises, any secret (in a plain,
     base64 or hex form) is still in the text. The caller then withholds the
     whole text instead of trying to patch it."""
+    text = text.replace("\x00", "")
     norm = _normalize(text)
+    squashed = _squash(norm)
     for s in secrets:
         if len(s) < MIN_LEN:
             continue
@@ -155,5 +178,12 @@ def loosely_contains(text: str, secrets) -> bool:
             except UnicodeDecodeError:
                 continue
             if len(needle) >= MIN_LEN and needle in norm:
+                return True
+            sq = _squash(needle)
+            if len(sq) >= 14 and sq in squashed:
+                return True
+        for extra in _extra_forms(s):
+            sq = _squash(extra)
+            if len(sq) >= 14 and sq in squashed:
                 return True
     return False

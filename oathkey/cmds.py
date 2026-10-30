@@ -101,6 +101,11 @@ def cmd_audit(action: str, as_json: bool, last: int = 20) -> int:
     log = broker.AuditLog(os.path.join(_home(), "audit.log"))
     if action == "show":
         import time as _t
+        intact, _n = log.verify()
+        if not intact and not as_json:
+            print("WARNING: the activity log does not check out - entries may "
+                  "have been edited, cut off or deleted. What follows may be "
+                  "false.\n")
         rows = []
         try:
             with open(log.path, "rb") as f:
@@ -117,9 +122,10 @@ def cmd_audit(action: str, as_json: bool, last: int = 20) -> int:
             print("nothing yet - no AI has used a key through oathkey.")
         for e in ([] if as_json else rows):
             when = _t.strftime("%Y-%m-%d %H:%M", _t.localtime(e.get("ts", 0)))
-            print(f"{when}  {e.get('service')}  {e.get('method')} "
-                  f"{e.get('host')}{e.get('path')}  -> {e.get('status')} "
-                  f"({e.get('result')})")
+            c = broker._clean
+            print(f"{when}  {c(e.get('service'))}  {c(e.get('method'), 10)} "
+                  f"{c(e.get('host'))}{c(e.get('path'))}  -> {c(e.get('status'), 6)} "
+                  f"({c(e.get('result'), 20)})")
         return OK
     ok, n = log.verify()
     _emit({"intact": ok, "entries": n}, as_json,

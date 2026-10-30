@@ -16,6 +16,7 @@ class GetCommandTests(unittest.TestCase):
         fake_clip = (lambda: "", lambda: None)
         with mock.patch.object(connect, "connect", fake_connect), \
                 mock.patch.object(clipboard, "backend", lambda: fake_clip), \
+                mock.patch.object(cli.keychain_mod, "detect_backend", lambda: "test"), \
                 mock.patch.object(cli, "keychain_store", lambda r, e: "STORE"):
             code = cli.main(argv)
         return code, seen

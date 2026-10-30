@@ -18,9 +18,20 @@ import subprocess
 import sys
 
 TIMEOUT = 120
+MAX_SHOWN = 900      # broker refuses requests whose description is longer
 
 
-def _safe(text: str, limit: int = 600) -> str:
+def _tool(*paths):
+    """First of these ABSOLUTE paths that is a real file. Never searches PATH
+    or the current folder, so a program an AI dropped there cannot answer the
+    pop-up for you."""
+    for p in paths:
+        if p and os.path.isfile(p):
+            return p
+    return None
+
+
+def _safe(text: str, limit: int = MAX_SHOWN) -> str:
     s = "".join(c if c.isprintable() else " " for c in str(text))
     return s if len(s) <= limit else s[:limit] + "...[+%d more characters]" % (len(s) - limit)
 
@@ -31,7 +42,9 @@ def dialog(summary: str) -> bool | None:
     env = dict(os.environ, SEA_MSG=msg)
     try:
         if os.name == "nt":
-            ps = shutil.which("powershell") or shutil.which("pwsh")
+            root = os.environ.get("SystemRoot") or r"C:\Windows"
+            ps = _tool(os.path.join(root, "System32", "WindowsPowerShell",
+                                    "v1.0", "powershell.exe"))
             if not ps:
                 return None
             cmd = [ps, "-NoProfile", "-NonInteractive", "-Command",
@@ -42,17 +55,22 @@ def dialog(summary: str) -> bool | None:
             return subprocess.run(cmd, env=env, timeout=TIMEOUT,
                                   capture_output=True).returncode == 0
         if sys.platform == "darwin":
+            osa = _tool("/usr/bin/osascript")
+            if not osa:
+                return None
             r = subprocess.run(
-                ["osascript", "-e",
+                [osa, "-e",
                  'display dialog (system attribute "SEA_MSG") with title '
                  '"oathkey - permission needed" buttons {"No","Yes"} '
                  'default button "No" with icon caution'],
                 env=env, timeout=TIMEOUT, capture_output=True, text=True)
             return r.returncode == 0 and "button returned:Yes" in r.stdout
-        for tool, argv in (("zenity", ["--question", "--title=oathkey", "--text=" + msg]),
-                           ("kdialog", ["--yesno", msg, "--title", "oathkey"])):
-            if shutil.which(tool):
-                return subprocess.run([tool] + argv, timeout=TIMEOUT,
+        for names, argv in ((("zenity",), ["--question", "--no-markup",
+                                           "--title=oathkey", "--text=" + msg]),
+                            (("kdialog",), ["--yesno", msg, "--title", "oathkey"])):
+            exe = _tool(*[d + "/" + n for n in names for d in ("/usr/bin", "/bin")])
+            if exe:
+                return subprocess.run([exe] + argv, timeout=TIMEOUT,
                                       capture_output=True).returncode == 0
     except (OSError, subprocess.SubprocessError):
         return None

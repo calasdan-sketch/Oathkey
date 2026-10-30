@@ -691,6 +691,14 @@ def _main(argv: list[str] | None = None) -> int:
             return max(_cmd_forget(dict(recipe, env_var=var), args.env_file)
                        for var in recipes_mod.env_vars(recipe))
         import webbrowser
+        if (args.cmd == "get" and args.store == "keychain"
+                and args.env_file == ".env" and keychain_mod.detect_backend() is None):
+            print("error: this computer has no keychain, and I won't leave a key in a "
+                  "file in your project folder\n(an AI tool could read it). Choose a "
+                  "private place yourself:  oathkey connect "
+                  f"{args.service} --env-file <path to a private .env>",
+                  file=sys.stderr)
+            return 1
         opener = (lambda url: None) if args.no_browser else webbrowser.open
         store_fn = None
         if args.store == "keychain":

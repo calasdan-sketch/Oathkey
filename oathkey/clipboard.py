@@ -122,9 +122,20 @@ def looks_like(value: str, pattern: str | None) -> bool:
     value = value.strip()
     if not value or len(value) > MAX_LEN:
         return False
+    if "://" in value or value.lower().startswith(("www.", "mailto:")):
+        return False                     # a web address is never a key
     if pattern:
         return re.fullmatch(pattern, value) is not None
     return KEY_SHAPE.match(value) is not None
+
+
+def is_empty(get) -> bool:
+    """True when the clipboard really is empty now (some systems refuse to
+    clear it, and clipboard-history tools may keep their own copy)."""
+    try:
+        return not (get() or "").strip()
+    except Exception:                                    # noqa: BLE001
+        return False
 
 
 def wait_for_key(pattern: str | None, taken: set[str], get, clear,
