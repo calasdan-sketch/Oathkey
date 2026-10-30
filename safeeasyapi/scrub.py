@@ -1,0 +1,123 @@
+"""Hide secrets in anything an AI is about to read.
+
+A key can come back in a program's output or an API response in more than
+one shape: as it is, URL-encoded, base64 (at any of three alignments),
+hex, JSON-escaped, or backwards. `Scrubber` removes all of them, also when a
+key is split across two chunks of a stream. Best effort, and said so: it
+cannot catch a secret an API transforms in some way we did not think of.
+"""
+from __future__ import annotations
+
+import base64
+import json
+import subprocess
+import sys
+import threading
+from urllib.parse import quote, quote_plus
+
+REDACTED = b"[REDACTED]"
+MIN_LEN = 6          # shorter "secrets" would mangle ordinary text
+
+
+def forms(secret: str) -> list[bytes]:
+    """Every byte-string we will remove for this secret, longest first."""
+    raw = secret.encode("utf-8")
+    if len(raw) < MIN_LEN:
+        return []
+    out: set[bytes] = {raw, raw[::-1]}
+    for text in (quote(secret, safe=""), quote_plus(secret),
+                 json.dumps(secret)[1:-1]):
+        out.add(text.encode("utf-8"))
+    out.add(raw.hex().encode())
+    out.add(raw.hex().upper().encode())
+    for k in (0, 1, 2):
+        lead = (0, 2, 3)[k]
+        total = k + len(raw)
+        full = total // 3
+        for enc in (base64.b64encode, base64.urlsafe_b64encode):
+            piece = enc(b"x" * k + raw)[lead:full * 4]
+            if len(piece) >= 8:
+                out.add(piece)
+                out.add(piece.rstrip(b"="))
+    return sorted((f for f in out if len(f) >= MIN_LEN),
+                  key=len, reverse=True)
+
+
+class Scrubber:
+    """Streaming remover. feed() returns bytes that are safe to show; the
+    last few bytes are held back until the next feed(), because a secret
+    may straddle two chunks. Call flush() at the end."""
+
+    def __init__(self, secrets):
+        seen: set[bytes] = set()
+        self._forms: list[bytes] = []
+        for s in secrets:
+            for f in forms(s):
+                if f not in seen:
+                    seen.add(f)
+                    self._forms.append(f)
+        self._forms.sort(key=len, reverse=True)
+        self._hold = max((len(f) for f in self._forms), default=1) - 1
+        self._buf = b""
+
+    def _clean(self, data: bytes) -> bytes:
+        for f in self._forms:
+            if f in data:
+                data = data.replace(f, REDACTED)
+        return data
+
+    def feed(self, chunk: bytes) -> bytes:
+        if not self._forms:
+            return chunk
+        data = self._clean(self._buf + chunk)
+        if self._hold and len(data) > self._hold:
+            self._buf = data[-self._hold:]
+            return data[:-self._hold]
+        self._buf, out = (data, b"") if self._hold else (b"", data)
+        return out
+
+    def flush(self) -> bytes:
+        data, self._buf = self._clean(self._buf), b""
+        return data
+
+
+def scrub_text(text: str, secrets) -> str:
+    s = Scrubber(secrets)
+    return (s.feed(text.encode("utf-8")) + s.flush()).decode("utf-8", "replace")
+
+
+def _pump(src, dst, scrubber: Scrubber) -> None:
+    try:
+        while True:
+            chunk = src.read1(8192) if hasattr(src, "read1") else src.read(8192)
+            if not chunk:
+                break
+            dst.write(scrubber.feed(chunk))
+            dst.flush()
+        dst.write(scrubber.flush())
+        dst.flush()
+    except (OSError, ValueError):
+        pass
+
+
+def run_scrubbed(cmd, env, secrets, out=None, err=None) -> int:
+    """Like subprocess.call, but the child's stdout and stderr go through
+    a Scrubber before anyone (an AI) can read them."""
+    out = out or sys.stdout.buffer
+    err = err or sys.stderr.buffer
+    proc = subprocess.Popen(cmd, env=env, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE)
+    threads = [threading.Thread(target=_pump, args=(proc.stdout, out,
+                                                    Scrubber(secrets))),
+               threading.Thread(target=_pump, args=(proc.stderr, err,
+                                                    Scrubber(secrets)))]
+    for t in threads:
+        t.start()
+    try:
+        status = proc.wait()
+    except KeyboardInterrupt:
+        proc.terminate()
+        status = proc.wait()
+    for t in threads:
+        t.join()
+    return status

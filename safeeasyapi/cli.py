@@ -405,7 +405,13 @@ def _cmd_run(recipe: dict, command: list[str]) -> int:
         print(f"error: {e}", file=sys.stderr)
         return e.code
     try:
-        return keychain_mod.run_with_key(recipe, cmd, backend)
+        # Output no person is watching live (an AI agent reads it, or it is
+        # piped) is scrubbed so the child cannot print the key back.
+        try:
+            real_pipe = (hasattr(sys.stdout, "buffer") and not sys.stdout.isatty())
+        except (ValueError, AttributeError):
+            real_pipe = False
+        return keychain_mod.run_with_key(recipe, cmd, backend, scrub=real_pipe)
     except keychain_mod.CannotRun as e:
         print(f"error: {e}", file=sys.stderr)
         return e.code

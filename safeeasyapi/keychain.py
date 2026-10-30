@@ -323,8 +323,16 @@ def locate_program(name: str, env: dict | None = None, which=shutil.which,
     return name
 
 
+def _stdout_is_tty() -> bool:
+    try:
+        return sys.stdout.isatty()
+    except (AttributeError, ValueError):
+        return False
+
+
 def run_with_key(recipe: dict, cmd: list[str], backend: str | None = None,
-                 env: dict | None = None, read_fn=None, call=None) -> int:
+                 env: dict | None = None, read_fn=None, call=None,
+                 scrub: bool | None = None) -> int:
     """Run `cmd` with the recipe's env var injected from the keychain.
     The key goes straight into the child's environment, never to a
     terminal. Returns the child's exit code - 128 plus the signal number for
@@ -333,15 +341,25 @@ def run_with_key(recipe: dict, cmd: list[str], backend: str | None = None,
     system will not start the command."""
     from .recipes import env_vars
     child_env = dict(os.environ if env is None else env)
+    secrets: list[str] = []
     for var in env_vars(recipe):
         key = (read_fn or read)(recipe["service"], var, backend)
         if key is None:
             raise KeychainError(f"no key stored for '{recipe['service']}'"
                                 + ("" if var == recipe["env_var"] else f" ({var})"))
         child_env[var] = key
+        secrets.append(key)
         del key
+    # When nobody is watching a terminal (an AI agent reads the output), the
+    # child must not be able to print the key back: `run x -- env` would.
+    if scrub is None:
+        scrub = False   # the command line decides (cli._cmd_run)
     try:
-        status = (call or subprocess.call)(cmd, env=child_env)
+        if scrub and call is None:
+            from .scrub import run_scrubbed
+            status = run_scrubbed(cmd, child_env, secrets)
+        else:
+            status = (call or subprocess.call)(cmd, env=child_env)
     except OSError as e:
         # The caller found the program (locate_program) but the system would
         # not start it: a script whose interpreter is missing, a file that

@@ -200,8 +200,40 @@ def _safe_name(host: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]", "_", host)
 
 
+_SAFE_SSH_OPTS = {"port", "connecttimeout", "serveraliveinterval",
+                  "serveralivecountmax", "compression", "ipqos"}
+
+
+def check_ssh_args(extra: list[str] | None) -> list[str]:
+    """Only a few harmless ssh options may be passed through. `-o
+    ProxyCommand=...`, `LocalCommand`, `-F`, `-J` and friends run programs
+    or change who we trust, so an AI that can pick them can run anything."""
+    args = list(extra or [])
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a == "-p" and i + 1 < len(args) and args[i + 1].isdigit():
+            i += 2
+            continue
+        glued = a.startswith("-o") and len(a) > 2
+        if glued or (a == "-o" and i + 1 < len(args)):
+            name, _, val = (a[2:] if glued else args[i + 1]).partition("=")
+            name = name.strip().lower()
+            ok = ((name in _SAFE_SSH_OPTS
+                   or (name == "stricthostkeychecking" and val in ("yes", "ask")))
+                  and "\n" not in val)
+            if ok:
+                i += 1 if glued else 2
+                continue
+        raise RemoteError(f"ssh option not allowed: {a!r}. Only -p and "
+                          "-o with Port, ConnectTimeout, ServerAliveInterval, "
+                          "ServerAliveCountMax, Compression are accepted.", 2)
+    return args
+
+
 def ssh_command(host: str, script: str, extra: list[str] | None = None,
                 identity: str | None = None) -> list[str]:
+    extra = check_ssh_args(extra)
     ident = ["-i", identity, "-o", "IdentitiesOnly=yes"] if identity else []
     # user-supplied options come FIRST: ssh keeps the first value it sees
     return (["ssh", "-T"] + list(extra or []) + ident
