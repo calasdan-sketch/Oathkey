@@ -76,7 +76,7 @@ jobs:
           python -m venv "${RUNNER_TEMP}/wheel-venv"
           "${RUNNER_TEMP}/wheel-venv/bin/pip" install dist/*.whl
           "${RUNNER_TEMP}/wheel-venv/bin/oathkey" --version
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dist
           path: dist/
