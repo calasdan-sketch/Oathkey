@@ -1,7 +1,7 @@
 """A validation call only reads: GET or HEAD, nothing else.
 
 Panel finding (SEA-5): validate.method was unrestricted, so a user recipe
-(one somebody sent you, say) could make `safeeasyapi connect` send DELETE -
+(one somebody sent you, say) could make `oathkey connect` send DELETE -
 or POST, PUT - with the real key to an endpoint on the key's own domain,
 where the cross-domain prompt never fires. All 29 shipped recipes use GET.
 """
@@ -12,8 +12,8 @@ import unittest
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import _isolation  # noqa: F401  (fake HOME/USERPROFILE for the whole run)
-from safeeasyapi import recipes as recipes_mod
-from safeeasyapi import validate as validate_mod
+from oathkey import recipes as recipes_mod
+from oathkey import validate as validate_mod
 
 
 def recipe(method="GET", **over):
@@ -124,7 +124,7 @@ class TestTheCallItselfIsAlsoGuarded(unittest.TestCase):
 
 class TestReadmeSaysSo(unittest.TestCase):
     def test_the_recipe_rules_mention_get_or_head(self):
-        with open(os.path.join(_isolation.REPO, "README.md"),
+        with open(os.path.join(_isolation.REPO, "docs", "guide.md"),
                   encoding="utf-8") as f:
             flat = " ".join(f.read().split())
         self.assertTrue("`GET` or `HEAD`" in flat,

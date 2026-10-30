@@ -1,6 +1,6 @@
 """`run` with a command that cannot start, a child a signal stopped, and Ctrl-C.
 
-Panel finding (SEA-8): `safeeasyapi run <service> -- nosuchcmd` ended in a
+Panel finding (SEA-8): `oathkey run <service> -- nosuchcmd` ended in a
 FileNotFoundError traceback - after the key had been read from the keychain -
 and Ctrl-C anywhere (the MCP server, `run`) ended in a KeyboardInterrupt
 traceback. On Windows `npm` was "not found" because CreateProcess looks for
@@ -22,9 +22,9 @@ from contextlib import redirect_stderr, redirect_stdout
 from unittest import mock
 
 import _isolation  # noqa: F401  (fake HOME/USERPROFILE for the whole run)
-from safeeasyapi import cli as cli_mod
-from safeeasyapi import keychain as keychain_mod
-from safeeasyapi import recipes as recipes_mod
+from oathkey import cli as cli_mod
+from oathkey import keychain as keychain_mod
+from oathkey import recipes as recipes_mod
 
 FAKE_KEY = "sk-test-THIS-IS-A-FAKE-KEY-999"
 POSIX = os.name == "posix"
@@ -34,7 +34,7 @@ ESC = chr(27)
 # setting is inherited, and then Ctrl-C would do nothing at all.
 RUNNER = ("import signal, sys; "
           "signal.signal(signal.SIGINT, signal.default_int_handler); "
-          "from safeeasyapi.cli import main; sys.exit(main(sys.argv[1:]))")
+          "from oathkey.cli import main; sys.exit(main(sys.argv[1:]))")
 
 
 def recipe(**over):
@@ -300,7 +300,7 @@ class TestCtrlCAnywhere(unittest.TestCase):
         err = io.StringIO()
         with mock.patch.object(recipes_mod, "load_recipes",
                                return_value={"acme": recipe()}), \
-                mock.patch("safeeasyapi.connect.connect",
+                mock.patch("oathkey.connect.connect",
                            side_effect=KeyboardInterrupt), \
                 redirect_stderr(err):
             code = cli_mod.main(["connect", "acme", "--no-browser"])
@@ -333,7 +333,7 @@ class TestCtrlCWhileTheReadersStart(unittest.TestCase):
 
     def test_interrupt_while_starting_readers_joins_the_started_ones(self):
         import threading
-        from safeeasyapi import runner
+        from oathkey import runner
         proc = self.fake_proc()
         real_start = threading.Thread.start
         starts = []
@@ -356,7 +356,7 @@ class TestCtrlCWhileTheReadersStart(unittest.TestCase):
     @unittest.skipUnless(POSIX, "needs a POSIX SIGINT")
     def test_a_real_ctrl_c_during_the_start_waits_until_the_readers_are_up(self):
         import threading
-        from safeeasyapi import runner
+        from oathkey import runner
         before = signal.signal(signal.SIGINT, signal.default_int_handler)
         self.addCleanup(signal.signal, signal.SIGINT, before)
         proc = self.fake_proc()
@@ -380,7 +380,7 @@ class TestCtrlCWhileTheReadersStart(unittest.TestCase):
 
     def test_a_reader_that_cannot_start_does_not_leave_the_child_running(self):
         import threading
-        from safeeasyapi import runner
+        from oathkey import runner
         proc = self.fake_proc()
         with mock.patch.object(threading.Thread, "start",
                                side_effect=RuntimeError("can't start new thread")), \
@@ -490,7 +490,7 @@ class TestRealProcesses(unittest.TestCase):
 
 class TestReadmeSaysSo(unittest.TestCase):
     def test_the_run_paragraph(self):
-        with open(os.path.join(_isolation.REPO, "README.md"),
+        with open(os.path.join(_isolation.REPO, "docs", "guide.md"),
                   encoding="utf-8") as f:
             flat = " ".join(f.read().split())
         for phrase in ("command not found", "exit status 127", "126",

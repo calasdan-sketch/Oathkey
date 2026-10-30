@@ -13,13 +13,13 @@ import unittest
 from unittest import mock
 
 import _isolation  # noqa: F401  (fake HOME/USERPROFILE for the whole run)
-from safeeasyapi import cli as cli_mod
-from safeeasyapi import clipboard as clipboard_mod
-from safeeasyapi import connect as connect_mod
-from safeeasyapi import keychain as keychain_mod
-from safeeasyapi import procs
-from safeeasyapi import recipes as recipes_mod
-from safeeasyapi import store as store_mod
+from oathkey import cli as cli_mod
+from oathkey import clipboard as clipboard_mod
+from oathkey import connect as connect_mod
+from oathkey import keychain as keychain_mod
+from oathkey import procs
+from oathkey import recipes as recipes_mod
+from oathkey import store as store_mod
 
 FAKE_KEY = "sk-test-THIS-IS-A-FAKE-KEY-999"
 
@@ -157,7 +157,10 @@ class TestUserRecipeReplacingABuiltin(unittest.TestCase):
         self.user = recipes_mod.user_recipes_dir()
         os.makedirs(self.user, exist_ok=True)
         self.path = os.path.join(self.user, "openai.json")
-        mine = dict(recipe(), service="openai", display="My OpenAI")
+        builtin = {k: v for k, v in recipes_mod.load_recipes()["openai"].items()
+                   if not k.startswith("_")}
+        mine = dict(builtin, display="My OpenAI")   # same server: allowed
+
         with open(self.path, "w", encoding="utf-8") as f:
             json.dump(mine, f)
         self.addCleanup(lambda: os.path.exists(self.path) and os.remove(self.path))

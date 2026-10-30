@@ -20,9 +20,9 @@ import types
 import unittest
 
 import _isolation  # noqa: F401  (fake HOME/USERPROFILE for the whole run)
-from safeeasyapi import cli as cli_mod
-from safeeasyapi import keychain as keychain_mod
-from safeeasyapi import store as store_mod
+from oathkey import cli as cli_mod
+from oathkey import keychain as keychain_mod
+from oathkey import store as store_mod
 
 KEY = "sk-forget-me-7731"
 NO_KEYCHAIN = types.SimpleNamespace(detect_backend=lambda: None,
@@ -217,7 +217,7 @@ class TestMixedLineEndings(unittest.TestCase):
 
 class TestReadmeSaysSo(unittest.TestCase):
     def test_the_env_paragraph(self):
-        with open(os.path.join(_isolation.REPO, "README.md"),
+        with open(os.path.join(_isolation.REPO, "docs", "guide.md"),
                   encoding="utf-8") as f:
             flat = " ".join(f.read().split())
         for phrase in ("runs over several lines",):

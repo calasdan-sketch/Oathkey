@@ -5,3 +5,6 @@ recursive-include tests *.py
 global-exclude __pycache__ *.py[cod]
 include CONTRIBUTING.md
 recursive-include .github *.yml *.md
+include docs/guide.md
+
+include SECURITY.md

@@ -17,8 +17,8 @@ import unittest
 from unittest import mock
 
 import _isolation  # noqa: F401  (fake HOME/USERPROFILE for the whole run)
-from safeeasyapi import connect as connect_mod
-from safeeasyapi import recipes as recipes_mod
+from oathkey import connect as connect_mod
+from oathkey import recipes as recipes_mod
 
 rd = connect_mod.registrable_domain
 same = connect_mod.same_owner
@@ -337,7 +337,7 @@ class TestTheTypedYesIsAskedFor(unittest.TestCase):
 
 class TestReadmeSaysWhatTheListIs(unittest.TestCase):
     def test_it_is_a_compact_snapshot_not_the_public_suffix_list(self):
-        with open(os.path.join(_isolation.REPO, "README.md"),
+        with open(os.path.join(_isolation.REPO, "docs", "guide.md"),
                   encoding="utf-8") as f:
             flat = " ".join(f.read().split())
         for phrase in ("compact snapshot", "not the full Public Suffix List",

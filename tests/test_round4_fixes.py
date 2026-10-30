@@ -27,13 +27,13 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from unittest import mock
 
 import _isolation
-from safeeasyapi import cli as cli_mod
-from safeeasyapi import connect as connect_mod
-from safeeasyapi import keychain as keychain_mod
-from safeeasyapi import mcp as mcp_mod
-from safeeasyapi import recipes as recipes_mod
-from safeeasyapi import store as store_mod
-from safeeasyapi import validate as validate_mod
+from oathkey import cli as cli_mod
+from oathkey import connect as connect_mod
+from oathkey import keychain as keychain_mod
+from oathkey import mcp as mcp_mod
+from oathkey import recipes as recipes_mod
+from oathkey import store as store_mod
+from oathkey import validate as validate_mod
 
 REPO = _isolation.REPO
 FAKE_KEY = "sk-test-THIS-IS-A-FAKE-KEY-999"
@@ -141,7 +141,7 @@ class TestRegistrableDomain(unittest.TestCase):
             builtin, out, confirm_in=boom))
         self.assertIn("built-in recipe", out.getvalue())
         # a user recipe overriding a built-in slug loses the trust too
-        path = recipes_mod.save_recipe(builtin)   # -> ~/.safeeasyapi/recipes
+        path = recipes_mod.save_recipe(builtin)   # -> ~/.oathkey/recipes
         try:
             self.assertFalse(recipes_mod.load_recipes()["anthropic"]["_builtin"])
         finally:
@@ -200,7 +200,8 @@ class TestUnwritableEnvFile(unittest.TestCase):
         with mock.patch.object(recipes_mod, "load_recipes", return_value=cat), \
                 mock.patch.object(connect_mod, "connect", connect_with_fakes), \
                 redirect_stdout(out), redirect_stderr(err):
-            code = cli_mod.main(["connect", "acme", "--no-browser", "--env-file", env])
+            code = cli_mod.main(["connect", "acme", "--no-browser", "--store", "env",
+                                "--env-file", env])
         self.assertEqual(code, 1)
         self.assertNotIn("Traceback", out.getvalue() + err.getvalue())
         self.assertNotIn(FAKE_KEY, out.getvalue() + err.getvalue())
@@ -501,7 +502,7 @@ class TestForget(unittest.TestCase):
         self.assertNotIn("ACME_API_KEY", store_mod.load_env(env))
         with mock.patch.object(recipes_mod, "load_recipes", return_value=cat), \
                 redirect_stdout(io.StringIO()):
-            self.assertEqual(cli_mod.main(["forget", "nope"]), 1)
+            self.assertEqual(cli_mod.main(["forget", "nope"]), 3)
 
 
 # ------------------------------------------------------- validation shapes
@@ -648,15 +649,15 @@ class TestShippedCatalog(unittest.TestCase):
 
 class TestReadme(unittest.TestCase):
     def test_windows_first_wording(self):
-        with open(os.path.join(REPO, "README.md"), encoding="utf-8") as f:
+        with open(os.path.join(REPO, "docs", "guide.md"), encoding="utf-8") as f:
             text = f.read()
         self.assertNotIn("python3", text)
         self.assertNotIn("alias seapi", text)
         self.assertNotIn("git clone <repo>", text)
-        self.assertIn("pip install git+https://github.com/calasdan-sketch/safeeasyapi", text)
+        self.assertIn("pip install git+https://github.com/calasdan-sketch/oathkey", text)
         self.assertIn('"command": "python"', text)
         self.assertIn("winpty", text)
-        self.assertIn("safeeasyapi forget", text)
+        self.assertIn("oathkey forget", text)
         self.assertIn("registrable", text)
         for slug in TestShippedCatalog.EXPECTED:
             self.assertIn(f"`{slug}`", text, slug)

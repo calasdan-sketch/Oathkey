@@ -20,11 +20,11 @@ from contextlib import contextmanager, redirect_stderr
 from unittest import mock
 
 import _isolation  # noqa: F401  (fake HOME/USERPROFILE for the whole run)
-from safeeasyapi import cli as cli_mod
-from safeeasyapi import connect as connect_mod
-from safeeasyapi import keychain as keychain_mod
-from safeeasyapi import recipes as recipes_mod
-from safeeasyapi import store as store_mod
+from oathkey import cli as cli_mod
+from oathkey import connect as connect_mod
+from oathkey import keychain as keychain_mod
+from oathkey import recipes as recipes_mod
+from oathkey import store as store_mod
 
 FAKE_KEY = "sk-test-THIS-IS-A-FAKE-KEY-999"
 
@@ -216,7 +216,7 @@ class TestRunSaysSo(unittest.TestCase):
 
 class TestReadmeSaysSo(unittest.TestCase):
     def test_the_keychain_section_describes_a_tool_that_does_not_answer(self):
-        with open(os.path.join(_isolation.REPO, "README.md"),
+        with open(os.path.join(_isolation.REPO, "docs", "guide.md"),
                   encoding="utf-8") as f:
             flat = " ".join(f.read().split())
         for phrase in ("does not answer within 30 seconds",

@@ -21,9 +21,9 @@ import subprocess
 import unittest
 
 import _isolation  # noqa: F401  (fake HOME/USERPROFILE for the whole run)
-from safeeasyapi import connect as connect_mod
-from safeeasyapi import recipes as recipes_mod
-from safeeasyapi import store as store_mod
+from oathkey import connect as connect_mod
+from oathkey import recipes as recipes_mod
+from oathkey import store as store_mod
 
 FAKE_KEY = "sk-test-THIS-IS-A-FAKE-KEY-999"
 
@@ -454,7 +454,7 @@ class TestANameMayNotEndInANewline(unittest.TestCase):
 class TestReadmeTellsTheTruth(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        with open(os.path.join(_isolation.REPO, "README.md"),
+        with open(os.path.join(_isolation.REPO, "docs", "guide.md"),
                   encoding="utf-8") as f:
             cls.text = f.read()
         cls.flat = " ".join(cls.text.split())
@@ -479,7 +479,7 @@ class TestReadmeTellsTheTruth(unittest.TestCase):
                             f"the README does not say: {phrase!r}")
 
     def test_it_tells_people_with_an_old_file_what_to_do(self):
-        for phrase in ("0.3.1 and earlier", "safeeasyapi rotate"):
+        for phrase in ("0.3.1 and earlier", "oathkey rotate"):
             self.assertTrue(phrase in self.flat,
                             f"the README does not say: {phrase!r}")
 

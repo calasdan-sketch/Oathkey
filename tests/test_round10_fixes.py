@@ -15,11 +15,11 @@ import unittest
 from unittest import mock
 
 import _isolation  # noqa: F401
-from safeeasyapi import cli as cli_mod
-from safeeasyapi import hook as hook_mod
-from safeeasyapi import recipes as recipes_mod
-from safeeasyapi import scan as scan_mod
-from safeeasyapi import validate as validate_mod
+from oathkey import cli as cli_mod
+from oathkey import hook as hook_mod
+from oathkey import recipes as recipes_mod
+from oathkey import scan as scan_mod
+from oathkey import validate as validate_mod
 
 from test_scan import (ANTHROPIC, CATALOG, GENERIC, OPENAI, FakeValidate, NoNetwork,
                        args_for, run_cli, scan_text, write)
@@ -442,7 +442,7 @@ class TestTrailingPunctuation(NoNetwork):
 class TestHookNeverRunsWhatItReads(Settings):
     def test_status_does_not_execute_the_command_in_a_cloned_settings_file(self):
         marker = os.path.join(self.dir, "pwned")
-        evil = f"touch {marker}; safeeasyapi hook check"
+        evil = f"touch {marker}; oathkey hook check"
         self.put({"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [
             {"type": "command", "command": evil}]}]}})
         args = cli_mod._build_parser().parse_args(["hook", "status", "--settings", self.path])
@@ -463,7 +463,7 @@ class TestHookNeverRunsWhatItReads(Settings):
         hook_mod.cmd_hook(args, out=out, err=io.StringIO(),
                           run=lambda argv, **kw: ran.append(argv) or ok_run(argv))
         self.assertFalse(os.path.exists(marker))
-        self.assertEqual(ran, [["/bin/sh", "-c", "/opt/bin/safeeasyapi hook check"]])
+        self.assertEqual(ran, [["/bin/sh", "-c", "/opt/bin/oathkey hook check"]])
         self.assertIn("not the one this installation would write", out.getvalue())
 
     def test_self_test_never_uses_a_shell_string_for_a_file_command(self):
@@ -477,25 +477,25 @@ class TestHookNeverRunsWhatItReads(Settings):
         self.assertIsInstance(seen["argv"], list)
 
     def test_ours_means_exactly_ours(self):
-        ours = ("/opt/bin/safeeasyapi hook check", "'/opt/my tools/safeeasyapi' hook check",
-                '"C:\\Python\\Scripts\\safeeasyapi.exe" hook check',
-                "/usr/bin/python3 -I -m safeeasyapi hook check")
+        ours = ("/opt/bin/oathkey hook check", "'/opt/my tools/oathkey' hook check",
+                '"C:\\Python\\Scripts\\oathkey.exe" hook check',
+                "/usr/bin/python3 -I -m oathkey hook check")
         for cmd in ours:
             self.assertTrue(hook_mod.is_ours({"type": "command", "command": cmd}), cmd)
-        not_ours = ("safeeasyapi scan", "evil safeeasyapi hook check",
-                    "touch x; safeeasyapi hook check", "safeeasyapi hook check; rm -rf ~",
-                    "/tmp/evil/run.sh safeeasyapi hook check", "echo safeeasyapi hook check",
-                    "python3 -m safeeasyapi hook check", "/x/other hook check")
+        not_ours = ("oathkey scan", "evil oathkey hook check",
+                    "touch x; oathkey hook check", "oathkey hook check; rm -rf ~",
+                    "/tmp/evil/run.sh oathkey hook check", "echo oathkey hook check",
+                    "python3 -m oathkey hook check", "/x/other hook check")
         for cmd in not_ours:
             self.assertFalse(hook_mod.is_ours({"type": "command", "command": cmd}), cmd)
-        self.assertFalse(hook_mod.is_ours({"command": "/opt/bin/safeeasyapi hook check",
+        self.assertFalse(hook_mod.is_ours({"command": "/opt/bin/oathkey hook check",
                                            "args": ["--steal"]}))
         self.assertTrue(hook_mod.is_ours({"command": "x", "statusMessage": hook_mod.MARKER}))
 
 
 class TestTheMatcher(unittest.TestCase):
     def test_powershell_and_monitor_are_covered(self):
-        self.assertEqual(hook_mod.MATCHER, "Read|Grep|Bash|PowerShell|Monitor|Edit|Write|MultiEdit|NotebookEdit")
+        self.assertEqual(hook_mod.MATCHER, "Read|Grep|Bash|PowerShell|Monitor|Edit|Write|MultiEdit|NotebookEdit|mcp__.*")
         self.assertTrue(hook_mod.check(call("PowerShell", command="Get-Content .env"))[1])
         self.assertTrue(hook_mod.check(call("PowerShell", command="gc C:\\app\\.env.local"))[1])
         self.assertTrue(hook_mod.check(call("Monitor", command="tail -f .env", timeout_ms=1000))[1])
@@ -511,7 +511,7 @@ class TestOurOwnGroup(Settings):
     def test_a_shared_group_is_never_edited(self):
         shared = {"matcher": "Bash", "hooks": [
             {"type": "command", "command": "/x/audit.sh", "timeout": 5},
-            {"type": "command", "command": "/opt/bin/safeeasyapi hook check"}]}
+            {"type": "command", "command": "/opt/bin/oathkey hook check"}]}
         self.put({"hooks": {"PreToolUse": [shared]}})
         self.hook("install")
         groups = self.get()["hooks"]["PreToolUse"]
@@ -532,18 +532,18 @@ class TestOurOwnGroup(Settings):
 
     def test_a_new_install_path_replaces_ours_even_after_a_move(self):
         self.put({"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [
-            {"type": "command", "command": "/old/venv/bin/safeeasyapi hook check"}]}]}})
+            {"type": "command", "command": "/old/venv/bin/oathkey hook check"}]}]}})
         self.hook("install")
         groups = self.get()["hooks"]["PreToolUse"]
         self.assertEqual(len(groups), 1)
-        self.assertEqual(self.command_of(groups[0]["hooks"][0]), "/opt/bin/safeeasyapi hook check")
+        self.assertEqual(self.command_of(groups[0]["hooks"][0]), "/opt/bin/oathkey hook check")
         self.assertEqual(groups[0]["matcher"], hook_mod.MATCHER)
 
 
 # -------------------------------------------------------------- hook: 4, Windows
 
 class TestWindowsCommand(unittest.TestCase):
-    EXE = "C:\\Users\\Dan B\\AppData\\Python\\Scripts\\safeeasyapi.exe"
+    EXE = "C:\\Users\\Dan B\\AppData\\Python\\Scripts\\oathkey.exe"
 
     def windows(self):
         stack = contextlib.ExitStack()
@@ -563,15 +563,15 @@ class TestWindowsCommand(unittest.TestCase):
         h = hook_mod.hook_handler(shell_form=True)
         self.assertNotIn("args", h)
         self.assertEqual(h["command"],
-                         '"C:/Users/Dan B/AppData/Python/Scripts/safeeasyapi.exe" hook check')
+                         '"C:/Users/Dan B/AppData/Python/Scripts/oathkey.exe" hook check')
         self.assertNotIn("\\", h["command"])
         self.assertTrue(hook_mod.is_ours(h))
 
     def test_posix_stays_a_shell_string(self):
         with mock.patch.object(hook_mod, "_ON_WINDOWS", False), \
-                mock.patch.object(hook_mod, "console_script", lambda: "/opt/my tools/safeeasyapi"):
+                mock.patch.object(hook_mod, "console_script", lambda: "/opt/my tools/oathkey"):
             h = hook_mod.hook_handler()
-        self.assertEqual(h["command"], "'/opt/my tools/safeeasyapi' hook check")
+        self.assertEqual(h["command"], "'/opt/my tools/oathkey' hook check")
         self.assertNotIn("args", h)
 
     def test_the_self_test_starts_exec_form_like_claude_code_does(self):
@@ -583,7 +583,7 @@ class TestWindowsCommand(unittest.TestCase):
 
     def test_a_program_in_the_current_folder_is_never_the_hook_command(self):
         here = _isolation.mktemp()
-        name = "safeeasyapi.exe" if os.name == "nt" else "safeeasyapi"
+        name = "oathkey.exe" if os.name == "nt" else "oathkey"
         planted = os.path.join(here, name)
         with open(planted, "w") as f:
             f.write("#!/bin/sh\n")
@@ -602,22 +602,22 @@ class TestWindowsCommand(unittest.TestCase):
         real = _isolation.mktemp()
         alias = os.path.join(_isolation.mktemp(), "alias")
         os.symlink(real, alias)
-        planted = os.path.join(real, "safeeasyapi")
+        planted = os.path.join(real, "oathkey")
         with open(planted, "w") as f:
             f.write("#!/bin/sh\n")
         os.chmod(planted, 0o755)
         old = os.getcwd()
         os.chdir(real)
         self.addCleanup(os.chdir, old)
-        spelled_otherwise = os.path.join(alias, "safeeasyapi")
+        spelled_otherwise = os.path.join(alias, "oathkey")
         with mock.patch("shutil.which", lambda _n: spelled_otherwise), \
                 mock.patch.object(sys, "executable", os.path.join(_isolation.mktemp(), "python")), \
                 mock.patch("sysconfig.get_path", lambda _n: _isolation.mktemp()):
             self.assertIsNone(hook_mod.console_script())
 
-    def test_fail_closed_is_opt_in(self):
-        self.assertNotIn("onFailure", hook_mod.hook_handler())
-        self.assertEqual(hook_mod.hook_handler(fail_closed=True)["onFailure"], "block")
+    def test_fail_closed_is_the_default(self):
+        self.assertEqual(hook_mod.hook_handler()["onFailure"], "block")
+        self.assertNotIn("onFailure", hook_mod.hook_handler(fail_closed=False))
 
 
 # ------------------------------------------------------------ hook: 9, oversize
@@ -636,7 +636,15 @@ class TestBigAndBrokenInput(unittest.TestCase):
         self.assertEqual(json.loads(out)["hookSpecificOutput"]["permissionDecision"], "deny")
 
     def test_an_innocent_big_payload_passes(self):
-        self.assertEqual(self.run_check(call("Bash", command="echo " + "a" * 1_200_000))[:2], (0, ""))
+        # a big write (its content is not scanned) is fine ...
+        self.assertEqual(self.run_check(call("Write", file_path="/a/b.txt",
+                                             content="a" * 1_200_000))[:2], (0, ""))
+
+    def test_a_huge_shell_command_is_refused_unread(self):
+        # ... but a shell command too long to check safely is refused, not waved through
+        code, out, _ = self.run_check(call("Bash", command="echo " + "a" * 1_200_000))
+        self.assertEqual(code, 0)
+        self.assertIn("deny", out)
 
     def test_text_that_is_not_json_is_searched_for_env_names(self):
         code, out, _ = self.run_check('{"tool_name": "Bash", "tool_input": {"command": "cat .env"')
@@ -664,7 +672,7 @@ class TestBigAndBrokenInput(unittest.TestCase):
 
     def test_the_hook_program_end_to_end_with_a_big_payload(self):
         text = call("Bash", command="echo " + "a" * 1_500_000 + "; cat .env")
-        code = ("import sys; sys.path.insert(0, %r); from safeeasyapi.cli import main; "
+        code = ("import sys; sys.path.insert(0, %r); from oathkey.cli import main; "
                 "sys.exit(main(['hook', 'check']))" % _isolation.REPO)
         done = subprocess.run([sys.executable, "-c", code], input=text.encode(),
                               capture_output=True, timeout=60, cwd=_isolation.mktemp())

@@ -4,8 +4,8 @@ import unittest
 
 import _isolation  # noqa: F401
 from _stub import Stub
-from safeeasyapi import recipes as recipes_mod
-from safeeasyapi import validate as validate_mod
+from oathkey import recipes as recipes_mod
+from oathkey import validate as validate_mod
 
 KEY = "fake-key-0123456789abcdef"
 

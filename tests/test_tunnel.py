@@ -8,8 +8,8 @@ import unittest
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import _isolation  # noqa: F401  (fake HOME/USERPROFILE for the whole run)
-from safeeasyapi import mcp as mcp_mod
-from safeeasyapi import validate as validate_mod
+from oathkey import mcp as mcp_mod
+from oathkey import validate as validate_mod
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -114,13 +114,13 @@ class TestMCP(unittest.TestCase):
     def test_initialize(self):
         r = mcp_mod.handle({"jsonrpc": "2.0", "id": 1,
                             "method": "initialize", "params": {}}, CATALOG)
-        self.assertEqual(r["result"]["serverInfo"]["name"], "safeeasyapi")
+        self.assertEqual(r["result"]["serverInfo"]["name"], "oathkey")
 
     def test_tools_list(self):
         r = mcp_mod.handle({"jsonrpc": "2.0", "id": 2,
                             "method": "tools/list"}, CATALOG)
         names = {t["name"] for t in r["result"]["tools"]}
-        self.assertEqual(names, {"list_services", "get_recipe", "find_public_apis", "get_public_api", "request_connect", "needs_keys", "capture_key"})
+        self.assertEqual(names, {"list_services", "get_recipe", "find_public_apis", "get_public_api", "request_connect", "needs_keys", "capture_key", "call_api"})
 
     def test_list_services(self):
         r = mcp_mod.handle({"jsonrpc": "2.0", "id": 3, "method": "tools/call",
@@ -136,7 +136,7 @@ class TestMCP(unittest.TestCase):
                            CATALOG)
         text = r["result"]["content"][0]["text"]
         self.assertIn("https://acme.test/keys", text)
-        self.assertIn("safeeasyapi connect acme", text)
+        self.assertIn("oathkey connect acme", text)
 
     def test_get_recipe_unknown(self):
         r = mcp_mod.handle({"jsonrpc": "2.0", "id": 5, "method": "tools/call",
@@ -159,7 +159,7 @@ class TestMCP(unittest.TestCase):
         as cwd (wherever it is checked out), bytes on the wire, and a
         reader thread with a timeout instead of a blocking readline."""
         proc = subprocess.Popen(
-            [sys.executable, "-m", "safeeasyapi", "mcp"],
+            [sys.executable, "-m", "oathkey", "mcp"],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             cwd=_isolation.REPO, env=dict(os.environ))
         lines: "queue.Queue[bytes]" = queue.Queue()
@@ -179,9 +179,9 @@ class TestMCP(unittest.TestCase):
         try:
             init = rpc("initialize")
             self.assertEqual(init["result"]["serverInfo"]["name"],
-                             "safeeasyapi")
+                             "oathkey")
             tools = rpc("tools/list", rid=2)
-            self.assertEqual(len(tools["result"]["tools"]), 7)
+            self.assertEqual(len(tools["result"]["tools"]), 8)
             call = rpc("tools/call",
                        {"name": "list_services", "arguments": {}}, rid=3)
             services = json.loads(call["result"]["content"][0]["text"])

@@ -8,10 +8,10 @@ from contextlib import redirect_stderr, redirect_stdout
 from unittest import mock
 
 import _isolation  # noqa: F401
-from safeeasyapi import cli as cli_mod
-from safeeasyapi import manifest
+from oathkey import cli as cli_mod
+from oathkey import manifest
 
-BAD = ("README.md", "safeeasyapi.json", "src/app.py", "C:/x/.env", "C:\\x\\.env", "\\\\host\\share\\.env",
+BAD = ("README.md", "oathkey.json", "src/app.py", "C:/x/.env", "C:\\x\\.env", "\\\\host\\share\\.env",
        "/etc/.env", "~/.env", "./.env", "a/./.env", "a//.env", "../.env", ".git/config", ".git/.env",
        "a/.GIT/.env", "x/.envrc", "notes.txt", "nul.env", ".env/../../x", "a\\..\\.env", ".env\x00.md")
 GOOD = (".env", ".env.local", "config/.env", "prod.env", "a/b/.env.development")
@@ -44,7 +44,7 @@ class EnvFileRules(unittest.TestCase):
 class FindStops(unittest.TestCase):
     def test_no_git_root_means_only_here(self):
         with tempfile.TemporaryDirectory() as d:
-            with open(os.path.join(d, "safeeasyapi.json"), "w") as f:
+            with open(os.path.join(d, "oathkey.json"), "w") as f:
                 json.dump(man(), f)
             sub = os.path.join(d, "a", "b")
             os.makedirs(sub)
@@ -53,22 +53,22 @@ class FindStops(unittest.TestCase):
 
     def test_does_not_climb_above_git_root(self):
         with tempfile.TemporaryDirectory() as d:
-            with open(os.path.join(d, "safeeasyapi.json"), "w") as f:
+            with open(os.path.join(d, "oathkey.json"), "w") as f:
                 json.dump(man(), f)
             proj = os.path.join(d, "proj")
             os.makedirs(os.path.join(proj, ".git"))
             os.makedirs(os.path.join(proj, "src"))
             self.assertIsNone(manifest.find(os.path.join(proj, "src")))
-            with open(os.path.join(proj, "safeeasyapi.json"), "w") as f:
+            with open(os.path.join(proj, "oathkey.json"), "w") as f:
                 json.dump(man(), f)
             self.assertEqual(manifest.find(os.path.join(proj, "src")),
-                             os.path.realpath(os.path.join(proj, "safeeasyapi.json")))
+                             os.path.realpath(os.path.join(proj, "oathkey.json")))
 
 
 class ConnectUsesManifest(unittest.TestCase):
     def test_connect_default_env_file_comes_from_the_manifest(self):
         with tempfile.TemporaryDirectory() as d:
-            with open(os.path.join(d, "safeeasyapi.json"), "w") as f:
+            with open(os.path.join(d, "oathkey.json"), "w") as f:
                 json.dump(man(env_file="config/.env.local"), f)
             seen = {}
 
@@ -88,7 +88,7 @@ class ConnectUsesManifest(unittest.TestCase):
 
     def test_bad_manifest_env_file_stops_connect(self):
         with tempfile.TemporaryDirectory() as d:
-            with open(os.path.join(d, "safeeasyapi.json"), "w") as f:
+            with open(os.path.join(d, "oathkey.json"), "w") as f:
                 json.dump({"version": 1, "services": [], "env_file": "README.md"}, f)
             old = os.getcwd()
             os.chdir(d)
@@ -114,7 +114,7 @@ class ConnectUsesManifest(unittest.TestCase):
 class FifoDoesNotHang(unittest.TestCase):
     def test_fifo_named_py_is_skipped(self):
         import threading
-        from safeeasyapi import detect
+        from oathkey import detect
         if not hasattr(os, "mkfifo"):
             self.skipTest("no fifo")
         with tempfile.TemporaryDirectory() as d:
@@ -140,7 +140,7 @@ class ExportNamesTheTarget(unittest.TestCase):
 
     def run_export(self, d, args, ask="y", **kw):
         import subprocess
-        from safeeasyapi import export
+        from oathkey import export
         with open(os.path.join(d, ".env"), "w") as f:
             f.write(f"GROQ_API_KEY={self.KEY}\n")
         out, calls, prompts = io.StringIO(), [], []
@@ -148,16 +148,17 @@ class ExportNamesTheTarget(unittest.TestCase):
         def run(argv, input=None, **k):
             calls.append(argv)
             return subprocess.CompletedProcess(argv, 0, b"", b"")
-        cat = __import__("safeeasyapi.recipes", fromlist=["x"]).load_recipes(
-            __import__("safeeasyapi.recipes", fromlist=["x"]).RECIPES_DIR)
+        cat = __import__("oathkey.recipes", fromlist=["x"]).load_recipes(
+            __import__("oathkey.recipes", fromlist=["x"]).RECIPES_DIR)
         code = export.cmd_export(args, cat, ask=lambda p: prompts.append(p) or ask,
                                  interactive=lambda: True, out=out, which=lambda n: "/f/" + n,
+                                 window=lambda *a: None,      # no pop-up in tests
                                  run=run, read_fn=lambda *a: None, backend="fake")
         return code, out.getvalue(), calls, prompts
 
     def test_repo_from_the_git_remote_is_named_and_passed_explicitly(self):
         import subprocess
-        from safeeasyapi import export
+        from oathkey import export
         with tempfile.TemporaryDirectory() as d:
             subprocess.run(["git", "init", "-q", d], check=True)
             subprocess.run(["git", "-C", d, "remote", "add", "origin", "git@github.com:acme/widgets.git"], check=True)

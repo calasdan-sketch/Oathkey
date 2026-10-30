@@ -1,5 +1,51 @@
 # Changelog
 
+## 0.8.0
+
+oathkey joins two lines of work: the key-capture line (0.7.x: `capture_key`,
+`allow-agent`, the consent window, the Claude Code hook, `oathkey.json`) and the
+call-broker line.
+
+- **New: your AI can use a key without holding it.** `oathkey call`, the MCP
+  `call_api` tool and `oathkey serve` make the request for the AI: the real
+  address only (https, public servers only, no redirects), the key added by
+  oathkey, any trace of the key removed from the answer. Writes wait for your click.
+- **New: tamper-evident activity log** (`audit verify|show|reset`).
+- **New: `oathkey selftest`**: 73 simulated attacks against oathkey's own rules.
+  It does not test the live network layer and is not a security audit.
+- **New: `install` / `uninstall`** into Claude Desktop, Cursor, Claude Code and VS Code,
+  plus `remote`, `trust-server`, `deploy`, `start`, `overview`.
+- **New: `scan-git`** (git history and a pre-commit hook). `scan` is unchanged.
+- **Changed names:** the product is `oathkey`; `status` is the project key report
+  and the connection summary is `overview`.
+- **Changed:** a custom recipe may replace a built-in one only if it talks to the
+  same server; otherwise it is ignored with a message.
+- **Changed: the Claude Code hook is stricter.** It now also watches MCP tool calls
+  (every text in their arguments), refuses an agent running `oathkey remote`,
+  `deploy`, `trust-server`, `export`, `run`, `serve` or `call`, refuses wildcard
+  paths that could expand to `~/.oathkey` (`~/.*/keys/x`), refuses writes to
+  `.claude/settings.json`, `.claude/settings.local.json`, `~/.claude.json` and
+  `.mcp.json`, refuses a shell command over 100,000 characters unread, and
+  `hook install` now blocks the call if the hook itself fails (`--fail-open` to
+  opt out). Run `oathkey hook install` again to update an installed hook.
+- **Changed: sending a key to a server asks in a pop-up window** that shows the
+  server's key fingerprint (the terminal only when no window can be shown); the
+  key-bearing ssh connection then accepts only the key you confirmed
+  (`StrictHostKeyChecking=yes`). `export --yes` counts only at a real terminal;
+  elsewhere a window must be clicked.
+- **Changed: `install` and `setup-agent` write `--default-store keychain`**, and the
+  MCP server defaults to the keychain when there is one, so a key an AI captures
+  is one `call_api` can use. `rotate` replaces the key where it is stored.
+  An unknown service name exits 3 with a "Did you mean" line.
+- **Fixed:** `oathkey start`; `remote ... -- cmd` after `--project-dir`; the web door
+  binds its port exclusively on Windows; the pop-up helper runs with a fixed
+  environment. Known limits are listed in SECURITY.md.
+- **A fresh start for the rename.** Nothing is migrated from the old `safeeasyapi`
+  names: no data, keychain entries or settings. To move over, re-run
+  `oathkey get <service>` and `oathkey install`, and remove any old `safeeasyapi`
+  hook or MCP entry by hand.
+- No independent security review has been done yet.
+
 ## 0.7.5
 
 After the owner said "my AI assistant" sounded fraudulent.
@@ -10,8 +56,8 @@ After the owner said "my AI assistant" sounded fraudulent.
   Windsurf, Cline, Zed, VS Code ...); an unknown name is shown cleaned (ASCII, 30
   characters); none at all is "An AI program". It is what the program reports about
   itself - said in the README and SKILL, not in the window.
-- **Line 1 says who made the tool:** *safeeasyapi (free key-safe tool, made by Calas
-  Automations, installed on this computer)*. New `safeeasyapi about` and a README
+- **Line 1 says who made the tool:** *oathkey (free key-safe tool, made by Calas
+  Automations, installed on this computer)*. New `oathkey about` and a README
   section on checking it is the real program (`pip show`, PyPI, GitHub).
 - **A dead stored key is not protected by a question.** Before the REPLACE window the
   stored key is tested with the vendor; if the vendor rejects it, the replace question is
@@ -28,8 +74,8 @@ After the owner said "my AI assistant" sounded fraudulent.
 A plain-words pass on the windows, after a real person used 0.7.3 on Windows.
 
 - **Wording.** Every window is at most five short lines, in everyday words, and says
-  what is going on first: *safeeasyapi (installed on this computer) asks: Your AI
-  assistant wants to connect GitHub for "my-shop". safeeasyapi will save the key
+  what is going on first: *oathkey (installed on this computer) asks: Your AI
+  assistant wants to connect GitHub for "my-shop". oathkey will save the key
   safely; the assistant never sees it. Did you ask your assistant to do this? No =
   nothing is stored or changed.* The buttons are **Yes / No** on every platform (the
   macOS, zenity and kdialog buttons are now labelled Yes / No too); "Allow" and
@@ -55,7 +101,7 @@ Fixes from the independent verification of 0.7.2.
   deletes the file once the keychain saves, so a planted `consent.key` cannot take over.
 - **A window, when one can be shown, is the only consent.** A permission file on disk
   (even a valid one) is ignored while a window is available; the terminal grant applies
-  only with no window, or when the server runs with `SAFEEASYAPI_NO_WINDOW=1`.
+  only with no window, or when the server runs with `OATHKEY_NO_WINDOW=1`.
 - **A failing helper is not a "no".** Crashes, odd exit statuses and unsupported flags
   give `None` (`consent_needed`, ask again); only an explicit Deny is remembered.
   zenity is retried without `--no-markup` / `--default-cancel` on old versions; kdialog
@@ -63,7 +109,7 @@ Fixes from the independent verification of 0.7.2.
 - **Refusals are visible.** When a helper is on PATH but is not a trusted (root-owned)
   install, the answer says where it found it and why it was refused. Trust is not widened,
   clipboard tools included (the key passes through them).
-- **Hook:** wildcards that could expand to `.safeeasyapi` (`~/.safe*/*`, `.s*/c*`,
+- **Hook:** wildcards that could expand to `.oathkey` (`~/.safe*/*`, `.s*/c*`,
   `.saf?easyapi/*`, `tar c ~/.safe*`) are refused; `.*`, `man security` and friends are not.
 - Lock: stale limit 180 s, stale locks are renamed away before removal; the consent
   folder is created 0700. macOS: the keychain secret is passed to `security -i` on stdin,
@@ -100,7 +146,7 @@ Fixes from the second review of 0.7.x.
 - **Status:** a pending question makes `status` wait for the answer; an old answer
   expires; `replace_granted` says to pass `replace=true`; `bool("false")` is false.
 - **Hook:** the steal rules are also applied to the quote-squashed text; `consent.key`,
-  `agent-consent` and the `.safeeasyapi` folder by relative path are protected (speed
+  `agent-consent` and the `.oathkey` folder by relative path are protected (speed
   bump, not a lock).
 - **setup-agent / skill install:** line ends, BOM and UTF-8 kept; markers must be
   paired and in order; a stale Codex entry is updated; non-text files are refused
@@ -114,7 +160,7 @@ Fixes from an independent review of 0.7.0 (security, correctness, architecture, 
 - **Hook:** a quote-split file name (`cat .e''nv`) is now refused like `.env`.
 - **Consent cannot be forged by a file edit.** The permission is asked in a window of
   the operating system shown by the MCP server (`dialog.py`; terminal route as the
-  weaker fallback), and recorded in `~/.safeeasyapi/agent-consent.json` (home from the
+  weaker fallback), and recorded in `~/.oathkey/agent-consent.json` (home from the
   user database) with an HMAC; the secret lives in DPAPI / the macOS keychain / the
   Linux Secret Service, else a 0600 file marked advisory. A file that does not verify
   is no consent. Corrupt files are kept as `.bak`, never overwritten silently.
@@ -140,21 +186,21 @@ Fixes from an independent review of 0.7.0 (security, correctness, architecture, 
 ## 0.7.0
 
 **Agent-driven key capture.** The person says "connect GitHub"; the agent opens
-the key page, makes the key and clicks the vendor's Copy button; safeeasyapi
+the key page, makes the key and clicks the vendor's Copy button; oathkey
 takes the key from the clipboard, empties it, tests it, stores it, and tells the
 agent only `stored`. Nobody opens a terminal, copies or pastes; the key is never
 in the chat or on screen.
 
-- New MCP tool `capture_key` (`start` / `status` / `cancel`), `safeeasyapi/capture.py`.
+- New MCP tool `capture_key` (`start` / `status` / `cancel`), `oathkey/capture.py`.
   Background capture in the server process; one at a time; 10-180 s; six starts
   an hour; built-in recipes only; only a *changed*, key-shaped (service-shaped
   when the recipe has a format) clipboard value; the old clipboard is wiped; the
   clipboard is emptied the moment a key is taken; a rejected or unstorable key is
   kept nowhere; results hold state words, variable names, where stored and a
   length class - never the key or a part of it.
-- New `safeeasyapi allow-agent <service>` (`--revoke`, `--list`,
+- New `oathkey allow-agent <service>` (`--revoke`, `--list`,
   `--allow-clipboard-history`): the person's one-time yes, typed in a terminal,
-  kept in `~/.safeeasyapi/agent-consent.json` (not in the project, where an
+  kept in `~/.oathkey/agent-consent.json` (not in the project, where an
   agent could edit it). The hook refuses an agent running it.
 - Windows clipboard history on: `capture_key` refuses unless the person accepted
   it when granting; the answer says so.
@@ -196,7 +242,7 @@ Fixes for what the test matrix (Linux, macOS, Windows; Python 3.10-3.14) found.
   Python version; before, Python 3.14 could parse it and the reply was
   Invalid params (-32602). A reply nested deeper than that is likewise an
   Internal error on every Python (macOS 3.14 could write it).
-- Hook: a `safeeasyapi` program in the current folder is never used as the hook
+- Hook: a `oathkey` program in the current folder is never used as the hook
   command, also when the folder has another spelling (macOS `/var` and
   `/private/var`, links, Windows case and short names).
 - `detect` does not read a symbolic link on Windows (no `O_NOFOLLOW` there).
@@ -210,9 +256,9 @@ Fixes from an independent review of 0.6.0.
 - A redirect from a query-auth check (OpenWeather, your own recipes) no longer
   prints the address with the key in it: only scheme, host and path are shown,
   and every validation error is scrubbed of the key and its encodings.
-- The hook also refuses `safeeasyapi run --no-redact`, keychain readers
+- The hook also refuses `oathkey run --no-redact`, keychain readers
   (`secret-tool`, `security find-generic-password`, `cmdkey`, `Get-Secret`,
-  `keyring`), `/proc/*/environ` and `~/.safeeasyapi`. `run --no-redact` is
+  `keyring`), `/proc/*/environ` and `~/.oathkey`. `run --no-redact` is
   refused unless input and output are a terminal. Agent-facing text now says
   "ask the person to run it". README states plainly what an agent that can
   use `run` can still do.
@@ -220,7 +266,7 @@ Fixes from an independent review of 0.6.0.
   read no longer follows a link swapped in after the check, and a result is
   re-read after writing.
 - A manifest's `env_file` must be a `.env`-style name inside the project;
-  `safeeasyapi.json` is only looked for up to the git project's top folder
+  `oathkey.json` is only looked for up to the git project's top folder
   (or the folder itself); `--project-dir` names it explicitly. `connect`,
   `rotate`, `forget` and `export` use the manifest's env file like `run`.
 - The MCP output guard blanks only secret-looking values (not ordinary
@@ -242,7 +288,7 @@ Fixes from an independent review of 0.6.0.
 - AWS: a clock more than 5 minutes off is reported as that, not as a dead key.
 - OpenAI: a 403 is "real key with limits", not a dead one.
 - Redaction also catches upper and lower case forms.
-- `safeeasyapi skill install` copies the agent skill (now shipped in the wheel).
+- `oathkey skill install` copies the agent skill (now shipped in the wheel).
 
 ## 0.6.0
 
@@ -278,7 +324,7 @@ touches a key.
   GitHub Action keeps one issue up to date. `CONTRIBUTING.md` and a pull
   request template ask for a docs link and a fake-key test. A real run found
   three moved pages, now fixed.
-- `init`, `setup`, `status` and `safeeasyapi.json` (names only, committed):
+- `init`, `setup`, `status` and `oathkey.json` (names only, committed):
   detect the services a project uses (never opening a real `.env`), connect every
   missing one in order (skipping those already stored, resumable), and list where
   each key lives and how old it is, with a rotate hint after 90 days (a small
@@ -290,9 +336,9 @@ touches a key.
 - `export <service> --to github|vercel`: through `gh secret set` / `vercel env
   add`, with the key on standard input only, never in a command line.
 - MCP tools `request_connect` and `needs_keys`: the agent asks, the person runs
-  `safeeasyapi connect` in their own terminal. Answers hold names and statuses
+  `oathkey connect` in their own terminal. Answers hold names and statuses
   only; a second filter blanks any reachable secret. The hook message and the new
-  `skills/safeeasyapi/SKILL.md` point agents at this.
+  `skills/oathkey/SKILL.md` point agents at this.
 - Windows: `--clipboard` falls back to the hidden prompt when clipboard history
   (Win+V) is on, because the history keeps a copy this tool cannot remove
   (`--allow-clipboard-history` overrides).
@@ -308,9 +354,9 @@ touches a key.
   they are refused for a real `.env` file (a key the agent writes has passed
   through the agent, and a `Write` can overwrite yours). Templates
   (`.env.example` ...) stay writable. The agent is told "Claude can't write to
-  .env - your keys stay out of the chat. Run: safeeasyapi connect <service>
+  .env - your keys stay out of the chat. Run: oathkey connect <service>
   (or edit the file yourself)."
-- `SAFEEASYAPI_HOOK_ALLOW_WRITE=1` (in Claude Code's environment) allows
+- `OATHKEY_HOOK_ALLOW_WRITE=1` (in Claude Code's environment) allows
   those writes; reads stay refused.
 - `hook install` upgrades an older install's matcher in place (only our own
   entry); `hook status` says OUTDATED when the matcher is the old one.
@@ -340,7 +386,7 @@ Fixes from a security review of 0.5.0.
   service. With no terminal and no `--yes` the report is still printed (keys
   "not checked") instead of being dropped.
 - `scan` uses only the recipes shipped in the package. Your own recipes in
-  `~/.safeeasyapi/recipes` (their regular expression and the host a key is
+  `~/.oathkey/recipes` (their regular expression and the host a key is
   sent to) are used only with the new `--my-recipes`, under a timer, and with
   `--validate` they need a typed `y` every time, even with `--yes`.
 - `scan` finds more: a PEM private key on one line inside JSON, a password in
@@ -368,7 +414,7 @@ Fixes from a security review of 0.5.0.
   self-test starts the hook the way Claude Code does (no shell). Not run on a
   real Windows machine - see the README.
 - Settings are written through a symbolic link; every change gets its own
-  backup in `~/.safeeasyapi/backups` (not once, and not inside the project).
+  backup in `~/.oathkey/backups` (not once, and not inside the project).
 - The release workflow now requires the tagged commit to be on `main`, the
   tests to pass first, the sdist's own tests to pass, and has time limits.
 - README: what the hook does NOT stop; what `--fail-on live` does with keys
@@ -376,7 +422,7 @@ Fixes from a security review of 0.5.0.
 
 ## 0.5.0
 
-- New: `safeeasyapi scan [PATH]` finds API keys that leaked into files an AI
+- New: `oathkey scan [PATH]` finds API keys that leaked into files an AI
   agent can read (`.env*`, `CLAUDE.md`, `AGENTS.md`, `GEMINI.md`,
   `.cursorrules`, the `.claude` folder, `.mcp.json`) and says, for each one,
   where it is and what to do. Offline by default; a key is shown as at most
@@ -388,7 +434,7 @@ Fixes from a security review of 0.5.0.
   `--yes`; https only; a check on another domain still needs a typed `yes`.
 - `scan --json`, `--sarif` (SARIF 2.1.0), `--fail-on live|any`, `--all`.
   Exit status 0 clean, 1 keys found, 2 could not run.
-- New: `safeeasyapi hook install | uninstall | status` adds a Claude Code
+- New: `oathkey hook install | uninstall | status` adds a Claude Code
   PreToolUse hook that refuses Read, Grep and Bash calls touching `.env`
   files (templates like `.env.example` are allowed). It merges into
   `~/.claude/settings.json` (or `--project`), never overwrites other hooks,
@@ -408,7 +454,7 @@ Fixes from a security review of 0.5.0.
 - `--store keychain` no longer falls back to a plain-text `.env` on its own:
   it asks `[y/N]` (default no) and, with no terminal to ask on, saves nothing
   and exits 1. A key stored in the keychain is read back to confirm it is there.
-- A recipe of your own in `~/.safeeasyapi/recipes` that replaces a built-in
+- A recipe of your own in `~/.oathkey/recipes` that replaces a built-in
   one is now announced in `list` and at the start of `connect`.
 - Copy-and-go never takes a link as the key, says plainly that the clipboard
   is emptied, and 8 built-in recipes (OpenAI, Anthropic, Groq, Hugging Face,

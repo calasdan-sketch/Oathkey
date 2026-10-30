@@ -17,14 +17,14 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from unittest import mock
 
 import _isolation
-from safeeasyapi import __version__
-from safeeasyapi import cli as cli_mod
-from safeeasyapi import connect as connect_mod
-from safeeasyapi import keychain as keychain_mod
-from safeeasyapi import mcp as mcp_mod
-from safeeasyapi import recipes as recipes_mod
-from safeeasyapi import store as store_mod
-from safeeasyapi import validate as validate_mod
+from oathkey import __version__
+from oathkey import cli as cli_mod
+from oathkey import connect as connect_mod
+from oathkey import keychain as keychain_mod
+from oathkey import mcp as mcp_mod
+from oathkey import recipes as recipes_mod
+from oathkey import store as store_mod
+from oathkey import validate as validate_mod
 
 REPO = _isolation.REPO
 FAKE_KEY = "sk-test-THIS-IS-A-FAKE-KEY-999"
@@ -226,7 +226,7 @@ class TestPrivateEnvWrite(unittest.TestCase):
         self.assertEqual(set(index), {"OTHER", "ACME_API_KEY"})
 
     def test_every_text_open_in_package_names_an_encoding(self):
-        pkg = os.path.join(REPO, "safeeasyapi")
+        pkg = os.path.join(REPO, "oathkey")
         for name in os.listdir(pkg):
             if not name.endswith(".py"):
                 continue
@@ -260,11 +260,11 @@ class TestInstallLayout(unittest.TestCase):
         proj = data["project"]
         self.assertEqual(proj["version"], __version__)
         self.assertEqual(proj["license"], "MIT")
-        self.assertEqual(proj["scripts"]["safeeasyapi"], "safeeasyapi.cli:main")
+        self.assertEqual(proj["scripts"]["oathkey"], "oathkey.cli:main")
         self.assertTrue(proj["classifiers"])
-        self.assertEqual(data["tool"]["setuptools"]["packages"], ["safeeasyapi"])
+        self.assertEqual(data["tool"]["setuptools"]["packages"], ["oathkey"])
         self.assertEqual(data["tool"]["setuptools"]["package-data"],
-                         {"safeeasyapi": ["recipes/*.json", "skill/*.md"]})
+                         {"oathkey": ["recipes/*.json", "skill/*.md"]})
         self.assertIn("setuptools>=77", data["build-system"]["requires"][0])
 
     def test_builtin_recipes_live_inside_the_package(self):
@@ -281,13 +281,45 @@ class TestInstallLayout(unittest.TestCase):
         self.assertTrue(user_dir.startswith(_isolation.FAKE_HOME))
         catalog = recipes_mod.load_recipes()
         self.assertEqual(catalog["github"]["display"], "GitHub")
+        same_server = dict(catalog["github"]["validate"])
         path = recipes_mod.save_recipe(recipe(service="github", display="My GitHub",
-                                              key_url="https://github.com/settings/tokens"))
-        self.assertEqual(os.path.dirname(path), user_dir)
-        self.assertEqual(recipes_mod.load_recipes()["github"]["display"],
-                         "My GitHub")
-        os.remove(path)
+                                              key_url="https://github.com/settings/tokens",
+                                              env_var="GITHUB_TOKEN", validate=same_server))
+        try:
+            self.assertEqual(os.path.dirname(path), user_dir)
+            self.assertEqual(recipes_mod.load_recipes()["github"]["display"],
+                             "My GitHub")
+        finally:
+            os.remove(path)
         self.assertEqual(recipes_mod.load_recipes()["github"]["display"], "GitHub")
+
+    def test_user_recipe_cannot_redirect_a_builtin_key_to_another_server(self):
+        import contextlib
+        import io
+        path = recipes_mod.save_recipe(recipe(service="github", display="Evil",
+                                              key_url="https://github.com/settings/tokens"))
+        try:
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                catalog = recipes_mod.load_recipes()
+            self.assertEqual(catalog["github"]["display"], "GitHub")
+            self.assertIn("different server", err.getvalue())
+        finally:
+            os.remove(path)
+
+    def test_new_recipe_cannot_reuse_a_builtin_key_name_for_another_server(self):
+        import contextlib
+        import io
+        path = recipes_mod.save_recipe(recipe(service="evil", display="Evil",
+                                              env_var="OPENAI_API_KEY"))
+        try:
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                catalog = recipes_mod.load_recipes()
+            self.assertNotIn("evil", catalog)
+            self.assertIn("OPENAI_API_KEY", err.getvalue())
+        finally:
+            os.remove(path)
 
 
 # -------------------------------------------------------------- keychain
@@ -389,7 +421,7 @@ class TestKeychain(unittest.TestCase):
         self.assertEqual(argv, ["security", "-i"])
         self.assertNotIn(FAKE_KEY, " ".join(argv))
         self.assertIn(f'-w "{FAKE_KEY}"', stdin.decode())
-        self.assertIn('-s "safeeasyapi:acme"', stdin.decode())
+        self.assertIn('-s "oathkey:acme"', stdin.decode())
         self.assertIn('-a "ACME_API_KEY"', stdin.decode())
         run = _FakeRun(stdout=(FAKE_KEY + "\n").encode())
         self.assertEqual(keychain_mod.read("acme", "ACME_API_KEY",
@@ -428,7 +460,7 @@ class TestKeychain(unittest.TestCase):
         used = keychain_mod.store("acme", "ACME_API_KEY", FAKE_KEY,
                                   keychain_mod.WINDOWS, ctypes_mod=ct)
         self.assertEqual(used, keychain_mod.WINDOWS)
-        ctype, persist, user, blob = ct.vault["safeeasyapi:acme"]
+        ctype, persist, user, blob = ct.vault["oathkey:acme"]
         self.assertEqual((ctype, persist, user), (1, 2, "ACME_API_KEY"))
         self.assertEqual(blob.decode("utf-16-le"), FAKE_KEY)  # cmdkey/.NET layout
         self.assertEqual(keychain_mod.read("acme", "ACME_API_KEY",
@@ -481,7 +513,7 @@ class TestKeychain(unittest.TestCase):
                                       keychain=fake)("ACME_API_KEY", FAKE_KEY)
         self.assertEqual(stored, [("acme", "ACME_API_KEY", FAKE_KEY, keychain_mod.LINUX)])
         self.assertIn("Secret Service", desc)
-        self.assertIn("safeeasyapi run acme", desc)
+        self.assertIn("oathkey run acme", desc)
         self.assertNotIn(FAKE_KEY, desc)
         self.assertFalse(os.path.exists(env))
 
@@ -554,14 +586,14 @@ class TestKeychain(unittest.TestCase):
             with mock.patch.object(connect_mod, "connect", return_value=0) as c:
                 cli_mod.main(["connect", "acme", "--no-browser", "--store", "keychain"])
                 self.assertIsNotNone(c.call_args.kwargs["store_fn"])
-                cli_mod.main(["connect", "acme", "--no-browser"])
+                cli_mod.main(["connect", "acme", "--no-browser", "--store", "env"])
                 self.assertIsNone(c.call_args.kwargs["store_fn"])
 
     def test_readme_states_each_os_behaviour(self):
-        with open(os.path.join(REPO, "README.md"), encoding="utf-8") as f:
+        with open(os.path.join(REPO, "docs", "guide.md"), encoding="utf-8") as f:
             text = f.read()
         for phrase in ("macOS", "Credential Manager", "secret-tool",
-                       "--store keychain", "safeeasyapi run"):
+                       "--store keychain", "oathkey run"):
             self.assertIn(phrase, text)
         self.assertNotIn(".env` file storage only", text)
 

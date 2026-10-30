@@ -27,9 +27,9 @@ from contextlib import redirect_stderr, redirect_stdout
 from unittest import mock
 
 import _isolation  # noqa: F401  (fake HOME/USERPROFILE for the whole run)
-from safeeasyapi import cli as cli_mod
-from safeeasyapi import connect as connect_mod
-from safeeasyapi import recipes as recipes_mod
+from oathkey import cli as cli_mod
+from oathkey import connect as connect_mod
+from oathkey import recipes as recipes_mod
 
 # Built from code points so that no control or invisible character is typed
 # into this file.
@@ -496,14 +496,14 @@ class TestTheListAndTheRotateLine(unittest.TestCase):
 
 class TestReadmeSaysSo(unittest.TestCase):
     def test_the_recipe_section_mentions_the_rule(self):
-        with open(os.path.join(_isolation.REPO, "README.md"),
+        with open(os.path.join(_isolation.REPO, "docs", "guide.md"),
                   encoding="utf-8") as f:
             flat = " ".join(f.read().split())
         for phrase in ("control or invisible character", "shown as a visible escape"):
             self.assertTrue(phrase in flat, f"the README does not say: {phrase!r}")
 
     def test_the_readme_lists_what_is_let_through_and_what_is_refused(self):
-        with open(os.path.join(_isolation.REPO, "README.md"),
+        with open(os.path.join(_isolation.REPO, "docs", "guide.md"),
                   encoding="utf-8") as f:
             flat = " ".join(f.read().split())
         for phrase in ("no-break space", "zero-width joiner",

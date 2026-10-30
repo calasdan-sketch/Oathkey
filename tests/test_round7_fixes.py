@@ -28,20 +28,20 @@ import urllib.request
 from unittest import mock
 
 import _isolation  # noqa: F401  (fake HOME/USERPROFILE for the whole run)
-from safeeasyapi import __version__
-from safeeasyapi import cli as cli_mod
-from safeeasyapi import connect as connect_mod
-from safeeasyapi import keychain as keychain_mod
-from safeeasyapi import publicapis as pa_mod
-from safeeasyapi import recipes as recipes_mod
-from safeeasyapi import validate as validate_mod
+from oathkey import __version__
+from oathkey import cli as cli_mod
+from oathkey import connect as connect_mod
+from oathkey import keychain as keychain_mod
+from oathkey import publicapis as pa_mod
+from oathkey import recipes as recipes_mod
+from oathkey import validate as validate_mod
 
 REPO = _isolation.REPO
 
 
 def readme_text():
     """The README as one line of single-spaced text (CRLF or LF alike)."""
-    with open(os.path.join(REPO, "README.md"), encoding="utf-8") as f:
+    with open(os.path.join(REPO, "docs", "guide.md"), encoding="utf-8") as f:
         return " ".join(f.read().split())
 
 
@@ -584,14 +584,14 @@ class TestForgetTwiceWithARealCommand(unittest.TestCase):
         env.update(PATH=tools + os.pathsep + env.get("PATH", ""),
                    FAKE_SECRETS=secrets, PYTHONPATH=REPO)
         subprocess.run([tool, "store", "--label", "x", "service",
-                        "safeeasyapi", "account", "GITHUB_TOKEN", "slug",
+                        "oathkey", "account", "GITHUB_TOKEN", "slug",
                         "github"], input=SECRET.encode(), env=env, check=True,
                        cwd=work, timeout=60)
         self.assertEqual(os.listdir(secrets), ["GITHUB_TOKEN"])
 
         def forget():
             proc = subprocess.run(
-                [sys.executable, "-m", "safeeasyapi", "forget", "github",
+                [sys.executable, "-m", "oathkey", "forget", "github",
                  "--env-file", os.path.join(work, ".env")],
                 capture_output=True, env=env, cwd=work, timeout=120)
             return (proc.returncode, proc.stdout.decode("utf-8", "replace"),
@@ -727,7 +727,7 @@ class TestTheReadmeNamesThisVersion(unittest.TestCase):
     and in the heading of the README's limits."""
 
     def test_the_limits_heading_has_the_package_version(self):
-        with open(os.path.join(REPO, "README.md"), encoding="utf-8") as f:
+        with open(os.path.join(REPO, "docs", "guide.md"), encoding="utf-8") as f:
             found = re.search(r"^## Scope / limits \(v([0-9][0-9.]*)\)",
                               f.read(), re.M)
         self.assertTrue(found, "no 'Scope / limits (vX.Y.Z)' heading")

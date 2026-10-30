@@ -9,8 +9,8 @@ success while
 - a hard link to the file (a `.env.bak` made with `ln`) kept the old
   contents, because rewriting a file by rename never touches its other names.
 
-Now `forget` removes the first kind (they are safeeasyapi's own) and names the
-second kind without deleting it (it is not safeeasyapi's), exiting 1 because
+Now `forget` removes the first kind (they are oathkey's own) and names the
+second kind without deleting it (it is not oathkey's), exiting 1 because
 the key is not gone.
 
 Round-2 panel (SEA-3): with a `.env` that is a symbolic link `forget` removed
@@ -31,9 +31,9 @@ import unittest
 from unittest import mock
 
 import _isolation  # noqa: F401  (fake HOME/USERPROFILE for the whole run)
-from safeeasyapi import cli as cli_mod
-from safeeasyapi import keychain as keychain_mod
-from safeeasyapi import store as store_mod
+from oathkey import cli as cli_mod
+from oathkey import keychain as keychain_mod
+from oathkey import store as store_mod
 
 KEY = "sk-forget-me-7731"
 NO_KEYCHAIN = types.SimpleNamespace(detect_backend=lambda: None,
@@ -75,7 +75,7 @@ def forget(env, **kw):
 KILLED_WRITER = """
 import os, signal, sys
 sys.path.insert(0, sys.argv[1])
-from safeeasyapi import store
+from oathkey import store
 os.replace = lambda *a, **k: os.kill(os.getpid(), signal.SIGKILL)
 store.store_key_result("ACME_API_KEY", sys.argv[3], sys.argv[2])
 """
@@ -376,7 +376,7 @@ class TestForgetSaysWhatItDidBeforeWhatItCouldNot(unittest.TestCase):
         self.assertLess(text.index("removed " + self.ENTRY),
                         text.index("could not rewrite"))
         self.assertIn("link", text)
-        self.assertIn("safeeasyapi forget acme", text)    # the way on
+        self.assertIn("oathkey forget acme", text)    # the way on
         self.assertNotIn("forgot", text)                  # it is not done
         self.assertNotIn(KEY, text)
         # nothing else was touched: the link and the file it points to
@@ -506,7 +506,7 @@ esac
                          FAKE_SECRETS=secrets,
                          PYTHONPATH=_isolation.REPO)
         proc = subprocess.run(
-            [sys.executable, "-m", "safeeasyapi", "forget", "github",
+            [sys.executable, "-m", "oathkey", "forget", "github",
              "--env-file", env], capture_output=True, env=child_env,
             cwd=new_folder(), timeout=120)
         text = proc.stdout.decode("utf-8", "replace")
@@ -521,7 +521,7 @@ esac
 
 class TestReadmeSaysWhatForgetCanAndCannotDo(unittest.TestCase):
     def test_it_says_what_it_did_before_what_it_could_not(self):
-        with open(os.path.join(_isolation.REPO, "README.md"),
+        with open(os.path.join(_isolation.REPO, "docs", "guide.md"),
                   encoding="utf-8") as f:
             flat = " ".join(f.read().split())
         for phrase in ("says what it removed before it says what it could not "
@@ -529,7 +529,7 @@ class TestReadmeSaysWhatForgetCanAndCannotDo(unittest.TestCase):
             self.assertTrue(phrase in flat, f"the README does not say: {phrase!r}")
 
     def test_the_forget_paragraph(self):
-        with open(os.path.join(_isolation.REPO, "README.md"),
+        with open(os.path.join(_isolation.REPO, "docs", "guide.md"),
                   encoding="utf-8") as f:
             flat = " ".join(f.read().split())
         for phrase in ("interrupted write", "hard link", "cannot know about"):

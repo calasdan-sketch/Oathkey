@@ -1,7 +1,7 @@
 # Contributing
 
 The most useful contribution is a correct recipe. A recipe is a small JSON
-file in `safeeasyapi/recipes/` that says where a key is made, the click path,
+file in `oathkey/recipes/` that says where a key is made, the click path,
 and one harmless call that proves the key works.
 
 ## The rules for a recipe change
@@ -31,7 +31,7 @@ a copy of your recipe at it:
 
 ```bash
 python -m unittest discover -s tests          # the whole suite, no network
-python -m safeeasyapi doctor-recipes <slug>   # visits the real addresses, no key
+python -m oathkey doctor-recipes <slug>   # visits the real addresses, no key
 ```
 
 For a new recipe add a test in `tests/` that loads it with
