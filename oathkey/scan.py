@@ -237,7 +237,9 @@ def scan_git(repo: str = ".", staged: bool = False, max_lines: int = 5_000_000) 
     import subprocess
     # never run anything the repository's own config asks for
     cmd = ["git", "--no-pager", "-C", repo, "-c", "core.quotepath=off",
-           "-c", "core.fsmonitor=false", "-c", "core.pager=cat"]
+           "-c", "core.fsmonitor=false", "-c", "core.pager=cat",
+           "-c", "log.showSignature=false", "-c", "gpg.program=false",
+           "-c", "diff.external=", "-c", "core.attributesFile="]
     cmd += (["diff", "--cached", "-U0", "--no-color", "--no-textconv", "--no-ext-diff"]
             if staged else
             ["log", "--all", "-p", "-U0", "--no-color", "--no-textconv",

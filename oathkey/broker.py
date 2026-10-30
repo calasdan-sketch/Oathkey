@@ -213,7 +213,8 @@ def check_path(path: str) -> str:
     if path.startswith("//"):
         raise BrokerError("path may not start with //", 5)
     low = path.lower()
-    if ";" in path or "%25" in low or "%00" in low or "%2f" in low or "//" in path:
+    if (";" in path or "%25" in low or "%00" in low or "%2f" in low or "//" in path
+            or "%u" in low or "%c0" in low or "%c1" in low):
         raise BrokerError("path contains an encoding or character that "
                           "servers read differently; refused", 5)
     decoded = path

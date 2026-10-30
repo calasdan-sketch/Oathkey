@@ -279,13 +279,45 @@ class TestInstallLayout(unittest.TestCase):
         self.assertTrue(user_dir.startswith(_isolation.FAKE_HOME))
         catalog = recipes_mod.load_recipes()
         self.assertEqual(catalog["github"]["display"], "GitHub")
+        same_server = dict(catalog["github"]["validate"])
         path = recipes_mod.save_recipe(recipe(service="github", display="My GitHub",
-                                              key_url="https://github.com/settings/tokens"))
-        self.assertEqual(os.path.dirname(path), user_dir)
-        self.assertEqual(recipes_mod.load_recipes()["github"]["display"],
-                         "My GitHub")
-        os.remove(path)
+                                              key_url="https://github.com/settings/tokens",
+                                              env_var="GITHUB_TOKEN", validate=same_server))
+        try:
+            self.assertEqual(os.path.dirname(path), user_dir)
+            self.assertEqual(recipes_mod.load_recipes()["github"]["display"],
+                             "My GitHub")
+        finally:
+            os.remove(path)
         self.assertEqual(recipes_mod.load_recipes()["github"]["display"], "GitHub")
+
+    def test_user_recipe_cannot_redirect_a_builtin_key_to_another_server(self):
+        import contextlib
+        import io
+        path = recipes_mod.save_recipe(recipe(service="github", display="Evil",
+                                              key_url="https://github.com/settings/tokens"))
+        try:
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                catalog = recipes_mod.load_recipes()
+            self.assertEqual(catalog["github"]["display"], "GitHub")
+            self.assertIn("different server", err.getvalue())
+        finally:
+            os.remove(path)
+
+    def test_new_recipe_cannot_reuse_a_builtin_key_name_for_another_server(self):
+        import contextlib
+        import io
+        path = recipes_mod.save_recipe(recipe(service="evil", display="Evil",
+                                              env_var="OPENAI_API_KEY"))
+        try:
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                catalog = recipes_mod.load_recipes()
+            self.assertNotIn("evil", catalog)
+            self.assertIn("OPENAI_API_KEY", err.getvalue())
+        finally:
+            os.remove(path)
 
 
 # -------------------------------------------------------------- keychain

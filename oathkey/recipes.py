@@ -62,6 +62,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import sys
 import unicodedata
 import urllib.parse
 
@@ -482,6 +483,49 @@ def _is_builtin_dir(directory: str) -> bool:
     return os.path.realpath(directory) == os.path.realpath(RECIPES_DIR)
 
 
+def _hosts(recipe: dict) -> frozenset:
+    """Every server a recipe can send its key to."""
+    import urllib.parse
+    v = recipe.get("validate") or {}
+    out = set()
+    for u in [v.get("url"), v.get("token_url"), (v.get("auth") or {}).get("token_url")]:
+        if isinstance(u, str) and u:
+            h = urllib.parse.urlsplit(u).hostname
+            if h:
+                out.add(h.lower())
+    for h in v.get("trusted_hosts") or []:
+        if isinstance(h, str):
+            out.add(h.lower())
+    return frozenset(out)
+
+
+def _merge_user_recipes(recipes: dict, user: dict) -> None:
+    """Put user recipes on top of the built-in ones - but never let one send
+    a built-in service's key to a different server. A planted
+    ~/.oathkey/recipes/github.json (or a new recipe that reuses the
+    OPENAI_API_KEY variable name) could otherwise steal the key."""
+    builtin_hosts = {s: _hosts(r) for s, r in recipes.items() if r.get("_builtin")}
+    builtin_vars: dict = {}
+    for s, r in recipes.items():
+        if r.get("_builtin"):
+            for var in env_vars(r):
+                builtin_vars.setdefault(var, builtin_hosts[s])
+    for slug, r in user.items():
+        if slug in builtin_hosts and _hosts(r) != builtin_hosts[slug]:
+            sys.stderr.write(f"oathkey: ignored your recipe '{slug}': it would send the "
+                             f"built-in {slug} key to a different server. Use another "
+                             "name for it.\n")
+            continue
+        clash = [v for v in env_vars(r) if v in builtin_vars and builtin_vars[v] != _hosts(r)
+                 and slug not in builtin_hosts]
+        if clash:
+            sys.stderr.write(f"oathkey: ignored your recipe '{slug}': it reuses the key "
+                             f"name {clash[0]} of a built-in service but talks to a "
+                             "different server.\n")
+            continue
+        recipes[slug] = r
+
+
 def load_recipes(directory: str | None = None) -> dict[str, dict]:
     """Load all valid recipes. Invalid files are skipped with a warning on
     stderr - one bad recipe must never break the whole catalog.
@@ -495,7 +539,9 @@ def load_recipes(directory: str | None = None) -> dict[str, dict]:
         _load_dir(directory, recipes, builtin=_is_builtin_dir(directory))
         return recipes
     _load_dir(RECIPES_DIR, recipes, builtin=True)
-    _load_dir(user_recipes_dir(), recipes)
+    user: dict[str, dict] = {}
+    _load_dir(user_recipes_dir(), user)
+    _merge_user_recipes(recipes, user)
     return recipes
 
 
