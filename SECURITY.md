@@ -18,6 +18,13 @@ oathkey is built so an AI agent can use your API keys without being handed them.
 - **The approval window cannot show everything.** It shows the first part of a body, not all of it.
 - **Secrets we have not thought of how to disguise.** The scrubber is best effort; Python also cannot reliably erase secrets from memory.
 - **A compromised service**, or one that logs or leaks your key itself.
+- **The clipboard.** Copy-and-go (`oathkey get`) empties the clipboard right after taking the key, but other programs and clipboard-history tools can read it while it is there and may keep their own copy. If that worries you, use `--no-clipboard` (hidden typing instead).
+- **A tamper-proof log.** The activity log is tamper-evident, not tamper-proof: someone running as you could rewrite it from the start. It is not yet anchored anywhere outside the AI's reach.
+
+## Check it yourself
+
+- `oathkey selftest` attacks oathkey with a made-up key and a pretend server (no network, no real key) and prints PASS or FAIL for each attack. It checks the rules listed above only; it cannot show that nothing else can go wrong.
+- The package uses only Python's standard library, no outside code. A test (`tests/test_stdlib_only.py`) fails if that ever changes.
 
 ## Report a problem
 Contact address to be published before launch. Please do not post a working exploit publicly first. We aim to reply within 7 days.
