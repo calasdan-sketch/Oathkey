@@ -14,7 +14,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
-      matrix:
+      matrix:h
         os: [ubuntu-latest, windows-latest, macos-latest]
         python: ["3.10", "3.12", "3.14"]
     steps:
@@ -43,4 +43,4 @@ jobs:
         run: |
           python -m venv "$RUNNER_TEMP/wheel-venv"
           "$RUNNER_TEMP/wheel-venv/bin/pip" install dist/*.whl
-          "$RUNNER_TEMP/wheel-venv/bin/safeeasyapi" --version
+          "$RUNNER_TEMP/wheel-venv/bin/oathkey" --version
