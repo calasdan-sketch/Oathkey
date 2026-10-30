@@ -127,6 +127,28 @@ def _build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("mcp", help="Run the MCP server on stdio (for Claude Code).")
 
+    sub.add_parser("start", help="First run: check this computer, look for loose "
+                                 "keys, and say what to do next.")
+    stt = sub.add_parser("status", help="What is connected, and is the activity log intact.")
+    stt.add_argument("--json", action="store_true", help="Machine-readable output.")
+    stt.add_argument("--env-file", default=".env")
+    au = sub.add_parser("audit", help="Check the activity log has not been tampered with.")
+    au.add_argument("action", choices=["verify"])
+    au.add_argument("--json", action="store_true")
+    ca = sub.add_parser("call", help="Call a connected service's API; the key is "
+                                     "added for you and hidden from the output.")
+    ca.add_argument("service")
+    ca.add_argument("method", help="GET, or POST/PUT/PATCH/DELETE (asks you first).")
+    ca.add_argument("path", help="like /user")
+    ca.add_argument("--query", action="append", default=[], help="name=value (repeatable)")
+    ca.add_argument("--data", default=None, help="JSON body for POST/PUT/PATCH")
+    ca.add_argument("--json", action="store_true")
+    ca.add_argument("--env-file", default=".env")
+    sv = sub.add_parser("serve", help="Open a local web door for AI tools without MCP "
+                                      "(OpenAI-style functions, Ollama, scripts).")
+    sv.add_argument("--port", type=int, default=8787)
+    sv.add_argument("--env-file", default=".env")
+
     f = sub.add_parser("find", help="Find free public APIs for a task.")
     f.add_argument("query", help="What you need, e.g. 'weather', 'crypto price'.")
     f.add_argument("--auth", default=None,
@@ -537,6 +559,21 @@ def _main(argv: list[str] | None = None) -> int:
         return _cmd_add(args.recipes_dir)
     if args.cmd == "mcp":
         return mcp_mod.serve(catalog)
+    if args.cmd in ("start", "status", "audit", "call", "serve"):
+        from . import cmds
+        if args.cmd == "start":
+            return cmds.cmd_start(catalog, ".env")
+        if args.cmd == "status":
+            return cmds.cmd_status(catalog, args.env_file, args.json)
+        if args.cmd == "audit":
+            return cmds.cmd_audit(args.action, args.json)
+        if args.cmd == "serve":
+            return cmds.cmd_serve(catalog, args.port, args.env_file)
+        recipe = catalog.get(args.service)
+        if not recipe:
+            print(f"error: unknown service '{args.service}'.", file=sys.stderr)
+            return cmds.NOT_FOUND
+        return cmds.cmd_call(recipe, args)
     if args.cmd in ("scan", "doctor"):
         import json as _json
         from . import scan as scan_mod
