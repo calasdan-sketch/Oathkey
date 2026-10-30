@@ -165,6 +165,8 @@ def _build_parser() -> argparse.ArgumentParser:
     sv.add_argument("--port", type=int, default=8787)
     sv.add_argument("--env-file", default=".env")
 
+    stp = sub.add_parser("selftest", help="Attack oathkey with a made-up key and a pretend server; shows pass or fail.")
+    stp.add_argument("--json", action="store_true")
     f = sub.add_parser("find", help="Find free public APIs for a task.")
     f.add_argument("query", help="What you need, e.g. 'weather', 'crypto price'.")
     f.add_argument("--auth", default=None,
@@ -578,6 +580,9 @@ def _main(argv: list[str] | None = None) -> int:
     if args.cmd == "install":
         from . import clients
         return clients.run(args.targets, args.yes)
+    if args.cmd == "selftest":
+        from . import selftest
+        return selftest.cmd_selftest(args.json)
     if args.cmd == "uninstall":
         from . import clients
         return clients.remove(args.targets, args.yes)
