@@ -2,7 +2,7 @@ name: release
 
 # Push a tag like v0.5.1 to publish that version to PyPI. One-time setup on
 # pypi.org: add this repository and workflow (release.yml, environment "pypi")
-# as a trusted publisher of the oathkey project. No token is stored here.
+# as a trusted publisher of the safeeasyapi project. No token is stored here.
 #
 # A release only goes out when ALL of these hold: the tag matches the version
 # in pyproject.toml; the tagged commit is on main (a tag pushed from a side
@@ -75,7 +75,7 @@ jobs:
         run: |
           python -m venv "${RUNNER_TEMP}/wheel-venv"
           "${RUNNER_TEMP}/wheel-venv/bin/pip" install dist/*.whl
-          "${RUNNER_TEMP}/wheel-venv/bin/oathkey" --version
+          "${RUNNER_TEMP}/wheel-venv/bin/safeeasyapi" --version
       - uses: actions/upload-artifact@v4
         with:
           name: dist
