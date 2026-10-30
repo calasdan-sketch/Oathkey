@@ -95,7 +95,7 @@ def dialog(summary: str) -> bool | None:
                             (("kdialog",), ["--yesno", "<qt>" + _no_markup(msg) + "</qt>", "--title", "oathkey"])):
             exe = _tool(*[d + "/" + n for n in names for d in ("/usr/bin", "/bin")])
             if exe:
-                return subprocess.run([exe] + argv, timeout=TIMEOUT,
+                return subprocess.run([exe] + argv, env=env, timeout=TIMEOUT,
                                       capture_output=True).returncode == 0
     except subprocess.TimeoutExpired:
         return False                 # no answer in time means no

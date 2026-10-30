@@ -1,7 +1,12 @@
 import shutil
 import subprocess
 
-import pytest
+import unittest
+
+try:
+    import pytest
+except ImportError:   # CI's plain unittest run has no pytest
+    raise unittest.SkipTest("pytest is not installed")
 
 from oathkey import cli, remote
 
